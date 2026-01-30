@@ -126,145 +126,22 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> END OF CDD <<<<<<<<<<<<<<<<<<<<<<<<<<< ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-    public class StretchByDimCommands
-    {
-        // ===============================
-        // LỆNH CHÍNH
-        // ===============================
-        [CommandMethod("SAA_STRETCH_BY_DIM")]
-        public void StretchByDim()
-        {
-            Document doc = Application.DocumentManager.MdiActiveDocument;
-            Editor ed = doc.Editor;
-            Database db = doc.Database;
+    // START OF SAA
 
-            // ===== 1. CHỌN DIM CẦN THÀNH =====
-            PromptSelectionOptions dimOpt = new PromptSelectionOptions();
-            dimOpt.MessageForAdding = "\nQuét DIM kích thước CẦN THÀNH: ";
+       
+    
 
-            PromptSelectionResult dimRes = ed.GetSelection(
-                dimOpt,
-                new SelectionFilter(new TypedValue[]
-                {
-                    new TypedValue((int)DxfCode.Start, "DIMENSION")
-                })
-            );
 
-            if (dimRes.Status != PromptStatus.OK) return;
 
-            double targetWidth = 0.0;
-            double targetHeight = 0.0;
 
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                foreach (SelectedObject so in dimRes.Value)
-                {
-                    Dimension dim = tr.GetObject(so.ObjectId, OpenMode.ForRead) as Dimension;
-                    if (dim == null) continue;
 
-                    if (IsHorizontal(dim))
-                        targetWidth = dim.Measurement;
-                    else
-                        targetHeight = dim.Measurement;
-                }
 
-                if (targetWidth <= 0 || targetHeight <= 0)
-                {
-                    ed.WriteMessage("\n❌ Cần đủ 1 DIM ngang và 1 DIM dọc.");
-                    return;
-                }
 
-                tr.Commit();
-            }
 
-            // ===== 2. CHỌN KHUNG BAN ĐẦU =====
-            PromptSelectionOptions frameOpt = new PromptSelectionOptions();
-            frameOpt.MessageForAdding = "\nQuét KHUNG BAN ĐẦU: ";
 
-            PromptSelectionResult frameRes = ed.GetSelection(frameOpt);
-            if (frameRes.Status != PromptStatus.OK) return;
-
-            Extents3d ext;
-
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                ext = GetExtents(frameRes.Value, tr);
-                tr.Commit();
-            }
-
-            double currentWidth = ext.MaxPoint.X - ext.MinPoint.X;
-            double currentHeight = ext.MaxPoint.Y - ext.MinPoint.Y;
-
-            double deltaW = targetWidth - currentWidth;
-            double deltaH = targetHeight - currentHeight;
-
-            ed.WriteMessage($"\nΔRộng = {deltaW}, ΔCao = {deltaH}");
-
-            // ===== 3. STRETCH (BẢN ĐƠN GIẢN – MOVE TOÀN KHUNG) =====
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                foreach (SelectedObject so in frameRes.Value)
-                {
-                    Entity ent = tr.GetObject(so.ObjectId, OpenMode.ForWrite) as Entity;
-                    if (ent == null) continue;
-
-                    ent.TransformBy(
-                        Matrix3d.Displacement(
-                            new Vector3d(deltaW / 2.0, deltaH, 0)
-                        )
-                    );
-                }
-                tr.Commit();
-            }
-
-            ed.WriteMessage("\n✔ STRETCH HOÀN TẤT.");
-        }
-
-        // ===============================
-        // PHÂN BIỆT DIM NGANG / DỌC
-        // DIMLINEAR + DIMROTATED → RotatedDimension
-        // ===============================
-        private bool IsHorizontal(Dimension dim)
-        {
-            if (dim is RotatedDimension rd)
-            {
-                double rot = rd.Rotation; // radian
-                return Math.Abs(Math.Sin(rot)) < 0.01;
-            }
-
-            // các loại DIM khác không xử lý → coi là ngang
-            return true;
-        }
-
-        // ===============================
-        // LẤY BOUNDING BOX KHUNG
-        // ===============================
-        private Extents3d GetExtents(SelectionSet ss, Transaction tr)
-        {
-            bool first = true;
-            Extents3d ext = new Extents3d();
-
-            foreach (SelectedObject so in ss)
-            {
-                Entity ent = tr.GetObject(so.ObjectId, OpenMode.ForRead) as Entity;
-                if (ent == null) continue;
-
-                if (first)
-                {
-                    ext = ent.GeometricExtents;
-                    first = false;
-                }
-                else
-                {
-                    ext.AddExtents(ent.GeometricExtents);
-                }
-            }
-
-            return ext;
-        }
-    }
-
+    // END OF A COMMAND
 }
 
 
