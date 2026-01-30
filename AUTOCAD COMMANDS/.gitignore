@@ -1,0 +1,33 @@
+.vs/Hello C\#/FileContentIndex/2ca1e798-768a-4d4f-8d6d-4beec89e5ed5.vsidx
+.vs/Hello C\#/FileContentIndex/33b1cb57-c2bc-4e91-8f78-7e3f8498cc36.vsidx
+*.vsidx
+# Ignore Visual Studio cache
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Ignore build outputs
+[Bb]in/
+[Oo]bj/
+
+# Ignore NuGet and cache
+*.nupkg
+*.nuget.props
+*.nuget.targets
+project.lock.json
+project.nuget.cache
+*.cache
+
+# Ignore SQLite WAL & SHM
+*.db
+*.db-shm
+*.db-wal
+*.v9.bin
+*.futdcache*
+*.DocumentLayout.json
+
+# Ignore Rider/VSCode
+.idea/
+.vscode/

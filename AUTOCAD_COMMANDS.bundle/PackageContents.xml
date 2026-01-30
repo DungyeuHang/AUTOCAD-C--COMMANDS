@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage
+  SchemaVersion="1.0"
+  Name="AUTOCAD_COMMANDS"
+  Description="AutoCAD custom commands"
+  Author="Local"
+  Version="1.0.0">
+
+  <Components>
+    <RuntimeRequirements
+      OS="Win64"
+      Platform="AutoCAD"
+      SeriesMin="R23.0"
+      SeriesMax="R25.0" />
+
+    <ComponentEntry
+      AppName="AUTOCAD_COMMANDS"
+      ModuleName="./Contents/Win64/AUTOCAD COMMANDS.dll"
+      LoadOnAutoCADStartup="True" />
+  </Components>
+</ApplicationPackage>
