@@ -129,13 +129,239 @@ namespace AUTOCAD_COMMANDS
     // ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> END OF CDD <<<<<<<<<<<<<<<<<<<<<<<<<<< ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
     // START OF SAA
+    public class AutoDimCommand
+    {
+        [CommandMethod("DAA_Dim_auto")]
+        public void AutoDim()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+            Editor ed = doc.Editor;
 
-       
-    
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                // =============================
+                // 1. CHỌN ĐỐI TƯỢNG GỐC
+                // =============================
+                PromptSelectionOptions baseOpt = new PromptSelectionOptions();
+                baseOpt.MessageForAdding = "\nChọn Polyline hoặc nhóm đối tượng gốc:";
+                PromptSelectionResult baseRes = ed.GetSelection(baseOpt);
+                if (baseRes.Status != PromptStatus.OK) return;
+
+                Extents3d baseExt = GetSelectionExtents(baseRes.Value, tr);
+                Point3d baseCenter = GetCenter(baseExt);
+
+                // =============================
+                // 2. CHỌN ĐƯỜNG BAO (LINE / PLINE)
+                // =============================
+                PromptSelectionOptions boundOpt = new PromptSelectionOptions();
+                boundOpt.MessageForAdding = "\nChọn các đường bao (Line / Polyline):";
+                PromptSelectionResult boundRes = ed.GetSelection(boundOpt);
+                if (boundRes.Status != PromptStatus.OK) return;
+
+                Entity leftEntity = null;
+                Entity rightEntity = null;
+                Entity topEntity = null;
+                Entity bottomEntity = null;
+
+                foreach (SelectedObject sel in boundRes.Value)
+                {
+                    Entity ent = tr.GetObject(sel.ObjectId, OpenMode.ForRead) as Entity;
+                    if (ent == null) continue;
+
+                    Extents3d ext = ent.GeometricExtents;
+                    Point3d center = GetCenter(ext);
+
+                    double dx = center.X - baseCenter.X;
+                    double dy = center.Y - baseCenter.Y;
+
+                    // Ưu tiên trục lệch nhiều hơn
+                    if (Math.Abs(dx) > Math.Abs(dy))
+                    {
+                        // ===== TRÁI / PHẢI =====
+                        if (dx < 0)
+                        {
+                            // TRÁI
+                            if (leftEntity == null ||
+                                center.X < GetCenter(leftEntity.GeometricExtents).X)
+                            { leftEntity = ent; }
+                        }
+                        else
+                        {
+                            // PHẢI
+                            if (rightEntity == null ||
+                                center.X > GetCenter(rightEntity.GeometricExtents).X)
+                            {
+                                rightEntity = ent;
+                            }
+                        }
+                    }
 
 
 
+                    else
+                    {
+                        // TRÊN / DƯỚI
+                        if (dy > 0)
+                        {
+                            if (topEntity == null ||
+                                center.Y > GetCenter(topEntity.GeometricExtents).Y)
+                                topEntity = ent;
+                        }
+                        else
+                        {
+                            if (bottomEntity == null ||
+                                center.Y < GetCenter(bottomEntity.GeometricExtents).Y)
+                                bottomEntity = ent;
+                        }
+                    }
+                }
 
+                BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                BlockTableRecord ms =
+                    tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
+
+                // =============================
+                // 3. OFFSET THEO DIMSTYLE
+                // =============================
+                double baseOffset =
+                    db.Dimtxt + db.Dimexe + db.Dimgap;
+
+                double offsetH = baseOffset * 6;
+                double offsetV = baseOffset * 6;
+
+                // =============================
+                // 4. DIM TRÁI
+                // =============================
+                if (leftEntity != null)
+                {
+                    Extents3d ext = leftEntity.GeometricExtents;
+
+                    CreateDim(
+                        ms, tr, db,
+                        0,
+                        new Point3d(ext.MaxPoint.X, baseExt.MinPoint.Y, 0),
+                        new Point3d(baseExt.MinPoint.X, baseExt.MinPoint.Y, 0),
+                        new Point3d(0, baseExt.MinPoint.Y - offsetH * -1.5, 0)
+                    );
+                }
+
+                // =============================
+                // 5. DIM PHẢI
+                // =============================
+                if (rightEntity != null)
+                {
+                    Extents3d ext = rightEntity.GeometricExtents;
+
+                    CreateDim(
+                        ms, tr, db,
+                        0,
+                        new Point3d(baseExt.MaxPoint.X, baseExt.MinPoint.Y, 0),
+                        new Point3d(ext.MinPoint.X, baseExt.MinPoint.Y, 0),
+                        new Point3d(0, baseExt.MinPoint.Y - offsetH * -1.5, 0)
+                    );
+                }
+
+                // =============================
+                // 6. DIM TRÊN
+                // =============================
+                if (topEntity != null)
+                {
+                    Extents3d ext = topEntity.GeometricExtents;
+
+                    CreateDim(
+                        ms, tr, db,
+                        Math.PI / 2,
+                        new Point3d(baseExt.MinPoint.X, baseExt.MaxPoint.Y, 0),
+                        new Point3d(baseExt.MinPoint.X, ext.MinPoint.Y, 0),
+                        new Point3d(baseExt.MinPoint.X - offsetV * -1.5, 0, 0)
+                    );
+                }
+
+                // =============================
+                // 7. DIM DƯỚI
+                // =============================
+                if (bottomEntity != null)
+                {
+                    Extents3d ext = bottomEntity.GeometricExtents;
+
+                    CreateDim(
+                        ms, tr, db,
+                        Math.PI / 2,
+                        new Point3d(baseExt.MinPoint.X, ext.MaxPoint.Y, 0),
+                        new Point3d(baseExt.MinPoint.X, baseExt.MinPoint.Y, 0),
+                        new Point3d(baseExt.MinPoint.X - offsetV * -1.5, 0, 0)
+                    );
+                }
+
+                tr.Commit();
+            }
+        }
+
+        // ======================================================
+        // HÀM TẠO DIM
+        // ======================================================
+        private void CreateDim(
+            BlockTableRecord ms,
+            Transaction tr,
+            Database db,
+            double angle,
+            Point3d p1,
+            Point3d p2,
+            Point3d dimPoint)
+        {
+            RotatedDimension dim = new RotatedDimension(
+                angle, p1, p2, dimPoint, "", db.Dimstyle);
+            // 👉 SET LAYER Ở ĐÂY
+            dim.Layer = "_mss.kichthuoc";
+            ms.AppendEntity(dim);
+            tr.AddNewlyCreatedDBObject(dim, true);
+        }
+
+        // ======================================================
+        // LẤY EXTENTS CỦA SELECTION
+        // ======================================================
+        private Extents3d GetSelectionExtents(SelectionSet ss, Transaction tr)
+        {
+            Extents3d? ext = null;
+
+            foreach (SelectedObject sel in ss)
+            {
+                Entity ent = tr.GetObject(sel.ObjectId, OpenMode.ForRead) as Entity;
+                if (ent == null) continue;
+
+                if (ext == null)
+                    ext = ent.GeometricExtents;
+                else
+                {
+                    Extents3d e = ent.GeometricExtents;
+                    ext = new Extents3d(
+                        new Point3d(
+                            Math.Min(ext.Value.MinPoint.X, e.MinPoint.X),
+                            Math.Min(ext.Value.MinPoint.Y, e.MinPoint.Y),
+                            0),
+                        new Point3d(
+                            Math.Max(ext.Value.MaxPoint.X, e.MaxPoint.X),
+                            Math.Max(ext.Value.MaxPoint.Y, e.MaxPoint.Y),
+                            0)
+                    );
+                }
+            }
+            return ext.Value;
+        }
+
+        // ======================================================
+        // LẤY TÂM EXTENTS
+        // ======================================================
+        private Point3d GetCenter(Extents3d ext)
+        {
+            return new Point3d(
+                (ext.MinPoint.X + ext.MaxPoint.X) / 2.0,
+                (ext.MinPoint.Y + ext.MaxPoint.Y) / 2.0,
+                0
+            );
+        }
+    }
 
 
 
