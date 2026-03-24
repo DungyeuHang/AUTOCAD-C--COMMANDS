@@ -447,6 +447,80 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
+        [CommandMethod("SDY")]
+        public void SmartDimY()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            Editor ed = doc.Editor;
+            Database db = doc.Database;
+
+            PromptPointResult startRes =
+                ed.GetPoint("\nChọn điểm đầu dim: ");
+            if (startRes.Status != PromptStatus.OK) return;
+
+            PromptPointOptions dirOpt =
+                new PromptPointOptions("\nChọn điểm để xác định hướng Y (+/-): ");
+            dirOpt.BasePoint = startRes.Value;
+            dirOpt.UseBasePoint = true;
+
+            PromptPointResult dirRes = ed.GetPoint(dirOpt);
+            if (dirRes.Status != PromptStatus.OK) return;
+
+            double deltaY = dirRes.Value.Y - startRes.Value.Y;
+            if (Math.Abs(deltaY) < DirectionTolerance)
+            {
+                ed.WriteMessage("\nĐiểm hướng phải lệch theo trục Y.");
+                return;
+            }
+
+            double direction = deltaY > 0 ? 1.0 : -1.0;
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                BlockTableRecord currentSpace =
+                    tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
+
+                if (currentSpace == null) return;
+
+                Point3d? targetPoint =
+                    FindNearestPointOnYAxis(currentSpace, tr, startRes.Value, direction);
+
+                if (!targetPoint.HasValue)
+                {
+                    ed.WriteMessage(
+                        "\nKhông tìm thấy đối tượng nào gần nhất theo đúng hướng Y đã chọn.");
+                    return;
+                }
+
+                Point3d endPoint = new Point3d(
+                    startRes.Value.X,
+                    targetPoint.Value.Y,
+                    startRes.Value.Z);
+
+                if (startRes.Value.DistanceTo(endPoint) < DirectionTolerance)
+                {
+                    ed.WriteMessage("\nKhoảng dim quá nhỏ hoặc trùng điểm đầu.");
+                    return;
+                }
+
+                ObjectId dimLayerId = EnsureDimLayer(db, tr);
+
+                RotatedDimension dim = new RotatedDimension
+                {
+                    XLine1Point = startRes.Value,
+                    XLine2Point = endPoint,
+                    DimLinePoint = dirRes.Value,
+                    Rotation = Math.PI / 2.0,
+                    DimensionStyle = db.Dimstyle,
+                    LayerId = dimLayerId
+                };
+
+                currentSpace.AppendEntity(dim);
+                tr.AddNewlyCreatedDBObject(dim, true);
+                tr.Commit();
+            }
+        }
+
         private Point3d? FindNearestPointOnXAxis(
             BlockTableRecord currentSpace,
             Transaction tr,
@@ -486,6 +560,45 @@ namespace AUTOCAD_COMMANDS
             return bestPoint;
         }
 
+        private Point3d? FindNearestPointOnYAxis(
+            BlockTableRecord currentSpace,
+            Transaction tr,
+            Point3d startPoint,
+            double direction)
+        {
+            Point3d? bestPoint = null;
+            double bestDistance = double.MaxValue;
+
+            using (Line scanLine = CreateVerticalScanLine(startPoint, direction))
+            {
+                foreach (ObjectId id in currentSpace)
+                {
+                    Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
+                    if (entity == null || entity.IsErased) continue;
+                    if (entity is Dimension) continue;
+                    if (!(entity is Curve)) continue;
+
+                    Point3dCollection intersections =
+                        TryGetIntersections(entity, scanLine);
+                    if (intersections == null || intersections.Count == 0) continue;
+
+                    foreach (Point3d point in intersections)
+                    {
+                        double projectedDistance =
+                            (point.Y - startPoint.Y) * direction;
+
+                        if (projectedDistance <= DirectionTolerance) continue;
+                        if (projectedDistance >= bestDistance) continue;
+
+                        bestDistance = projectedDistance;
+                        bestPoint = point;
+                    }
+                }
+            }
+
+            return bestPoint;
+        }
+
         private Point3dCollection TryGetIntersections(Entity entity, Line scanLine)
         {
             try
@@ -510,6 +623,16 @@ namespace AUTOCAD_COMMANDS
             Point3d endPoint = new Point3d(
                 startPoint.X + SearchDistance * direction,
                 startPoint.Y,
+                startPoint.Z);
+
+            return new Line(startPoint, endPoint);
+        }
+
+        private Line CreateVerticalScanLine(Point3d startPoint, double direction)
+        {
+            Point3d endPoint = new Point3d(
+                startPoint.X,
+                startPoint.Y + SearchDistance * direction,
                 startPoint.Z);
 
             return new Line(startPoint, endPoint);
