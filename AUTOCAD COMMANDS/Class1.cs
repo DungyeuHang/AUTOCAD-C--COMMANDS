@@ -367,6 +367,177 @@ namespace AUTOCAD_COMMANDS
 
 
 
+    public class SmartDimXCommand
+    {
+        private const string DimLayerName = "_mss.kichthuoc";
+        private const double DirectionTolerance = 1e-6;
+        private const double SearchDistance = 1000000.0;
+
+        [CommandMethod("SDX")]
+        public void SmartDimX()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            Editor ed = doc.Editor;
+            Database db = doc.Database;
+
+            PromptPointResult startRes =
+                ed.GetPoint("\nChọn điểm đầu dim: ");
+            if (startRes.Status != PromptStatus.OK) return;
+
+            PromptPointOptions dirOpt =
+                new PromptPointOptions("\nChọn điểm để xác định hướng X (+/-): ");
+            dirOpt.BasePoint = startRes.Value;
+            dirOpt.UseBasePoint = true;
+
+            PromptPointResult dirRes = ed.GetPoint(dirOpt);
+            if (dirRes.Status != PromptStatus.OK) return;
+
+            double deltaX = dirRes.Value.X - startRes.Value.X;
+            if (Math.Abs(deltaX) < DirectionTolerance)
+            {
+                ed.WriteMessage("\nĐiểm hướng phải lệch theo trục X.");
+                return;
+            }
+
+            double direction = deltaX > 0 ? 1.0 : -1.0;
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                BlockTableRecord currentSpace =
+                    tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
+
+                if (currentSpace == null) return;
+
+                Point3d? targetPoint =
+                    FindNearestPointOnXAxis(currentSpace, tr, startRes.Value, direction);
+
+                if (!targetPoint.HasValue)
+                {
+                    ed.WriteMessage(
+                        "\nKhông tìm thấy đối tượng nào gần nhất theo đúng hướng X đã chọn.");
+                    return;
+                }
+
+                Point3d endPoint = new Point3d(
+                    targetPoint.Value.X,
+                    startRes.Value.Y,
+                    startRes.Value.Z);
+
+                if (startRes.Value.DistanceTo(endPoint) < DirectionTolerance)
+                {
+                    ed.WriteMessage("\nKhoảng dim quá nhỏ hoặc trùng điểm đầu.");
+                    return;
+                }
+
+                ObjectId dimLayerId = EnsureDimLayer(db, tr);
+
+                RotatedDimension dim = new RotatedDimension
+                {
+                    XLine1Point = startRes.Value,
+                    XLine2Point = endPoint,
+                    DimLinePoint = dirRes.Value,
+                    Rotation = 0.0,
+                    DimensionStyle = db.Dimstyle,
+                    LayerId = dimLayerId
+                };
+
+                currentSpace.AppendEntity(dim);
+                tr.AddNewlyCreatedDBObject(dim, true);
+                tr.Commit();
+            }
+        }
+
+        private Point3d? FindNearestPointOnXAxis(
+            BlockTableRecord currentSpace,
+            Transaction tr,
+            Point3d startPoint,
+            double direction)
+        {
+            Point3d? bestPoint = null;
+            double bestDistance = double.MaxValue;
+
+            using (Line scanLine = CreateScanLine(startPoint, direction))
+            {
+                foreach (ObjectId id in currentSpace)
+                {
+                    Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
+                    if (entity == null || entity.IsErased) continue;
+                    if (entity is Dimension) continue;
+                    if (!(entity is Curve)) continue;
+
+                    Point3dCollection intersections =
+                        TryGetIntersections(entity, scanLine);
+                    if (intersections == null || intersections.Count == 0) continue;
+
+                    foreach (Point3d point in intersections)
+                    {
+                        double projectedDistance =
+                            (point.X - startPoint.X) * direction;
+
+                        if (projectedDistance <= DirectionTolerance) continue;
+                        if (projectedDistance >= bestDistance) continue;
+
+                        bestDistance = projectedDistance;
+                        bestPoint = point;
+                    }
+                }
+            }
+
+            return bestPoint;
+        }
+
+        private Point3dCollection TryGetIntersections(Entity entity, Line scanLine)
+        {
+            try
+            {
+                Point3dCollection intersections = new Point3dCollection();
+                entity.IntersectWith(
+                    scanLine,
+                    Intersect.OnBothOperands,
+                    intersections,
+                    IntPtr.Zero,
+                    IntPtr.Zero);
+                return intersections;
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception)
+            {
+                return null;
+            }
+        }
+
+        private Line CreateScanLine(Point3d startPoint, double direction)
+        {
+            Point3d endPoint = new Point3d(
+                startPoint.X + SearchDistance * direction,
+                startPoint.Y,
+                startPoint.Z);
+
+            return new Line(startPoint, endPoint);
+        }
+
+        private ObjectId EnsureDimLayer(Database db, Transaction tr)
+        {
+            LayerTable layerTable =
+                tr.GetObject(db.LayerTableId, OpenMode.ForRead) as LayerTable;
+
+            if (layerTable == null) return ObjectId.Null;
+
+            if (layerTable.Has(DimLayerName))
+                return layerTable[DimLayerName];
+
+            layerTable.UpgradeOpen();
+
+            LayerTableRecord layer = new LayerTableRecord
+            {
+                Name = DimLayerName
+            };
+
+            ObjectId layerId = layerTable.Add(layer);
+            tr.AddNewlyCreatedDBObject(layer, true);
+            return layerId;
+        }
+    }
+
     // END OF A COMMAND
 }
 
