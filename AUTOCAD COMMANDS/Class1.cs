@@ -766,7 +766,9 @@ namespace AUTOCAD_COMMANDS
 
         private static bool EnsureSourceLoaded(Document doc, PaletteCommandItem item)
         {
-            if (item.SourceKind == PaletteSourceKind.BuiltInDll)
+            if (item.SourceKind == PaletteSourceKind.BuiltInDll ||
+                item.SourceKind == PaletteSourceKind.ActionMacro ||
+                item.SourceKind == PaletteSourceKind.ManualAlias)
             {
                 return true;
             }
@@ -814,7 +816,7 @@ namespace AUTOCAD_COMMANDS
                 Style = PaletteSetStyles.ShowAutoHideButton
                       | PaletteSetStyles.ShowCloseButton
                       | PaletteSetStyles.Snappable,
-                MinimumSize = new Size(420, 320),
+                MinimumSize = new Size(110, 220),
                 Size = new Size(560, 700),
                 DockEnabled = DockSides.Left | DockSides.Right,
                 KeepFocus = false
@@ -834,13 +836,20 @@ namespace AUTOCAD_COMMANDS
         private static readonly Color SelectionColor = Color.FromArgb(62, 62, 64);
 
         private readonly WF.TextBox _searchBox;
+        private readonly WF.TableLayoutPanel _filterPanel;
+        private readonly WF.FlowLayoutPanel _buttonPanel;
+        private readonly WF.Label _sourceLabel;
+        private readonly WF.Label _typeLabel;
+        private readonly WF.Label _searchLabel;
         private readonly WF.ComboBox _sourceFilter;
+        private readonly WF.ComboBox _typeFilter;
         private readonly WF.DataGridView _commandGrid;
         private readonly WF.Button _runButton;
         private readonly WF.Button _reloadButton;
         private readonly WF.Button _folderButton;
         private readonly WF.Button _refreshButton;
         private readonly WF.Button _addSourceButton;
+        private readonly WF.Button _addManualButton;
         private readonly WF.Button _removeSourceButton;
         private readonly WF.Label _statusLabel;
         private List<PaletteCommandItem> _items;
@@ -870,37 +879,24 @@ namespace AUTOCAD_COMMANDS
             layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
             Controls.Add(layout);
 
-            WF.TableLayoutPanel filterPanel = new WF.TableLayoutPanel
+            _filterPanel = new WF.TableLayoutPanel
             {
                 Dock = WF.DockStyle.Top,
-                ColumnCount = 4,
+                ColumnCount = 6,
                 AutoSize = true,
                 BackColor = BackgroundColor
             };
-            filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
-            filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
-            filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
-            filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Absolute, 170f));
-            layout.Controls.Add(filterPanel, 0, 0);
+            _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
+            _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Absolute, 170f));
+            _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
+            _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Absolute, 170f));
+            _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
+            _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
+            layout.Controls.Add(_filterPanel, 0, 0);
 
-            WF.Label searchLabel = CreateLabel("Search");
-            searchLabel.Margin = new WF.Padding(0, 6, 8, 0);
-            filterPanel.Controls.Add(searchLabel, 0, 0);
-
-            _searchBox = new WF.TextBox
-            {
-                Dock = WF.DockStyle.Fill,
-                Margin = new WF.Padding(0, 0, 12, 0),
-                BackColor = PanelColor,
-                ForeColor = ForegroundColor,
-                BorderStyle = WF.BorderStyle.FixedSingle
-            };
-            _searchBox.TextChanged += (_, __) => BindGrid();
-            filterPanel.Controls.Add(_searchBox, 1, 0);
-
-            WF.Label sourceLabel = CreateLabel("Source");
-            sourceLabel.Margin = new WF.Padding(0, 6, 8, 0);
-            filterPanel.Controls.Add(sourceLabel, 2, 0);
+            _sourceLabel = CreateLabel("Source");
+            _sourceLabel.Margin = new WF.Padding(0, 6, 8, 0);
+            _filterPanel.Controls.Add(_sourceLabel, 0, 0);
 
             _sourceFilter = new WF.ComboBox
             {
@@ -913,9 +909,49 @@ namespace AUTOCAD_COMMANDS
             _sourceFilter.Items.AddRange(new object[] { "All", "DUNGX Custom", "DUNGX 2" });
             _sourceFilter.SelectedIndex = 0;
             _sourceFilter.SelectedIndexChanged += (_, __) => BindGrid();
-            filterPanel.Controls.Add(_sourceFilter, 3, 0);
+            _filterPanel.Controls.Add(_sourceFilter, 1, 0);
 
-            WF.FlowLayoutPanel buttonPanel = new WF.FlowLayoutPanel
+            _typeLabel = CreateLabel("Type");
+            _typeLabel.Margin = new WF.Padding(0, 6, 8, 0);
+            _filterPanel.Controls.Add(_typeLabel, 2, 0);
+
+            _typeFilter = new WF.ComboBox
+            {
+                Dock = WF.DockStyle.Fill,
+                DropDownStyle = WF.ComboBoxStyle.DropDownList,
+                BackColor = PanelColor,
+                ForeColor = ForegroundColor,
+                FlatStyle = WF.FlatStyle.Flat
+            };
+            _typeFilter.Items.AddRange(new object[]
+            {
+                "All",
+                "LISP",
+                "DLL",
+                "VLX",
+                "Action",
+                "Manual"
+            });
+            _typeFilter.SelectedIndex = 0;
+            _typeFilter.SelectedIndexChanged += (_, __) => BindGrid();
+            _filterPanel.Controls.Add(_typeFilter, 3, 0);
+
+            _searchLabel = CreateLabel("Search");
+            _searchLabel.Margin = new WF.Padding(0, 6, 8, 0);
+            _filterPanel.Controls.Add(_searchLabel, 4, 0);
+
+            _searchBox = new WF.TextBox
+            {
+                Dock = WF.DockStyle.Fill,
+                Margin = new WF.Padding(0, 0, 0, 0),
+                BackColor = PanelColor,
+                ForeColor = ForegroundColor,
+                BorderStyle = WF.BorderStyle.FixedSingle
+            };
+            _searchBox.TextChanged += (_, __) => BindGrid();
+            _filterPanel.Controls.Add(_searchBox, 5, 0);
+
+            _buttonPanel = new WF.FlowLayoutPanel
             {
                 Dock = WF.DockStyle.Top,
                 AutoSize = true,
@@ -924,21 +960,23 @@ namespace AUTOCAD_COMMANDS
                 Margin = new WF.Padding(0, 8, 0, 8),
                 BackColor = BackgroundColor
             };
-            layout.Controls.Add(buttonPanel, 0, 1);
+            layout.Controls.Add(_buttonPanel, 0, 1);
 
             _runButton = CreateButton("Run", (_, __) => RunSelected());
             _reloadButton = CreateButton("Reload LISP", (_, __) => ReloadLisps());
             _folderButton = CreateButton("LISP Folder", (_, __) => PickFolder());
             _addSourceButton = CreateButton("Add Source", (_, __) => AddSource());
+            _addManualButton = CreateButton("Add Manual", (_, __) => AddManualAlias());
             _removeSourceButton = CreateButton("Remove Source", (_, __) => RemoveSelectedSource());
             _refreshButton = CreateButton("Refresh List", (_, __) => ReloadData(true));
 
-            buttonPanel.Controls.Add(_runButton);
-            buttonPanel.Controls.Add(_reloadButton);
-            buttonPanel.Controls.Add(_folderButton);
-            buttonPanel.Controls.Add(_addSourceButton);
-            buttonPanel.Controls.Add(_removeSourceButton);
-            buttonPanel.Controls.Add(_refreshButton);
+            _buttonPanel.Controls.Add(_runButton);
+            _buttonPanel.Controls.Add(_reloadButton);
+            _buttonPanel.Controls.Add(_folderButton);
+            _buttonPanel.Controls.Add(_addSourceButton);
+            _buttonPanel.Controls.Add(_addManualButton);
+            _buttonPanel.Controls.Add(_removeSourceButton);
+            _buttonPanel.Controls.Add(_refreshButton);
 
             _commandGrid = CreateGrid();
             _commandGrid.CellDoubleClick += CommandGrid_CellDoubleClick;
@@ -952,6 +990,8 @@ namespace AUTOCAD_COMMANDS
             layout.Controls.Add(_statusLabel, 0, 3);
 
             _items = new List<PaletteCommandItem>();
+            Resize += (_, __) => ApplyResponsiveLayout();
+            ApplyResponsiveLayout();
             ReloadData(false);
         }
 
@@ -982,10 +1022,123 @@ namespace AUTOCAD_COMMANDS
             _statusLabel.Text = message;
         }
 
+        private void ApplyResponsiveLayout()
+        {
+            bool compact = Width <= 260;
+            bool ultraCompact = Width <= 150;
+
+            _filterPanel.SuspendLayout();
+            _buttonPanel.SuspendLayout();
+
+            _filterPanel.Controls.Clear();
+            _filterPanel.ColumnStyles.Clear();
+            _filterPanel.RowStyles.Clear();
+
+            if (ultraCompact)
+            {
+                _sourceLabel.Visible = false;
+                _typeLabel.Visible = false;
+                _searchLabel.Visible = false;
+
+                _filterPanel.ColumnCount = 1;
+                _filterPanel.RowCount = 3;
+                _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
+                _filterPanel.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+                _filterPanel.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+                _filterPanel.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+
+                _sourceFilter.Margin = new WF.Padding(0, 0, 0, 4);
+                _typeFilter.Margin = new WF.Padding(0, 0, 0, 4);
+                _searchBox.Margin = new WF.Padding(0);
+
+                _filterPanel.Controls.Add(_sourceFilter, 0, 0);
+                _filterPanel.Controls.Add(_typeFilter, 0, 1);
+                _filterPanel.Controls.Add(_searchBox, 0, 2);
+            }
+            else if (compact)
+            {
+                _sourceLabel.Visible = true;
+                _typeLabel.Visible = true;
+                _searchLabel.Visible = true;
+
+                _filterPanel.ColumnCount = 2;
+                _filterPanel.RowCount = 3;
+                _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
+                _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
+                _filterPanel.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+                _filterPanel.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+                _filterPanel.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+
+                _sourceFilter.Margin = new WF.Padding(0, 0, 0, 4);
+                _typeFilter.Margin = new WF.Padding(0, 0, 0, 4);
+                _searchBox.Margin = new WF.Padding(0);
+
+                _filterPanel.Controls.Add(_sourceLabel, 0, 0);
+                _filterPanel.Controls.Add(_sourceFilter, 1, 0);
+                _filterPanel.Controls.Add(_typeLabel, 0, 1);
+                _filterPanel.Controls.Add(_typeFilter, 1, 1);
+                _filterPanel.Controls.Add(_searchLabel, 0, 2);
+                _filterPanel.Controls.Add(_searchBox, 1, 2);
+            }
+            else
+            {
+                _sourceLabel.Visible = true;
+                _typeLabel.Visible = true;
+                _searchLabel.Visible = true;
+
+                _filterPanel.ColumnCount = 6;
+                _filterPanel.RowCount = 1;
+                _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
+                _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Absolute, 170f));
+                _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
+                _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Absolute, 170f));
+                _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
+                _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
+
+                _sourceFilter.Margin = new WF.Padding(0);
+                _typeFilter.Margin = new WF.Padding(0);
+                _searchBox.Margin = new WF.Padding(0);
+
+                _filterPanel.Controls.Add(_sourceLabel, 0, 0);
+                _filterPanel.Controls.Add(_sourceFilter, 1, 0);
+                _filterPanel.Controls.Add(_typeLabel, 2, 0);
+                _filterPanel.Controls.Add(_typeFilter, 3, 0);
+                _filterPanel.Controls.Add(_searchLabel, 4, 0);
+                _filterPanel.Controls.Add(_searchBox, 5, 0);
+            }
+
+            _buttonPanel.FlowDirection = compact
+                ? WF.FlowDirection.TopDown
+                : WF.FlowDirection.LeftToRight;
+            _buttonPanel.WrapContents = compact;
+            _buttonPanel.Visible = !compact;
+
+            _runButton.Text = compact ? "Run" : "Run";
+            _reloadButton.Text = compact ? "LISP" : "Reload LISP";
+            _folderButton.Text = compact ? "Dir" : "LISP Folder";
+            _addSourceButton.Text = compact ? "+Src" : "Add Source";
+            _addManualButton.Text = compact ? "+Cmd" : "Add Manual";
+            _removeSourceButton.Text = compact ? "-Src" : "Remove Source";
+            _refreshButton.Text = compact ? "Ref" : "Refresh List";
+
+            _commandGrid.Columns["Description"].Visible = !compact;
+            _commandGrid.Columns["Source"].Visible = !compact;
+            _commandGrid.Columns["Command"].AutoSizeMode = compact
+                ? WF.DataGridViewAutoSizeColumnMode.Fill
+                : WF.DataGridViewAutoSizeColumnMode.None;
+            _commandGrid.Columns["Command"].Width = compact ? 80 : 140;
+
+            _statusLabel.Visible = !ultraCompact;
+
+            _filterPanel.ResumeLayout();
+            _buttonPanel.ResumeLayout();
+        }
+
         private void BindGrid()
         {
             string search = (_searchBox.Text ?? string.Empty).Trim();
             string source = Convert.ToString(_sourceFilter.SelectedItem) ?? "All";
+            string type = Convert.ToString(_typeFilter.SelectedItem) ?? "All";
 
             IEnumerable<PaletteCommandItem> filtered = _items;
 
@@ -993,6 +1146,11 @@ namespace AUTOCAD_COMMANDS
             {
                 filtered = filtered.Where(
                     item => string.Equals(item.SourceLabel, source, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (!string.Equals(type, "All", StringComparison.OrdinalIgnoreCase))
+            {
+                filtered = filtered.Where(item => MatchesTypeFilter(item.SourceKind, type));
             }
 
             if (!string.IsNullOrWhiteSpace(search))
@@ -1216,12 +1374,36 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
+        private void AddManualAlias()
+        {
+            string commandName = PaletteUiHelpers.ShowTextPrompt(
+                "Them manual alias",
+                "Nhap ten lenh / alias:");
+            if (string.IsNullOrWhiteSpace(commandName))
+            {
+                SetStatus("Khong them manual alias.");
+                return;
+            }
+
+            PaletteManualCommandStore.Save(commandName.Trim(), string.Empty);
+            ReloadData(false);
+            SetStatus($"Da them manual alias: {commandName.Trim()}");
+        }
+
         private void RemoveSelectedSource()
         {
             PaletteCommandItem item = GetSelectedItem();
             if (item == null)
             {
                 SetStatus("Chua chon dong nao de xoa source.");
+                return;
+            }
+
+            if (item.SourceKind == PaletteSourceKind.ManualAlias)
+            {
+                PaletteManualCommandStore.Remove(item.CommandName);
+                ReloadData(false);
+                SetStatus("Da xoa manual alias.");
                 return;
             }
 
@@ -1268,6 +1450,26 @@ namespace AUTOCAD_COMMANDS
             _sourceFilter.SelectedIndex = selectedIndex;
         }
 
+        private static bool MatchesTypeFilter(PaletteSourceKind sourceKind, string selectedType)
+        {
+            switch (selectedType)
+            {
+                case "LISP":
+                    return sourceKind == PaletteSourceKind.Lisp;
+                case "DLL":
+                    return sourceKind == PaletteSourceKind.ManagedDll ||
+                           sourceKind == PaletteSourceKind.BuiltInDll;
+                case "VLX":
+                    return sourceKind == PaletteSourceKind.Vlx;
+                case "Action":
+                    return sourceKind == PaletteSourceKind.ActionMacro;
+                case "Manual":
+                    return sourceKind == PaletteSourceKind.ManualAlias;
+                default:
+                    return true;
+            }
+        }
+
         private PaletteCommandItem GetSelectedItem()
         {
             if (_commandGrid.SelectedRows.Count == 0)
@@ -1276,6 +1478,65 @@ namespace AUTOCAD_COMMANDS
             }
 
             return _commandGrid.SelectedRows[0].Tag as PaletteCommandItem;
+        }
+    }
+
+    internal static class PaletteUiHelpers
+    {
+        public static string ShowTextPrompt(string title, string label)
+        {
+            Color backgroundColor = Color.FromArgb(45, 45, 48);
+            Color panelColor = Color.FromArgb(37, 37, 38);
+            Color foregroundColor = Color.FromArgb(241, 241, 241);
+
+            using (WF.Form form = new WF.Form())
+            using (WF.TextBox textBox = new WF.TextBox())
+            using (WF.Label textLabel = new WF.Label())
+            using (WF.Button okButton = new WF.Button())
+            using (WF.Button cancelButton = new WF.Button())
+            {
+                form.Text = title;
+                form.StartPosition = WF.FormStartPosition.CenterParent;
+                form.FormBorderStyle = WF.FormBorderStyle.FixedDialog;
+                form.MinimizeBox = false;
+                form.MaximizeBox = false;
+                form.ClientSize = new Size(420, 120);
+                form.BackColor = backgroundColor;
+                form.ForeColor = foregroundColor;
+
+                textLabel.Text = label;
+                textLabel.Left = 16;
+                textLabel.Top = 16;
+                textLabel.Width = 380;
+                textLabel.ForeColor = foregroundColor;
+
+                textBox.Left = 16;
+                textBox.Top = 42;
+                textBox.Width = 380;
+                textBox.BackColor = panelColor;
+                textBox.ForeColor = foregroundColor;
+
+                okButton.Text = "OK";
+                okButton.DialogResult = WF.DialogResult.OK;
+                okButton.Left = 240;
+                okButton.Top = 80;
+
+                cancelButton.Text = "Cancel";
+                cancelButton.DialogResult = WF.DialogResult.Cancel;
+                cancelButton.Left = 322;
+                cancelButton.Top = 80;
+
+                form.Controls.Add(textLabel);
+                form.Controls.Add(textBox);
+                form.Controls.Add(okButton);
+                form.Controls.Add(cancelButton);
+                form.AcceptButton = okButton;
+                form.CancelButton = cancelButton;
+
+                return form.ShowDialog() == WF.DialogResult.OK
+                    ? textBox.Text
+                    : string.Empty;
+            }
         }
     }
 
@@ -1311,7 +1572,9 @@ namespace AUTOCAD_COMMANDS
         BuiltInDll,
         Lisp,
         ManagedDll,
-        Vlx
+        Vlx,
+        ActionMacro,
+        ManualAlias
     }
 
     internal sealed class PaletteSourceFile
@@ -1670,6 +1933,112 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    internal static class PaletteManualCommandStore
+    {
+        private static readonly string ManualFilePath =
+            Path.Combine(
+                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
+                "dungx_palette_manual.tsv");
+
+        public static Dictionary<string, string> Load()
+        {
+            Dictionary<string, string> map =
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            if (!File.Exists(ManualFilePath))
+            {
+                return map;
+            }
+
+            foreach (string line in File.ReadAllLines(ManualFilePath, Encoding.UTF8))
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                string[] parts = line.Split(new[] { '\t' }, 2);
+                string commandName = parts[0].Trim();
+                string description = parts.Length > 1 ? parts[1] : string.Empty;
+
+                if (!string.IsNullOrWhiteSpace(commandName))
+                {
+                    map[commandName] = description;
+                }
+            }
+
+            return map;
+        }
+
+        public static void Save(string commandName, string description)
+        {
+            Dictionary<string, string> map = Load();
+            map[commandName] = description ?? string.Empty;
+            SaveAll(map);
+        }
+
+        public static void Remove(string commandName)
+        {
+            Dictionary<string, string> map = Load();
+            map.Remove(commandName);
+            SaveAll(map);
+        }
+
+        private static void SaveAll(Dictionary<string, string> map)
+        {
+            List<string> lines = map
+                .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(kvp => kvp.Key + "\t" + (kvp.Value ?? string.Empty))
+                .ToList();
+
+            File.WriteAllLines(ManualFilePath, lines, Encoding.UTF8);
+        }
+    }
+
+    internal static class ActionMacroCatalog
+    {
+        public static IEnumerable<PaletteCommandItem> BuildItems(
+            Dictionary<string, string> savedDescriptions)
+        {
+            string actionFolder = GetDefaultActionsFolder();
+            if (string.IsNullOrWhiteSpace(actionFolder) || !Directory.Exists(actionFolder))
+            {
+                return Enumerable.Empty<PaletteCommandItem>();
+            }
+
+            List<PaletteCommandItem> items = new List<PaletteCommandItem>();
+            foreach (string filePath in Directory.GetFiles(actionFolder, "*.actm"))
+            {
+                string commandName = Path.GetFileNameWithoutExtension(filePath);
+                string description = savedDescriptions.TryGetValue(commandName, out string saved)
+                    ? saved
+                    : "Action Recorder macro";
+
+                items.Add(new PaletteCommandItem(
+                    commandName,
+                    description,
+                    "Action Macro",
+                    PaletteSourceKind.ActionMacro,
+                    filePath));
+            }
+
+            return items;
+        }
+
+        private static string GetDefaultActionsFolder()
+        {
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            return Path.Combine(
+                appData,
+                "Autodesk",
+                "AutoCAD 2022",
+                "R24.1",
+                "enu",
+                "Support",
+                "Actions");
+        }
+    }
+
     internal static class PaletteCommandCatalog
     {
         private static readonly Regex LispCommandRegex =
@@ -1709,6 +2078,29 @@ namespace AUTOCAD_COMMANDS
                         AddOrReplace(result, unique, item, savedDescriptions);
                     }
                 }
+            }
+
+            foreach (KeyValuePair<string, string> manual in PaletteManualCommandStore.Load())
+            {
+                string description = savedDescriptions.TryGetValue(manual.Key, out string saved)
+                    ? saved
+                    : manual.Value;
+
+                AddOrReplace(
+                    result,
+                    unique,
+                    new PaletteCommandItem(
+                        manual.Key,
+                        description,
+                        "Manual Alias",
+                        PaletteSourceKind.ManualAlias,
+                        manual.Key),
+                    savedDescriptions);
+            }
+
+            foreach (PaletteCommandItem item in ActionMacroCatalog.BuildItems(savedDescriptions))
+            {
+                AddOrReplace(result, unique, item, savedDescriptions);
             }
 
             foreach (PaletteSourceFile source in PaletteSourceStore.LoadSources())
