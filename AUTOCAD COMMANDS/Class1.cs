@@ -1,12 +1,14 @@
 ﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
+using Autodesk.AutoCAD.GraphicsInterface;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.Runtime;
 using Autodesk.AutoCAD.Windows;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -840,9 +842,11 @@ namespace AUTOCAD_COMMANDS
         private readonly WF.FlowLayoutPanel _buttonPanel;
         private readonly WF.Label _sourceLabel;
         private readonly WF.Label _typeLabel;
+        private readonly WF.Label _sortLabel;
         private readonly WF.Label _searchLabel;
         private readonly WF.ComboBox _sourceFilter;
         private readonly WF.ComboBox _typeFilter;
+        private readonly WF.ComboBox _sortModeFilter;
         private readonly WF.DataGridView _commandGrid;
         private readonly WF.Button _runButton;
         private readonly WF.Button _reloadButton;
@@ -853,6 +857,8 @@ namespace AUTOCAD_COMMANDS
         private readonly WF.Button _removeSourceButton;
         private readonly WF.Label _statusLabel;
         private List<PaletteCommandItem> _items;
+        private Point _dragStartPoint;
+        private int _dragRowIndex = -1;
 
         public DungXPaletteControl()
         {
@@ -882,7 +888,7 @@ namespace AUTOCAD_COMMANDS
             _filterPanel = new WF.TableLayoutPanel
             {
                 Dock = WF.DockStyle.Top,
-                ColumnCount = 6,
+                ColumnCount = 8,
                 AutoSize = true,
                 BackColor = BackgroundColor
             };
@@ -890,6 +896,8 @@ namespace AUTOCAD_COMMANDS
             _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Absolute, 170f));
             _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
             _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Absolute, 170f));
+            _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
+            _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Absolute, 140f));
             _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
             _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
             layout.Controls.Add(_filterPanel, 0, 0);
@@ -936,9 +944,29 @@ namespace AUTOCAD_COMMANDS
             _typeFilter.SelectedIndexChanged += (_, __) => BindGrid();
             _filterPanel.Controls.Add(_typeFilter, 3, 0);
 
+            _sortLabel = CreateLabel("Sort");
+            _sortLabel.Margin = new WF.Padding(8, 6, 8, 0);
+            _filterPanel.Controls.Add(_sortLabel, 4, 0);
+
+            _sortModeFilter = new WF.ComboBox
+            {
+                Dock = WF.DockStyle.Fill,
+                DropDownStyle = WF.ComboBoxStyle.DropDownList,
+                BackColor = PanelColor,
+                ForeColor = ForegroundColor,
+                FlatStyle = WF.FlatStyle.Flat
+            };
+            _sortModeFilter.Items.AddRange(new object[]
+            {
+                "Custom",
+                "A-Z"
+            });
+            _sortModeFilter.SelectedIndexChanged += SortModeFilter_SelectedIndexChanged;
+            _filterPanel.Controls.Add(_sortModeFilter, 5, 0);
+
             _searchLabel = CreateLabel("Search");
-            _searchLabel.Margin = new WF.Padding(0, 6, 8, 0);
-            _filterPanel.Controls.Add(_searchLabel, 4, 0);
+            _searchLabel.Margin = new WF.Padding(8, 6, 8, 0);
+            _filterPanel.Controls.Add(_searchLabel, 6, 0);
 
             _searchBox = new WF.TextBox
             {
@@ -949,7 +977,7 @@ namespace AUTOCAD_COMMANDS
                 BorderStyle = WF.BorderStyle.FixedSingle
             };
             _searchBox.TextChanged += (_, __) => BindGrid();
-            _filterPanel.Controls.Add(_searchBox, 5, 0);
+            _filterPanel.Controls.Add(_searchBox, 7, 0);
 
             _buttonPanel = new WF.FlowLayoutPanel
             {
@@ -979,9 +1007,15 @@ namespace AUTOCAD_COMMANDS
             _buttonPanel.Controls.Add(_refreshButton);
 
             _commandGrid = CreateGrid();
+            _commandGrid.AllowDrop = true;
+            _commandGrid.CellClick += CommandGrid_CellClick;
             _commandGrid.CellDoubleClick += CommandGrid_CellDoubleClick;
             _commandGrid.KeyDown += CommandGrid_KeyDown;
             _commandGrid.CellEndEdit += CommandGrid_CellEndEdit;
+            _commandGrid.MouseDown += CommandGrid_MouseDown;
+            _commandGrid.MouseMove += CommandGrid_MouseMove;
+            _commandGrid.DragOver += CommandGrid_DragOver;
+            _commandGrid.DragDrop += CommandGrid_DragDrop;
             layout.Controls.Add(_commandGrid, 0, 2);
 
             _statusLabel = CreateLabel("San sang");
@@ -992,15 +1026,19 @@ namespace AUTOCAD_COMMANDS
             _items = new List<PaletteCommandItem>();
             Resize += (_, __) => ApplyResponsiveLayout();
             ApplyResponsiveLayout();
+            SetSortMode(PaletteLayoutStore.LoadSortMode());
             ReloadData(false);
         }
 
         public void ReloadData(bool showMessage)
         {
             string currentFilter = Convert.ToString(_sourceFilter.SelectedItem) ?? "All";
+            string selectedCommand = GetSelectedCommandName();
             _items = PaletteCommandCatalog.BuildItems();
+            PaletteLayoutStore.ApplyLayout(_items);
+            PaletteLayoutStore.SaveLayout(_items);
             RefreshSourceFilter(currentFilter);
-            BindGrid();
+            BindGrid(selectedCommand);
 
             string root = DungXLispResolver.GetDisplayRoot();
             bool ready = DungXLispResolver.TryResolveAllLispFiles(out _, out _);
@@ -1038,73 +1076,88 @@ namespace AUTOCAD_COMMANDS
             {
                 _sourceLabel.Visible = false;
                 _typeLabel.Visible = false;
+                _sortLabel.Visible = false;
                 _searchLabel.Visible = false;
 
                 _filterPanel.ColumnCount = 1;
-                _filterPanel.RowCount = 3;
+                _filterPanel.RowCount = 4;
                 _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
+                _filterPanel.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
                 _filterPanel.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
                 _filterPanel.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
                 _filterPanel.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
 
                 _sourceFilter.Margin = new WF.Padding(0, 0, 0, 4);
                 _typeFilter.Margin = new WF.Padding(0, 0, 0, 4);
+                _sortModeFilter.Margin = new WF.Padding(0, 0, 0, 4);
                 _searchBox.Margin = new WF.Padding(0);
 
                 _filterPanel.Controls.Add(_sourceFilter, 0, 0);
                 _filterPanel.Controls.Add(_typeFilter, 0, 1);
-                _filterPanel.Controls.Add(_searchBox, 0, 2);
+                _filterPanel.Controls.Add(_sortModeFilter, 0, 2);
+                _filterPanel.Controls.Add(_searchBox, 0, 3);
             }
             else if (compact)
             {
                 _sourceLabel.Visible = true;
                 _typeLabel.Visible = true;
+                _sortLabel.Visible = true;
                 _searchLabel.Visible = true;
 
                 _filterPanel.ColumnCount = 2;
-                _filterPanel.RowCount = 3;
+                _filterPanel.RowCount = 4;
                 _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
                 _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
+                _filterPanel.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
                 _filterPanel.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
                 _filterPanel.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
                 _filterPanel.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
 
                 _sourceFilter.Margin = new WF.Padding(0, 0, 0, 4);
                 _typeFilter.Margin = new WF.Padding(0, 0, 0, 4);
+                _sortModeFilter.Margin = new WF.Padding(0, 0, 0, 4);
                 _searchBox.Margin = new WF.Padding(0);
 
                 _filterPanel.Controls.Add(_sourceLabel, 0, 0);
                 _filterPanel.Controls.Add(_sourceFilter, 1, 0);
                 _filterPanel.Controls.Add(_typeLabel, 0, 1);
                 _filterPanel.Controls.Add(_typeFilter, 1, 1);
-                _filterPanel.Controls.Add(_searchLabel, 0, 2);
-                _filterPanel.Controls.Add(_searchBox, 1, 2);
+                _filterPanel.Controls.Add(_sortLabel, 0, 2);
+                _filterPanel.Controls.Add(_sortModeFilter, 1, 2);
+                _filterPanel.Controls.Add(_searchLabel, 0, 3);
+                _filterPanel.Controls.Add(_searchBox, 1, 3);
             }
             else
             {
                 _sourceLabel.Visible = true;
                 _typeLabel.Visible = true;
+                _sortLabel.Visible = true;
                 _searchLabel.Visible = true;
 
-                _filterPanel.ColumnCount = 6;
+                _filterPanel.ColumnCount = 8;
                 _filterPanel.RowCount = 1;
                 _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
                 _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Absolute, 170f));
                 _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
                 _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Absolute, 170f));
                 _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
+                _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Absolute, 140f));
+                _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
                 _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
 
                 _sourceFilter.Margin = new WF.Padding(0);
                 _typeFilter.Margin = new WF.Padding(0);
+                _sortModeFilter.Margin = new WF.Padding(0);
                 _searchBox.Margin = new WF.Padding(0);
 
                 _filterPanel.Controls.Add(_sourceLabel, 0, 0);
                 _filterPanel.Controls.Add(_sourceFilter, 1, 0);
                 _filterPanel.Controls.Add(_typeLabel, 2, 0);
                 _filterPanel.Controls.Add(_typeFilter, 3, 0);
-                _filterPanel.Controls.Add(_searchLabel, 4, 0);
-                _filterPanel.Controls.Add(_searchBox, 5, 0);
+                _filterPanel.Controls.Add(_sortLabel, 4, 0);
+                _filterPanel.Controls.Add(_sortModeFilter, 5, 0);
+                _filterPanel.Controls.Add(_searchLabel, 6, 0);
+                _filterPanel.Controls.Add(_searchBox, 7, 0);
             }
 
             _buttonPanel.FlowDirection = compact
@@ -1121,6 +1174,7 @@ namespace AUTOCAD_COMMANDS
             _removeSourceButton.Text = compact ? "-Src" : "Remove Source";
             _refreshButton.Text = compact ? "Ref" : "Refresh List";
 
+            _commandGrid.Columns["Favorite"].Visible = true;
             _commandGrid.Columns["Description"].Visible = !compact;
             _commandGrid.Columns["Source"].Visible = !compact;
             _commandGrid.Columns["Command"].AutoSizeMode = compact
@@ -1134,8 +1188,9 @@ namespace AUTOCAD_COMMANDS
             _buttonPanel.ResumeLayout();
         }
 
-        private void BindGrid()
+        private void BindGrid(string preferredCommandName = null)
         {
+            preferredCommandName = preferredCommandName ?? GetSelectedCommandName();
             string search = (_searchBox.Text ?? string.Empty).Trim();
             string source = Convert.ToString(_sourceFilter.SelectedItem) ?? "All";
             string type = Convert.ToString(_typeFilter.SelectedItem) ?? "All";
@@ -1161,20 +1216,36 @@ namespace AUTOCAD_COMMANDS
                     item.SourceLabel.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0);
             }
 
+            filtered = ApplySortMode(filtered);
+
             _commandGrid.Rows.Clear();
 
             foreach (PaletteCommandItem item in filtered)
             {
                 int rowIndex =
-                    _commandGrid.Rows.Add(item.CommandName, item.Description, item.SourceLabel);
+                    _commandGrid.Rows.Add(
+                        item.IsFavorite ? "★" : "☆",
+                        item.CommandName,
+                        item.Description,
+                        item.SourceLabel);
                 _commandGrid.Rows[rowIndex].Tag = item;
             }
 
             if (_commandGrid.Rows.Count > 0)
             {
                 _commandGrid.ClearSelection();
-                _commandGrid.Rows[0].Selected = true;
-                _commandGrid.CurrentCell = _commandGrid.Rows[0].Cells[0];
+                WF.DataGridViewRow selectedRow =
+                    _commandGrid.Rows
+                        .Cast<WF.DataGridViewRow>()
+                        .FirstOrDefault(row =>
+                            string.Equals(
+                                (row.Tag as PaletteCommandItem)?.CommandName,
+                                preferredCommandName,
+                                StringComparison.OrdinalIgnoreCase))
+                    ?? _commandGrid.Rows[0];
+
+                selectedRow.Selected = true;
+                _commandGrid.CurrentCell = selectedRow.Cells["Command"];
             }
         }
 
@@ -1213,6 +1284,16 @@ namespace AUTOCAD_COMMANDS
             grid.AlternatingRowsDefaultCellStyle.SelectionBackColor = SelectionColor;
             grid.AlternatingRowsDefaultCellStyle.SelectionForeColor = ForegroundColor;
 
+            WF.DataGridViewTextBoxColumn favoriteColumn = new WF.DataGridViewTextBoxColumn
+            {
+                Name = "Favorite",
+                HeaderText = "★",
+                Width = 36,
+                ReadOnly = true,
+                SortMode = WF.DataGridViewColumnSortMode.NotSortable
+            };
+            favoriteColumn.DefaultCellStyle.Alignment = WF.DataGridViewContentAlignment.MiddleCenter;
+
             WF.DataGridViewTextBoxColumn commandColumn = new WF.DataGridViewTextBoxColumn
             {
                 Name = "Command",
@@ -1237,7 +1318,7 @@ namespace AUTOCAD_COMMANDS
                 SortMode = WF.DataGridViewColumnSortMode.NotSortable
             };
 
-            grid.Columns.AddRange(commandColumn, descriptionColumn, sourceColumn);
+            grid.Columns.AddRange(favoriteColumn, commandColumn, descriptionColumn, sourceColumn);
             return grid;
         }
 
@@ -1272,6 +1353,82 @@ namespace AUTOCAD_COMMANDS
             return button;
         }
 
+        private void SortModeFilter_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            PaletteSortMode mode = GetCurrentSortMode();
+            PaletteLayoutStore.SaveSortMode(mode);
+            BindGrid();
+            SetStatus(mode == PaletteSortMode.Custom
+                ? "Dang sap xep theo yeu thich + thu tu tuy chinh."
+                : "Dang sap xep theo ABC.");
+        }
+
+        private IEnumerable<PaletteCommandItem> ApplySortMode(IEnumerable<PaletteCommandItem> items)
+        {
+            switch (GetCurrentSortMode())
+            {
+                case PaletteSortMode.Alphabetical:
+                    return items
+                        .OrderByDescending(item => item.IsFavorite)
+                        .ThenBy(item => item.CommandName, StringComparer.OrdinalIgnoreCase)
+                        .ThenBy(item => item.SourceLabel, StringComparer.OrdinalIgnoreCase);
+                default:
+                    return items
+                        .OrderByDescending(item => item.IsFavorite)
+                        .ThenBy(item => item.ManualOrder)
+                        .ThenBy(item => item.CommandName, StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        private PaletteSortMode GetCurrentSortMode()
+        {
+            string selected = Convert.ToString(_sortModeFilter.SelectedItem) ?? "Custom";
+            return string.Equals(selected, "A-Z", StringComparison.OrdinalIgnoreCase)
+                ? PaletteSortMode.Alphabetical
+                : PaletteSortMode.Custom;
+        }
+
+        private void SetSortMode(PaletteSortMode mode)
+        {
+            string label = mode == PaletteSortMode.Alphabetical ? "A-Z" : "Custom";
+            int index = _sortModeFilter.FindStringExact(label);
+            _sortModeFilter.SelectedIndex = index >= 0 ? index : 0;
+        }
+
+        private string GetSelectedCommandName()
+        {
+            return GetSelectedItem()?.CommandName;
+        }
+
+        private void CommandGrid_CellClick(object sender, WF.DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0)
+            {
+                return;
+            }
+
+            if (!string.Equals(
+                _commandGrid.Columns[e.ColumnIndex].Name,
+                "Favorite",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            PaletteCommandItem item = _commandGrid.Rows[e.RowIndex].Tag as PaletteCommandItem;
+            if (item == null)
+            {
+                return;
+            }
+
+            item.IsFavorite = !item.IsFavorite;
+            PaletteLayoutStore.SaveLayout(_items);
+            BindGrid(item.CommandName);
+            SetStatus(item.IsFavorite
+                ? $"Da danh dau yeu thich: {item.CommandName}"
+                : $"Da bo danh dau yeu thich: {item.CommandName}");
+        }
+
         private void CommandGrid_CellDoubleClick(object sender, WF.DataGridViewCellEventArgs e)
         {
             if (e.RowIndex < 0)
@@ -1279,7 +1436,14 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
-            if (e.ColumnIndex != 1)
+            if (!string.Equals(
+                _commandGrid.Columns[e.ColumnIndex].Name,
+                "Description",
+                StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(
+                    _commandGrid.Columns[e.ColumnIndex].Name,
+                    "Favorite",
+                    StringComparison.OrdinalIgnoreCase))
             {
                 RunSelected();
             }
@@ -1289,7 +1453,11 @@ namespace AUTOCAD_COMMANDS
         {
             if (e.KeyCode == WF.Keys.Enter && _commandGrid.CurrentCell != null)
             {
-                if (_commandGrid.CurrentCell.ColumnIndex == 1 && _commandGrid.IsCurrentCellInEditMode)
+                if (string.Equals(
+                        _commandGrid.Columns[_commandGrid.CurrentCell.ColumnIndex].Name,
+                        "Description",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    _commandGrid.IsCurrentCellInEditMode)
                 {
                     return;
                 }
@@ -1302,7 +1470,11 @@ namespace AUTOCAD_COMMANDS
 
         private void CommandGrid_CellEndEdit(object sender, WF.DataGridViewCellEventArgs e)
         {
-            if (e.RowIndex < 0 || e.ColumnIndex != 1)
+            if (e.RowIndex < 0 ||
+                !string.Equals(
+                    _commandGrid.Columns[e.ColumnIndex].Name,
+                    "Description",
+                    StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
@@ -1314,10 +1486,141 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
-            string description = Convert.ToString(row.Cells[1].Value) ?? string.Empty;
+            string description = Convert.ToString(row.Cells["Description"].Value) ?? string.Empty;
             item.Description = description.Trim();
             PaletteDescriptionStore.SaveDescription(item.CommandName, item.Description);
             SetStatus($"Da luu mo ta cho {item.CommandName}");
+        }
+
+        private void CommandGrid_MouseDown(object sender, WF.MouseEventArgs e)
+        {
+            _dragStartPoint = e.Location;
+            WF.DataGridView.HitTestInfo hit = _commandGrid.HitTest(e.X, e.Y);
+            _dragRowIndex = hit.RowIndex;
+        }
+
+        private void CommandGrid_MouseMove(object sender, WF.MouseEventArgs e)
+        {
+            if (e.Button != WF.MouseButtons.Left)
+            {
+                return;
+            }
+
+            if (GetCurrentSortMode() != PaletteSortMode.Custom)
+            {
+                return;
+            }
+
+            if (_dragRowIndex < 0 || _dragRowIndex >= _commandGrid.Rows.Count)
+            {
+                return;
+            }
+
+            Size dragSize = WF.SystemInformation.DragSize;
+            Rectangle dragRect = new Rectangle(
+                _dragStartPoint.X - dragSize.Width / 2,
+                _dragStartPoint.Y - dragSize.Height / 2,
+                dragSize.Width,
+                dragSize.Height);
+
+            if (dragRect.Contains(e.Location))
+            {
+                return;
+            }
+
+            PaletteCommandItem item = _commandGrid.Rows[_dragRowIndex].Tag as PaletteCommandItem;
+            if (item == null)
+            {
+                return;
+            }
+
+            _commandGrid.DoDragDrop(item, WF.DragDropEffects.Move);
+        }
+
+        private void CommandGrid_DragOver(object sender, WF.DragEventArgs e)
+        {
+            if (GetCurrentSortMode() != PaletteSortMode.Custom ||
+                !e.Data.GetDataPresent(typeof(PaletteCommandItem)))
+            {
+                e.Effect = WF.DragDropEffects.None;
+                return;
+            }
+
+            e.Effect = WF.DragDropEffects.Move;
+        }
+
+        private void CommandGrid_DragDrop(object sender, WF.DragEventArgs e)
+        {
+            if (GetCurrentSortMode() != PaletteSortMode.Custom ||
+                !e.Data.GetDataPresent(typeof(PaletteCommandItem)))
+            {
+                return;
+            }
+
+            PaletteCommandItem draggedItem =
+                e.Data.GetData(typeof(PaletteCommandItem)) as PaletteCommandItem;
+            if (draggedItem == null)
+            {
+                return;
+            }
+
+            Point clientPoint = _commandGrid.PointToClient(new Point(e.X, e.Y));
+            WF.DataGridView.HitTestInfo hit = _commandGrid.HitTest(clientPoint.X, clientPoint.Y);
+            int targetIndex = hit.RowIndex;
+
+            List<PaletteCommandItem> visibleItems = _commandGrid.Rows
+                .Cast<WF.DataGridViewRow>()
+                .Select(row => row.Tag as PaletteCommandItem)
+                .Where(item => item != null)
+                .ToList();
+
+            int currentIndex = visibleItems.FindIndex(item =>
+                string.Equals(item.CommandName, draggedItem.CommandName, StringComparison.OrdinalIgnoreCase));
+            if (currentIndex < 0)
+            {
+                return;
+            }
+
+            if (targetIndex < 0 || targetIndex >= visibleItems.Count)
+            {
+                targetIndex = visibleItems.Count - 1;
+            }
+
+            PaletteCommandItem movingItem = visibleItems[currentIndex];
+            visibleItems.RemoveAt(currentIndex);
+            if (targetIndex > currentIndex)
+            {
+                targetIndex--;
+            }
+
+            targetIndex = Math.Max(0, Math.Min(targetIndex, visibleItems.Count));
+            visibleItems.Insert(targetIndex, movingItem);
+
+            HashSet<PaletteCommandItem> visibleSet = new HashSet<PaletteCommandItem>(visibleItems);
+            List<PaletteCommandItem> fullOrder = _items
+                .OrderBy(item => item.ManualOrder)
+                .ThenBy(item => item.CommandName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            int visibleIndex = 0;
+            for (int i = 0; i < fullOrder.Count; i++)
+            {
+                if (!visibleSet.Contains(fullOrder[i]))
+                {
+                    continue;
+                }
+
+                fullOrder[i] = visibleItems[visibleIndex++];
+            }
+
+            for (int i = 0; i < fullOrder.Count; i++)
+            {
+                fullOrder[i].ManualOrder = i;
+            }
+
+            PaletteLayoutStore.SaveLayout(_items);
+            BindGrid(draggedItem.CommandName);
+            SetStatus($"Da cap nhat thu tu: {draggedItem.CommandName}");
         }
 
         private void RunSelected()
@@ -1481,6 +1784,645 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    public class SmartStretchCommands
+    {
+        private const double ComparisonTolerance = 1e-6;
+
+        [CommandMethod("SS")]
+        public void SmartStretch()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            Editor ed = doc?.Editor;
+            Database db = doc?.Database;
+
+            if (doc == null || ed == null || db == null)
+            {
+                return;
+            }
+
+            double savedLength = SmartStretchSettingsStore.LoadLength();
+            PromptDoubleOptions lengthOptions =
+                new PromptDoubleOptions(
+                    $"\nNhập L cho smart stretch <{savedLength.ToString("0.###", CultureInfo.InvariantCulture)}>:");
+            lengthOptions.AllowNegative = false;
+            lengthOptions.AllowZero = false;
+            lengthOptions.AllowNone = true;
+            lengthOptions.DefaultValue = savedLength;
+            lengthOptions.UseDefaultValue = true;
+
+            PromptDoubleResult lengthResult = ed.GetDouble(lengthOptions);
+            if (lengthResult.Status == PromptStatus.Cancel)
+            {
+                return;
+            }
+
+            double length = lengthResult.Status == PromptStatus.None
+                ? savedLength
+                : lengthResult.Value;
+
+            if (length <= ComparisonTolerance)
+            {
+                ed.WriteMessage("\nGiá trị L phải lớn hơn 0.");
+                return;
+            }
+
+            SmartStretchSettingsStore.SaveLength(length);
+
+            SmartStretchSelectionInput selectionInput = GetSmartStretchSelectionInput(ed);
+            if (selectionInput == null)
+            {
+                return;
+            }
+
+            ShowSmartStretchSelection(ed, selectionInput.SelectedObjectIds);
+
+            PromptPointResult startResult = ed.GetPoint("\nChọn điểm đầu: ");
+            if (startResult.Status != PromptStatus.OK)
+            {
+                ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
+                return;
+            }
+
+            PromptResult directionResult = GetDirectionWithPreview(
+                ed,
+                selectionInput,
+                startResult.Value,
+                length,
+                out SmartStretchDirection direction,
+                out Point3d secondPoint);
+            if (directionResult.Status != PromptStatus.OK)
+            {
+                ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
+                return;
+            }
+            if (direction == SmartStretchDirection.None)
+            {
+                ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
+                ed.WriteMessage("\nKhông xác định được hướng stretch.");
+                return;
+            }
+
+            ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
+            ExecuteNativeStretch(ed, selectionInput, startResult.Value, secondPoint);
+
+            ed.WriteMessage(
+                $"\nSS: đã gọi STRETCH gốc theo {GetDirectionLabel(direction)} với L = {length.ToString("0.###", CultureInfo.InvariantCulture)}.");
+        }
+
+        private static SmartStretchSelectionInput GetSmartStretchSelectionInput(Editor ed)
+        {
+            ed.WriteMessage("\nWindow: chọn 2 góc của vùng crossing để stretch.");
+            PromptPointResult firstCornerResult =
+                ed.GetPoint("\nChọn góc đầu crossing window: ");
+            if (firstCornerResult.Status != PromptStatus.OK)
+            {
+                return null;
+            }
+
+            PromptCornerOptions secondCornerOptions =
+                new PromptCornerOptions(
+                    "\nChọn góc đối diện crossing window: ",
+                    firstCornerResult.Value);
+            PromptPointResult secondCornerResult = ed.GetCorner(secondCornerOptions);
+            if (secondCornerResult.Status != PromptStatus.OK)
+            {
+                return null;
+            }
+
+            PromptSelectionResult crossingResult = ed.SelectCrossingWindow(
+                firstCornerResult.Value,
+                secondCornerResult.Value);
+            if (crossingResult.Status != PromptStatus.OK || crossingResult.Value == null)
+            {
+                ed.WriteMessage("\nWindow chưa bắt được đối tượng nào.");
+                return null;
+            }
+
+            return SmartStretchSelectionInput.CreateWindow(
+                firstCornerResult.Value,
+                secondCornerResult.Value,
+                crossingResult.Value.GetObjectIds());
+        }
+
+        private static void ExecuteNativeStretch(
+            Editor ed,
+            SmartStretchSelectionInput selectionInput,
+            Point3d basePoint,
+            Point3d secondPoint)
+        {
+            ed.Command(
+                "_.STRETCH",
+                "_C",
+                selectionInput.WindowFirstPoint,
+                selectionInput.WindowSecondPoint,
+                string.Empty,
+                basePoint,
+                secondPoint);
+        }
+
+        private static PromptResult GetDirectionWithPreview(
+            Editor ed,
+            SmartStretchSelectionInput selectionInput,
+            Point3d startPoint,
+            double length,
+            out SmartStretchDirection direction,
+            out Point3d secondPoint)
+        {
+            using (SmartStretchPreviewJig jig =
+                new SmartStretchPreviewJig(ed, selectionInput, startPoint, length))
+            {
+                PromptResult result = ed.Drag(jig);
+                direction = jig.Direction;
+                secondPoint = jig.SecondPoint;
+                return result;
+            }
+        }
+
+        private static void ShowSmartStretchSelection(Editor ed, ObjectId[] objectIds)
+        {
+            if (ed == null || objectIds == null || objectIds.Length == 0)
+            {
+                return;
+            }
+
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            Database db = doc?.Database;
+            if (db == null)
+            {
+                return;
+            }
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                foreach (ObjectId objectId in objectIds)
+                {
+                    Entity entity = tr.GetObject(objectId, OpenMode.ForRead, false) as Entity;
+                    entity?.Highlight();
+                }
+
+                tr.Commit();
+            }
+
+            Application.UpdateScreen();
+        }
+
+        private static List<int> FindStretchIndicesInsideWindow(
+            Entity entity,
+            SmartStretchSelectionInput selectionInput,
+            Matrix3d ucsInverse)
+        {
+            List<Point3d> stretchPoints = GetStretchPoints(entity);
+            if (stretchPoints.Count == 0)
+            {
+                return new List<int>();
+            }
+
+            Point3d firstCornerUcs = selectionInput.WindowFirstPoint.TransformBy(ucsInverse);
+            Point3d secondCornerUcs = selectionInput.WindowSecondPoint.TransformBy(ucsInverse);
+
+            double minX = Math.Min(firstCornerUcs.X, secondCornerUcs.X) - ComparisonTolerance;
+            double maxX = Math.Max(firstCornerUcs.X, secondCornerUcs.X) + ComparisonTolerance;
+            double minY = Math.Min(firstCornerUcs.Y, secondCornerUcs.Y) - ComparisonTolerance;
+            double maxY = Math.Max(firstCornerUcs.Y, secondCornerUcs.Y) + ComparisonTolerance;
+
+            return stretchPoints
+                .Select((point, index) => new
+                {
+                    Index = index,
+                    Point = point.TransformBy(ucsInverse)
+                })
+                .Where(item =>
+                    item.Point.X >= minX &&
+                    item.Point.X <= maxX &&
+                    item.Point.Y >= minY &&
+                    item.Point.Y <= maxY)
+                .Select(item => item.Index)
+                .ToList();
+        }
+
+        private static void ClearSmartStretchSelection(ObjectId[] objectIds)
+        {
+            if (objectIds == null || objectIds.Length == 0)
+            {
+                return;
+            }
+
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            Database db = doc?.Database;
+            if (db == null)
+            {
+                return;
+            }
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                foreach (ObjectId objectId in objectIds)
+                {
+                    Entity entity = tr.GetObject(objectId, OpenMode.ForRead, false) as Entity;
+                    entity?.Unhighlight();
+                }
+
+                tr.Commit();
+            }
+
+            Application.UpdateScreen();
+        }
+
+        private static SmartStretchDirection ResolveDirection(Point3d startUcs, Point3d nextUcs)
+        {
+            double dx = nextUcs.X - startUcs.X;
+            double dy = nextUcs.Y - startUcs.Y;
+
+            if (Math.Abs(dx) < ComparisonTolerance && Math.Abs(dy) < ComparisonTolerance)
+            {
+                return SmartStretchDirection.None;
+            }
+
+            if (Math.Abs(dx) >= Math.Abs(dy))
+            {
+                return dx >= 0.0
+                    ? SmartStretchDirection.PositiveX
+                    : SmartStretchDirection.NegativeX;
+            }
+
+            return dy >= 0.0
+                ? SmartStretchDirection.PositiveY
+                : SmartStretchDirection.NegativeY;
+        }
+
+        private static Vector3d GetDisplacementVector(
+            SmartStretchDirection direction,
+            double length,
+            Matrix3d ucs)
+        {
+            Vector3d ucsVector;
+
+            switch (direction)
+            {
+                case SmartStretchDirection.PositiveX:
+                    ucsVector = new Vector3d(length, 0.0, 0.0);
+                    break;
+                case SmartStretchDirection.NegativeX:
+                    ucsVector = new Vector3d(-length, 0.0, 0.0);
+                    break;
+                case SmartStretchDirection.PositiveY:
+                    ucsVector = new Vector3d(0.0, length, 0.0);
+                    break;
+                case SmartStretchDirection.NegativeY:
+                    ucsVector = new Vector3d(0.0, -length, 0.0);
+                    break;
+                default:
+                    return new Vector3d(0.0, 0.0, 0.0);
+            }
+
+            return ucsVector.TransformBy(ucs);
+        }
+
+        private static List<SmartStretchEntityInfo> CollectStretchInfos(
+            SelectionSet selectionSet,
+            Transaction tr,
+            Matrix3d ucs)
+        {
+            List<SmartStretchEntityInfo> infos = new List<SmartStretchEntityInfo>();
+
+            foreach (SelectedObject selectedObject in selectionSet)
+            {
+                Entity entity = tr.GetObject(selectedObject.ObjectId, OpenMode.ForWrite) as Entity;
+                if (entity == null || entity.IsErased)
+                {
+                    continue;
+                }
+
+                List<Point3d> stretchPoints = GetStretchPoints(entity);
+                List<Point3d> stretchPointsUcs = stretchPoints
+                    .Select(point => point.TransformBy(ucs.Inverse()))
+                    .ToList();
+
+                if (stretchPointsUcs.Count == 0)
+                {
+                    continue;
+                }
+
+                infos.Add(new SmartStretchEntityInfo(entity, stretchPointsUcs));
+            }
+
+            return infos;
+        }
+
+        private static List<Point3d> GetStretchPoints(Entity entity)
+        {
+            try
+            {
+                Point3dCollection points = new Point3dCollection();
+                entity.GetStretchPoints(points);
+                return points.Cast<Point3d>().ToList();
+            }
+            catch
+            {
+                return new List<Point3d>();
+            }
+        }
+
+        private static Dictionary<ObjectId, List<int>> FindNearestStretchIndices(
+            IEnumerable<SmartStretchEntityInfo> infos,
+            Point3d startUcs,
+            SmartStretchDirection direction)
+        {
+            Dictionary<ObjectId, List<int>> result =
+                new Dictionary<ObjectId, List<int>>();
+
+            foreach (SmartStretchEntityInfo info in infos)
+            {
+                if (info.StretchPointsUcs.Count == 0)
+                {
+                    continue;
+                }
+
+                List<double> distances = info.StretchPointsUcs
+                    .Select(point => point.DistanceTo(startUcs))
+                    .ToList();
+
+                double minDistance = distances.Min();
+                double tolerance = Math.Max(ComparisonTolerance, minDistance * 0.1);
+
+                List<int> indices = distances
+                    .Select((distance, index) => new { distance, index })
+                    .Where(item => item.distance <= minDistance + tolerance)
+                    .Select(item => item.index)
+                    .Distinct()
+                    .OrderBy(index => index)
+                    .ToList();
+
+                if (indices.Count > 0)
+                {
+                    result[info.Entity.ObjectId] = indices;
+                }
+            }
+
+            return result;
+        }
+
+        private static bool TryStretchEntity(
+            Entity entity,
+            IEnumerable<int> pointIndices,
+            Vector3d displacement)
+        {
+            try
+            {
+                IntegerCollection indices = new IntegerCollection();
+                foreach (int index in pointIndices.Distinct().OrderBy(value => value))
+                {
+                    indices.Add(index);
+                }
+
+                if (indices.Count == 0)
+                {
+                    return false;
+                }
+
+                entity.MoveStretchPointsAt(indices, displacement);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private sealed class SmartStretchPreviewJig : DrawJig, IDisposable
+        {
+            private readonly Editor _editor;
+            private readonly SmartStretchSelectionInput _selectionInput;
+            private readonly Point3d _startPoint;
+            private readonly double _length;
+            private readonly Matrix3d _ucs;
+            private readonly Matrix3d _ucsInverse;
+            private readonly List<Entity> _previewEntities = new List<Entity>();
+            private Point3d _cursorPoint;
+            private SmartStretchDirection _direction;
+            private Point3d _secondPoint;
+
+            public SmartStretchPreviewJig(
+                Editor editor,
+                SmartStretchSelectionInput selectionInput,
+                Point3d startPoint,
+                double length)
+            {
+                _editor = editor;
+                _selectionInput = selectionInput;
+                _startPoint = startPoint;
+                _length = length;
+                _ucs = editor.CurrentUserCoordinateSystem;
+                _ucsInverse = _ucs.Inverse();
+                _cursorPoint = startPoint;
+                _direction = SmartStretchDirection.None;
+                _secondPoint = startPoint;
+            }
+
+            public SmartStretchDirection Direction => _direction;
+
+            public Point3d SecondPoint => _secondPoint;
+
+            protected override SamplerStatus Sampler(JigPrompts prompts)
+            {
+                JigPromptPointOptions pointOptions =
+                    new JigPromptPointOptions("\nChọn điểm sau để xem trước hướng stretch: ");
+                pointOptions.BasePoint = _startPoint;
+                pointOptions.UseBasePoint = true;
+
+                PromptPointResult pointResult = prompts.AcquirePoint(pointOptions);
+                if (pointResult.Status == PromptStatus.Cancel)
+                {
+                    return SamplerStatus.Cancel;
+                }
+
+                if (pointResult.Status != PromptStatus.OK)
+                {
+                    return SamplerStatus.NoChange;
+                }
+
+                if (_cursorPoint.DistanceTo(pointResult.Value) <= ComparisonTolerance)
+                {
+                    return SamplerStatus.NoChange;
+                }
+
+                _cursorPoint = pointResult.Value;
+
+                Point3d startUcs = _startPoint.TransformBy(_ucsInverse);
+                Point3d nextUcs = _cursorPoint.TransformBy(_ucsInverse);
+                SmartStretchDirection newDirection = ResolveDirection(startUcs, nextUcs);
+
+                if (newDirection != _direction)
+                {
+                    _direction = newDirection;
+                    RebuildPreviewEntities();
+                }
+
+                if (_direction != SmartStretchDirection.None)
+                {
+                    Vector3d displacement = GetDisplacementVector(_direction, _length, _ucs);
+                    _secondPoint = _startPoint + displacement;
+                }
+                else
+                {
+                    _secondPoint = _startPoint;
+                }
+
+                return SamplerStatus.OK;
+            }
+
+            protected override bool WorldDraw(WorldDraw draw)
+            {
+                foreach (Entity previewEntity in _previewEntities)
+                {
+                    previewEntity.WorldDraw(draw);
+                }
+
+                if (_direction != SmartStretchDirection.None)
+                {
+                    draw.Geometry.WorldLine(_startPoint, _secondPoint);
+                }
+
+                return true;
+            }
+
+            private void RebuildPreviewEntities()
+            {
+                DisposePreviewEntities();
+
+                if (_direction == SmartStretchDirection.None)
+                {
+                    return;
+                }
+
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc?.Database;
+                if (db == null)
+                {
+                    return;
+                }
+
+                Vector3d displacement = GetDisplacementVector(_direction, _length, _ucs);
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    foreach (ObjectId objectId in _selectionInput.SelectedObjectIds)
+                    {
+                        Entity sourceEntity =
+                            tr.GetObject(objectId, OpenMode.ForRead, false) as Entity;
+                        if (sourceEntity == null || sourceEntity.IsErased)
+                        {
+                            continue;
+                        }
+
+                        Entity previewEntity = sourceEntity.Clone() as Entity;
+                        if (previewEntity == null)
+                        {
+                            continue;
+                        }
+
+                        List<int> indices = FindStretchIndicesInsideWindow(
+                            previewEntity,
+                            _selectionInput,
+                            _ucsInverse);
+                        if (indices.Count == 0 ||
+                            !TryStretchEntity(previewEntity, indices, displacement))
+                        {
+                            previewEntity.Dispose();
+                            continue;
+                        }
+
+                        _previewEntities.Add(previewEntity);
+                    }
+
+                    tr.Commit();
+                }
+            }
+
+            private void DisposePreviewEntities()
+            {
+                foreach (Entity previewEntity in _previewEntities)
+                {
+                    previewEntity.Dispose();
+                }
+
+                _previewEntities.Clear();
+            }
+
+            public void Dispose()
+            {
+                DisposePreviewEntities();
+            }
+        }
+
+        private static string GetDirectionLabel(SmartStretchDirection direction)
+        {
+            switch (direction)
+            {
+                case SmartStretchDirection.PositiveX:
+                    return "SX+";
+                case SmartStretchDirection.NegativeX:
+                    return "SX-";
+                case SmartStretchDirection.PositiveY:
+                    return "SY+";
+                case SmartStretchDirection.NegativeY:
+                    return "SY-";
+                default:
+                    return "?";
+            }
+        }
+    }
+
+    internal enum SmartStretchDirection
+    {
+        None,
+        PositiveX,
+        NegativeX,
+        PositiveY,
+        NegativeY
+    }
+
+    internal sealed class SmartStretchSelectionInput
+    {
+        private SmartStretchSelectionInput()
+        {
+        }
+
+        public Point3d WindowFirstPoint { get; private set; }
+
+        public Point3d WindowSecondPoint { get; private set; }
+
+        public ObjectId[] SelectedObjectIds { get; private set; }
+
+        public static SmartStretchSelectionInput CreateWindow(
+            Point3d firstPoint,
+            Point3d secondPoint,
+            IEnumerable<ObjectId> selectedObjectIds)
+        {
+            return new SmartStretchSelectionInput
+            {
+                WindowFirstPoint = firstPoint,
+                WindowSecondPoint = secondPoint,
+                SelectedObjectIds = selectedObjectIds?.ToArray() ?? new ObjectId[0]
+            };
+        }
+    }
+
+    internal sealed class SmartStretchEntityInfo
+    {
+        public SmartStretchEntityInfo(
+            Entity entity,
+            List<Point3d> stretchPointsUcs)
+        {
+            Entity = entity;
+            StretchPointsUcs = stretchPointsUcs ?? new List<Point3d>();
+        }
+
+        public Entity Entity { get; }
+
+        public List<Point3d> StretchPointsUcs { get; }
+    }
+
     internal static class PaletteUiHelpers
     {
         public static string ShowTextPrompt(string title, string label)
@@ -1565,6 +2507,16 @@ namespace AUTOCAD_COMMANDS
         public PaletteSourceKind SourceKind { get; }
 
         public string SourcePath { get; }
+
+        public bool IsFavorite { get; set; }
+
+        public int ManualOrder { get; set; }
+    }
+
+    internal enum PaletteSortMode
+    {
+        Custom,
+        Alphabetical
     }
 
     internal enum PaletteSourceKind
@@ -1795,6 +2747,54 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    internal static class SmartStretchSettingsStore
+    {
+        private static readonly string LengthFilePath =
+            Path.Combine(
+                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
+                "dungx_smart_stretch_length.txt");
+
+        public static double LoadLength()
+        {
+            try
+            {
+                if (!File.Exists(LengthFilePath))
+                {
+                    return 100.0;
+                }
+
+                string text = (File.ReadAllText(LengthFilePath, Encoding.UTF8) ?? string.Empty).Trim();
+                if (double.TryParse(
+                    text,
+                    NumberStyles.Float | NumberStyles.AllowThousands,
+                    CultureInfo.InvariantCulture,
+                    out double value) &&
+                    value > 0.0)
+                {
+                    return value;
+                }
+            }
+            catch
+            {
+            }
+
+            return 100.0;
+        }
+
+        public static void SaveLength(double value)
+        {
+            if (value <= 0.0)
+            {
+                return;
+            }
+
+            File.WriteAllText(
+                LengthFilePath,
+                value.ToString("0.###", CultureInfo.InvariantCulture),
+                Encoding.UTF8);
+        }
+    }
+
     internal static class PaletteSourceStore
     {
         private static readonly string SourceFilePath =
@@ -1992,6 +2992,130 @@ namespace AUTOCAD_COMMANDS
                 .ToList();
 
             File.WriteAllLines(ManualFilePath, lines, Encoding.UTF8);
+        }
+    }
+
+    internal static class PaletteLayoutStore
+    {
+        private static readonly string LayoutFilePath =
+            Path.Combine(
+                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
+                "dungx_palette_layout.tsv");
+
+        private static readonly string SortModeFilePath =
+            Path.Combine(
+                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
+                "dungx_palette_sort.txt");
+
+        public static void ApplyLayout(List<PaletteCommandItem> items)
+        {
+            Dictionary<string, Tuple<bool, int>> saved = LoadLayout();
+            int nextOrder = saved.Count == 0 ? 0 : saved.Max(kvp => kvp.Value.Item2) + 1;
+
+            foreach (PaletteCommandItem item in items.OrderBy(
+                current => current.CommandName,
+                StringComparer.OrdinalIgnoreCase))
+            {
+                if (saved.TryGetValue(item.CommandName, out Tuple<bool, int> state))
+                {
+                    item.IsFavorite = state.Item1;
+                    item.ManualOrder = state.Item2;
+                }
+                else
+                {
+                    item.IsFavorite = false;
+                    item.ManualOrder = nextOrder++;
+                }
+            }
+
+            NormalizeManualOrder(items);
+        }
+
+        public static void SaveLayout(IEnumerable<PaletteCommandItem> items)
+        {
+            List<PaletteCommandItem> ordered = items
+                .OrderBy(item => item.ManualOrder)
+                .ThenBy(item => item.CommandName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            NormalizeManualOrder(ordered);
+
+            List<string> lines = ordered
+                .Select(item =>
+                    item.CommandName + "\t" +
+                    (item.IsFavorite ? "1" : "0") + "\t" +
+                    item.ManualOrder.ToString())
+                .ToList();
+
+            File.WriteAllLines(LayoutFilePath, lines, Encoding.UTF8);
+        }
+
+        public static PaletteSortMode LoadSortMode()
+        {
+            if (!File.Exists(SortModeFilePath))
+            {
+                return PaletteSortMode.Custom;
+            }
+
+            string mode = (File.ReadAllText(SortModeFilePath, Encoding.UTF8) ?? string.Empty).Trim();
+            return string.Equals(mode, "A-Z", StringComparison.OrdinalIgnoreCase)
+                ? PaletteSortMode.Alphabetical
+                : PaletteSortMode.Custom;
+        }
+
+        public static void SaveSortMode(PaletteSortMode mode)
+        {
+            string value = mode == PaletteSortMode.Alphabetical ? "A-Z" : "Custom";
+            File.WriteAllText(SortModeFilePath, value, Encoding.UTF8);
+        }
+
+        private static Dictionary<string, Tuple<bool, int>> LoadLayout()
+        {
+            Dictionary<string, Tuple<bool, int>> map =
+                new Dictionary<string, Tuple<bool, int>>(StringComparer.OrdinalIgnoreCase);
+
+            if (!File.Exists(LayoutFilePath))
+            {
+                return map;
+            }
+
+            foreach (string rawLine in File.ReadAllLines(LayoutFilePath, Encoding.UTF8))
+            {
+                if (string.IsNullOrWhiteSpace(rawLine))
+                {
+                    continue;
+                }
+
+                string[] parts = rawLine.Split('\t');
+                if (parts.Length < 3)
+                {
+                    continue;
+                }
+
+                string commandName = parts[0].Trim();
+                bool isFavorite = string.Equals(parts[1].Trim(), "1", StringComparison.OrdinalIgnoreCase);
+
+                if (string.IsNullOrWhiteSpace(commandName) ||
+                    !int.TryParse(parts[2].Trim(), out int manualOrder))
+                {
+                    continue;
+                }
+
+                map[commandName] = Tuple.Create(isFavorite, manualOrder);
+            }
+
+            return map;
+        }
+
+        private static void NormalizeManualOrder(IEnumerable<PaletteCommandItem> items)
+        {
+            int index = 0;
+            foreach (PaletteCommandItem item in items
+                .OrderBy(current => current.ManualOrder)
+                .ThenBy(current => current.CommandName, StringComparer.OrdinalIgnoreCase))
+            {
+                item.ManualOrder = index++;
+            }
         }
     }
 
