@@ -1871,37 +1871,74 @@ namespace AUTOCAD_COMMANDS
 
         private static SmartStretchSelectionInput GetSmartStretchSelectionInput(Editor ed)
         {
-            ed.WriteMessage("\nWindow: chọn 2 góc của vùng crossing để stretch.");
-            PromptPointResult firstCornerResult =
-                ed.GetPoint("\nChọn góc đầu crossing window: ");
-            if (firstCornerResult.Status != PromptStatus.OK)
+            ed.WriteMessage(
+                "\nWindow: quét nhiều vùng nếu cần, nhấn Space/Enter ở bước chọn góc đầu để kết thúc chọn.");
+
+            List<SmartStretchWindowSelection> windows = new List<SmartStretchWindowSelection>();
+            HashSet<ObjectId> selectedIds = new HashSet<ObjectId>();
+
+            while (true)
             {
+                PromptPointOptions firstCornerOptions =
+                    new PromptPointOptions(
+                        windows.Count == 0
+                            ? "\nChọn góc đầu crossing window: "
+                            : "\nChọn góc đầu crossing window tiếp theo hoặc Space để xong: ");
+                firstCornerOptions.AllowNone = windows.Count > 0;
+
+                PromptPointResult firstCornerResult = ed.GetPoint(firstCornerOptions);
+                if (firstCornerResult.Status == PromptStatus.None)
+                {
+                    break;
+                }
+
+                if (firstCornerResult.Status != PromptStatus.OK)
+                {
+                    return null;
+                }
+
+                PromptCornerOptions secondCornerOptions =
+                    new PromptCornerOptions(
+                        "\nChọn góc đối diện crossing window: ",
+                        firstCornerResult.Value);
+                PromptPointResult secondCornerResult = ed.GetCorner(secondCornerOptions);
+                if (secondCornerResult.Status != PromptStatus.OK)
+                {
+                    return null;
+                }
+
+                PromptSelectionResult crossingResult = ed.SelectCrossingWindow(
+                    firstCornerResult.Value,
+                    secondCornerResult.Value);
+                if (crossingResult.Status != PromptStatus.OK || crossingResult.Value == null)
+                {
+                    ed.WriteMessage("\nWindow này chưa bắt được đối tượng nào.");
+                    continue;
+                }
+
+                windows.Add(
+                    new SmartStretchWindowSelection(
+                        firstCornerResult.Value,
+                        secondCornerResult.Value));
+
+                foreach (ObjectId objectId in crossingResult.Value.GetObjectIds())
+                {
+                    selectedIds.Add(objectId);
+                }
+
+                ShowSmartStretchSelection(ed, selectedIds.ToArray());
+                ed.WriteMessage($"\nĐã gom {selectedIds.Count} đối tượng. Có thể quét thêm hoặc nhấn Space/Enter để tiếp tục.");
+            }
+
+            if (windows.Count == 0 || selectedIds.Count == 0)
+            {
+                ed.WriteMessage("\nChưa có đối tượng nào được chọn.");
                 return null;
             }
 
-            PromptCornerOptions secondCornerOptions =
-                new PromptCornerOptions(
-                    "\nChọn góc đối diện crossing window: ",
-                    firstCornerResult.Value);
-            PromptPointResult secondCornerResult = ed.GetCorner(secondCornerOptions);
-            if (secondCornerResult.Status != PromptStatus.OK)
-            {
-                return null;
-            }
-
-            PromptSelectionResult crossingResult = ed.SelectCrossingWindow(
-                firstCornerResult.Value,
-                secondCornerResult.Value);
-            if (crossingResult.Status != PromptStatus.OK || crossingResult.Value == null)
-            {
-                ed.WriteMessage("\nWindow chưa bắt được đối tượng nào.");
-                return null;
-            }
-
-            return SmartStretchSelectionInput.CreateWindow(
-                firstCornerResult.Value,
-                secondCornerResult.Value,
-                crossingResult.Value.GetObjectIds());
+            return SmartStretchSelectionInput.CreateSelection(
+                windows,
+                selectedIds);
         }
 
         private static void ExecuteNativeStretch(
@@ -1910,14 +1947,20 @@ namespace AUTOCAD_COMMANDS
             Point3d basePoint,
             Point3d secondPoint)
         {
-            ed.Command(
-                "_.STRETCH",
-                "_C",
-                selectionInput.WindowFirstPoint,
-                selectionInput.WindowSecondPoint,
-                string.Empty,
-                basePoint,
-                secondPoint);
+            List<object> args = new List<object> { "_.STRETCH" };
+
+            foreach (SmartStretchWindowSelection window in selectionInput.Windows)
+            {
+                args.Add("_C");
+                args.Add(window.FirstPoint);
+                args.Add(window.SecondPoint);
+            }
+
+            args.Add(string.Empty);
+            args.Add(basePoint);
+            args.Add(secondPoint);
+
+            ed.Command(args.ToArray());
         }
 
         private static PromptResult GetDirectionWithPreview(
@@ -1977,25 +2020,27 @@ namespace AUTOCAD_COMMANDS
                 return new List<int>();
             }
 
-            Point3d firstCornerUcs = selectionInput.WindowFirstPoint.TransformBy(ucsInverse);
-            Point3d secondCornerUcs = selectionInput.WindowSecondPoint.TransformBy(ucsInverse);
-
-            double minX = Math.Min(firstCornerUcs.X, secondCornerUcs.X) - ComparisonTolerance;
-            double maxX = Math.Max(firstCornerUcs.X, secondCornerUcs.X) + ComparisonTolerance;
-            double minY = Math.Min(firstCornerUcs.Y, secondCornerUcs.Y) - ComparisonTolerance;
-            double maxY = Math.Max(firstCornerUcs.Y, secondCornerUcs.Y) + ComparisonTolerance;
-
             return stretchPoints
                 .Select((point, index) => new
                 {
                     Index = index,
                     Point = point.TransformBy(ucsInverse)
                 })
-                .Where(item =>
-                    item.Point.X >= minX &&
-                    item.Point.X <= maxX &&
-                    item.Point.Y >= minY &&
-                    item.Point.Y <= maxY)
+                .Where(item => selectionInput.Windows.Any(window =>
+                {
+                    Point3d firstCornerUcs = window.FirstPoint.TransformBy(ucsInverse);
+                    Point3d secondCornerUcs = window.SecondPoint.TransformBy(ucsInverse);
+
+                    double minX = Math.Min(firstCornerUcs.X, secondCornerUcs.X) - ComparisonTolerance;
+                    double maxX = Math.Max(firstCornerUcs.X, secondCornerUcs.X) + ComparisonTolerance;
+                    double minY = Math.Min(firstCornerUcs.Y, secondCornerUcs.Y) - ComparisonTolerance;
+                    double maxY = Math.Max(firstCornerUcs.Y, secondCornerUcs.Y) + ComparisonTolerance;
+
+                    return item.Point.X >= minX &&
+                           item.Point.X <= maxX &&
+                           item.Point.Y >= minY &&
+                           item.Point.Y <= maxY;
+                }))
                 .Select(item => item.Index)
                 .ToList();
         }
@@ -2388,24 +2433,33 @@ namespace AUTOCAD_COMMANDS
         {
         }
 
-        public Point3d WindowFirstPoint { get; private set; }
-
-        public Point3d WindowSecondPoint { get; private set; }
+        public List<SmartStretchWindowSelection> Windows { get; private set; }
 
         public ObjectId[] SelectedObjectIds { get; private set; }
 
-        public static SmartStretchSelectionInput CreateWindow(
-            Point3d firstPoint,
-            Point3d secondPoint,
+        public static SmartStretchSelectionInput CreateSelection(
+            IEnumerable<SmartStretchWindowSelection> windows,
             IEnumerable<ObjectId> selectedObjectIds)
         {
             return new SmartStretchSelectionInput
             {
-                WindowFirstPoint = firstPoint,
-                WindowSecondPoint = secondPoint,
+                Windows = windows?.ToList() ?? new List<SmartStretchWindowSelection>(),
                 SelectedObjectIds = selectedObjectIds?.ToArray() ?? new ObjectId[0]
             };
         }
+    }
+
+    internal sealed class SmartStretchWindowSelection
+    {
+        public SmartStretchWindowSelection(Point3d firstPoint, Point3d secondPoint)
+        {
+            FirstPoint = firstPoint;
+            SecondPoint = secondPoint;
+        }
+
+        public Point3d FirstPoint { get; }
+
+        public Point3d SecondPoint { get; }
     }
 
     internal sealed class SmartStretchEntityInfo
