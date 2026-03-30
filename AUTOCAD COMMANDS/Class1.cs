@@ -152,13 +152,41 @@ namespace AUTOCAD_COMMANDS
                 // =============================
                 // 1. CHỌN ĐỐI TƯỢNG GỐC
                 // =============================
-                PromptSelectionOptions baseOpt = new PromptSelectionOptions();
-                baseOpt.MessageForAdding = "\nChọn Polyline hoặc nhóm đối tượng gốc:";
-                PromptSelectionResult baseRes = ed.GetSelection(baseOpt);
-                if (baseRes.Status != PromptStatus.OK) return;
+                PromptKeywordOptions baseModeOptions =
+                    new PromptKeywordOptions("\nChọn mốc gốc [Object/Point] <Object>: ");
+                baseModeOptions.AllowNone = true;
+                baseModeOptions.Keywords.Add("Object");
+                baseModeOptions.Keywords.Add("Point");
+                baseModeOptions.Keywords.Default = "Object";
 
-                Extents3d baseExt = GetSelectionExtents(baseRes.Value, tr);
-                Point3d baseCenter = GetCenter(baseExt);
+                PromptResult baseModeResult = ed.GetKeywords(baseModeOptions);
+                if (baseModeResult.Status == PromptStatus.Cancel) return;
+
+                string baseMode = baseModeResult.Status == PromptStatus.None
+                    ? "Object"
+                    : (baseModeResult.StringResult ?? "Object");
+
+                Extents3d baseExt;
+                Point3d baseCenter;
+
+                if (string.Equals(baseMode, "Point", StringComparison.OrdinalIgnoreCase))
+                {
+                    PromptPointResult basePointResult = ed.GetPoint("\nChọn điểm gốc: ");
+                    if (basePointResult.Status != PromptStatus.OK) return;
+
+                    baseCenter = basePointResult.Value;
+                    baseExt = new Extents3d(baseCenter, baseCenter);
+                }
+                else
+                {
+                    PromptSelectionOptions baseOpt = new PromptSelectionOptions();
+                    baseOpt.MessageForAdding = "\nChọn Polyline hoặc nhóm đối tượng gốc:";
+                    PromptSelectionResult baseRes = ed.GetSelection(baseOpt);
+                    if (baseRes.Status != PromptStatus.OK) return;
+
+                    baseExt = GetSelectionExtents(baseRes.Value, tr);
+                    baseCenter = GetCenter(baseExt);
+                }
 
                 // =============================
                 // 2. CHỌN ĐƯỜNG BAO (LINE / PLINE)
@@ -711,6 +739,11 @@ namespace AUTOCAD_COMMANDS
         public static void Initialize()
         {
             EnsurePalette();
+            if (PaletteStartupStore.LoadAutoShow())
+            {
+                ReloadPaletteData(false);
+                _paletteSet.Visible = true;
+            }
         }
 
         public static void ShowPalette()
@@ -718,6 +751,16 @@ namespace AUTOCAD_COMMANDS
             EnsurePalette();
             ReloadPaletteData(false);
             _paletteSet.Visible = true;
+        }
+
+        public static bool IsAutoShowEnabled()
+        {
+            return PaletteStartupStore.LoadAutoShow();
+        }
+
+        public static void SetAutoShowEnabled(bool enabled)
+        {
+            PaletteStartupStore.SaveAutoShow(enabled);
         }
 
         public static void ReloadPaletteData(bool showMessage)
@@ -856,6 +899,7 @@ namespace AUTOCAD_COMMANDS
         private readonly WF.Button _addManualButton;
         private readonly WF.Button _removeSourceButton;
         private readonly WF.Label _statusLabel;
+        private readonly WF.CheckBox _autoShowCheckBox;
         private List<PaletteCommandItem> _items;
         private Point _dragStartPoint;
         private int _dragRowIndex = -1;
@@ -997,6 +1041,7 @@ namespace AUTOCAD_COMMANDS
             _addManualButton = CreateButton("Add Manual", (_, __) => AddManualAlias());
             _removeSourceButton = CreateButton("Remove Source", (_, __) => RemoveSelectedSource());
             _refreshButton = CreateButton("Refresh List", (_, __) => ReloadData(true));
+            _autoShowCheckBox = CreateCheckBox("Auto Open", AutoShowCheckBox_CheckedChanged);
 
             _buttonPanel.Controls.Add(_runButton);
             _buttonPanel.Controls.Add(_reloadButton);
@@ -1005,6 +1050,7 @@ namespace AUTOCAD_COMMANDS
             _buttonPanel.Controls.Add(_addManualButton);
             _buttonPanel.Controls.Add(_removeSourceButton);
             _buttonPanel.Controls.Add(_refreshButton);
+            _buttonPanel.Controls.Add(_autoShowCheckBox);
 
             _commandGrid = CreateGrid();
             _commandGrid.AllowDrop = true;
@@ -1027,6 +1073,7 @@ namespace AUTOCAD_COMMANDS
             Resize += (_, __) => ApplyResponsiveLayout();
             ApplyResponsiveLayout();
             SetSortMode(PaletteLayoutStore.LoadSortMode());
+            _autoShowCheckBox.Checked = DungXPaletteHost.IsAutoShowEnabled();
             ReloadData(false);
         }
 
@@ -1351,6 +1398,29 @@ namespace AUTOCAD_COMMANDS
             button.FlatAppearance.MouseOverBackColor = AccentColor;
             button.Click += onClick;
             return button;
+        }
+
+        private static WF.CheckBox CreateCheckBox(string text, EventHandler onCheckedChanged)
+        {
+            WF.CheckBox checkBox = new WF.CheckBox
+            {
+                Text = text,
+                AutoSize = true,
+                Margin = new WF.Padding(4, 7, 0, 0),
+                BackColor = BackgroundColor,
+                ForeColor = ForegroundColor
+            };
+            checkBox.CheckedChanged += onCheckedChanged;
+            return checkBox;
+        }
+
+        private void AutoShowCheckBox_CheckedChanged(object sender, EventArgs e)
+        {
+            bool enabled = _autoShowCheckBox.Checked;
+            DungXPaletteHost.SetAutoShowEnabled(enabled);
+            SetStatus(enabled
+                ? "Da bat tu dong mo DXPALETTE khi khoi dong AutoCAD."
+                : "Da tat tu dong mo DXPALETTE khi khoi dong AutoCAD.");
         }
 
         private void SortModeFilter_SelectedIndexChanged(object sender, EventArgs e)
@@ -2846,6 +2916,39 @@ namespace AUTOCAD_COMMANDS
                 LengthFilePath,
                 value.ToString("0.###", CultureInfo.InvariantCulture),
                 Encoding.UTF8);
+        }
+    }
+
+    internal static class PaletteStartupStore
+    {
+        private static readonly string AutoShowFilePath =
+            Path.Combine(
+                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
+                "dungx_palette_autoshow.txt");
+
+        public static bool LoadAutoShow()
+        {
+            try
+            {
+                if (!File.Exists(AutoShowFilePath))
+                {
+                    return false;
+                }
+
+                string text = (File.ReadAllText(AutoShowFilePath, Encoding.UTF8) ?? string.Empty).Trim();
+                return string.Equals(text, "1", StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(text, "true", StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(text, "yes", StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static void SaveAutoShow(bool enabled)
+        {
+            File.WriteAllText(AutoShowFilePath, enabled ? "1" : "0", Encoding.UTF8);
         }
     }
 
