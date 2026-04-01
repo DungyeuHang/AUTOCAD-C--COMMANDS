@@ -1942,7 +1942,7 @@ namespace AUTOCAD_COMMANDS
         private static SmartStretchSelectionInput GetSmartStretchSelectionInput(Editor ed)
         {
             ed.WriteMessage(
-                "\nWindow: quét nhiều vùng nếu cần, nhấn Space/Enter ở bước chọn góc đầu để kết thúc chọn.");
+                "\nWindow: quet nhieu vung neu can, nhan Space/Enter o buoc chon goc dau de ket thuc chon.");
 
             List<SmartStretchWindowSelection> windows = new List<SmartStretchWindowSelection>();
             HashSet<ObjectId> selectedIds = new HashSet<ObjectId>();
@@ -1964,6 +1964,7 @@ namespace AUTOCAD_COMMANDS
 
                 if (firstCornerResult.Status != PromptStatus.OK)
                 {
+                    ClearSmartStretchSelection(selectedIds.ToArray());
                     return null;
                 }
 
@@ -1974,6 +1975,7 @@ namespace AUTOCAD_COMMANDS
                 PromptPointResult secondCornerResult = ed.GetCorner(secondCornerOptions);
                 if (secondCornerResult.Status != PromptStatus.OK)
                 {
+                    ClearSmartStretchSelection(selectedIds.ToArray());
                     return null;
                 }
 
@@ -2017,20 +2019,78 @@ namespace AUTOCAD_COMMANDS
             Point3d basePoint,
             Point3d secondPoint)
         {
-            List<object> args = new List<object> { "_.STRETCH" };
+            ViewTableRecord originalView = null;
 
-            foreach (SmartStretchWindowSelection window in selectionInput.Windows)
+            try
             {
-                args.Add("_C");
-                args.Add(window.FirstPoint);
-                args.Add(window.SecondPoint);
+                originalView = ed.GetCurrentView();
+                Extents3d stretchBounds =
+                    GetStretchOperationBounds(selectionInput, basePoint, secondPoint);
+                ZoomToStretchBounds(ed, stretchBounds);
+
+                List<object> args = new List<object> { "_.STRETCH" };
+
+                foreach (SmartStretchWindowSelection window in selectionInput.Windows)
+                {
+                    args.Add("_C");
+                    args.Add(window.FirstPoint);
+                    args.Add(window.SecondPoint);
+                }
+
+                args.Add(string.Empty);
+                args.Add(basePoint);
+                args.Add(secondPoint);
+
+                ed.Command(args.ToArray());
+            }
+            finally
+            {
+                if (originalView != null)
+                {
+                    ed.SetCurrentView(originalView);
+                    originalView.Dispose();
+                }
+            }
+        }
+
+        private static Extents3d GetStretchOperationBounds(
+            SmartStretchSelectionInput selectionInput,
+            Point3d basePoint,
+            Point3d secondPoint)
+        {
+            List<Point3d> points = new List<Point3d> { basePoint, secondPoint };
+
+            if (selectionInput?.Windows != null)
+            {
+                foreach (SmartStretchWindowSelection window in selectionInput.Windows)
+                {
+                    points.Add(window.FirstPoint);
+                    points.Add(window.SecondPoint);
+                }
             }
 
-            args.Add(string.Empty);
-            args.Add(basePoint);
-            args.Add(secondPoint);
+            double minX = points.Min(point => point.X);
+            double minY = points.Min(point => point.Y);
+            double minZ = points.Min(point => point.Z);
+            double maxX = points.Max(point => point.X);
+            double maxY = points.Max(point => point.Y);
+            double maxZ = points.Max(point => point.Z);
 
-            ed.Command(args.ToArray());
+            double width = Math.Max(maxX - minX, 1.0);
+            double height = Math.Max(maxY - minY, 1.0);
+            double paddingX = Math.Max(width * 0.15, 10.0);
+            double paddingY = Math.Max(height * 0.15, 10.0);
+
+            return new Extents3d(
+                new Point3d(minX - paddingX, minY - paddingY, minZ),
+                new Point3d(maxX + paddingX, maxY + paddingY, maxZ));
+        }
+
+        private static void ZoomToStretchBounds(Editor ed, Extents3d bounds)
+        {
+            Point3d minPoint = bounds.MinPoint;
+            Point3d maxPoint = bounds.MaxPoint;
+            ed.Command("_.ZOOM", "_W", minPoint, maxPoint);
         }
 
         private static PromptResult GetDirectionWithPreview(
