@@ -140,6 +140,8 @@ namespace AUTOCAD_COMMANDS
     // START OF SAA
     public class AutoDimCommand
     {
+        private const double AutoDimTolerance = 1e-6;
+
         [CommandMethod("DAA_Dim_auto")]
         public void AutoDim()
         {
@@ -200,57 +202,56 @@ namespace AUTOCAD_COMMANDS
                 Entity rightEntity = null;
                 Entity topEntity = null;
                 Entity bottomEntity = null;
+                double leftDistance = double.MaxValue;
+                double rightDistance = double.MaxValue;
+                double topDistance = double.MaxValue;
+                double bottomDistance = double.MaxValue;
 
                 foreach (SelectedObject sel in boundRes.Value)
                 {
                     Entity ent = tr.GetObject(sel.ObjectId, OpenMode.ForRead) as Entity;
                     if (ent == null) continue;
 
-                    Extents3d ext = ent.GeometricExtents;
-                    Point3d center = GetCenter(ext);
-
-                    double dx = center.X - baseCenter.X;
-                    double dy = center.Y - baseCenter.Y;
-
-                    // Ưu tiên trục lệch nhiều hơn
-                    if (Math.Abs(dx) > Math.Abs(dy))
+                    Extents3d ext;
+                    try
                     {
-                        // ===== TRÁI / PHẢI =====
-                        if (dx < 0)
-                        {
-                            // TRÁI
-                            if (leftEntity == null ||
-                                center.X < GetCenter(leftEntity.GeometricExtents).X)
-                            { leftEntity = ent; }
-                        }
-                        else
-                        {
-                            // PHẢI
-                            if (rightEntity == null ||
-                                center.X > GetCenter(rightEntity.GeometricExtents).X)
-                            {
-                                rightEntity = ent;
-                            }
-                        }
+                        ext = ent.GeometricExtents;
+                    }
+                    catch
+                    {
+                        continue;
                     }
 
-
-
-                    else
+                    double currentLeftDistance = baseCenter.X - ext.MaxPoint.X;
+                    if (currentLeftDistance >= -AutoDimTolerance &&
+                        currentLeftDistance < leftDistance)
                     {
-                        // TRÊN / DƯỚI
-                        if (dy > 0)
-                        {
-                            if (topEntity == null ||
-                                center.Y > GetCenter(topEntity.GeometricExtents).Y)
-                                topEntity = ent;
-                        }
-                        else
-                        {
-                            if (bottomEntity == null ||
-                                center.Y < GetCenter(bottomEntity.GeometricExtents).Y)
-                                bottomEntity = ent;
-                        }
+                        leftDistance = Math.Max(0.0, currentLeftDistance);
+                        leftEntity = ent;
+                    }
+
+                    double currentRightDistance = ext.MinPoint.X - baseCenter.X;
+                    if (currentRightDistance >= -AutoDimTolerance &&
+                        currentRightDistance < rightDistance)
+                    {
+                        rightDistance = Math.Max(0.0, currentRightDistance);
+                        rightEntity = ent;
+                    }
+
+                    double currentTopDistance = ext.MinPoint.Y - baseCenter.Y;
+                    if (currentTopDistance >= -AutoDimTolerance &&
+                        currentTopDistance < topDistance)
+                    {
+                        topDistance = Math.Max(0.0, currentTopDistance);
+                        topEntity = ent;
+                    }
+
+                    double currentBottomDistance = baseCenter.Y - ext.MaxPoint.Y;
+                    if (currentBottomDistance >= -AutoDimTolerance &&
+                        currentBottomDistance < bottomDistance)
+                    {
+                        bottomDistance = Math.Max(0.0, currentBottomDistance);
+                        bottomEntity = ent;
                     }
                 }
 
