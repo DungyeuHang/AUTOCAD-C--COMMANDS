@@ -1947,60 +1947,74 @@ namespace AUTOCAD_COMMANDS
 
             List<SmartStretchWindowSelection> windows = new List<SmartStretchWindowSelection>();
             HashSet<ObjectId> selectedIds = new HashSet<ObjectId>();
+            object previousSelectionOffscreen = null;
 
-            while (true)
+            try
             {
-                PromptPointOptions firstCornerOptions =
-                    new PromptPointOptions(
-                        windows.Count == 0
-                            ? "\nChọn góc đầu crossing window: "
-                            : "\nChọn góc đầu crossing window tiếp theo hoặc Space để xong: ");
-                firstCornerOptions.AllowNone = windows.Count > 0;
+                previousSelectionOffscreen = Application.GetSystemVariable("SELECTIONOFFSCREEN");
+                Application.SetSystemVariable("SELECTIONOFFSCREEN", 2);
 
-                PromptPointResult firstCornerResult = ed.GetPoint(firstCornerOptions);
-                if (firstCornerResult.Status == PromptStatus.None)
+                while (true)
                 {
-                    break;
-                }
+                    PromptPointOptions firstCornerOptions =
+                        new PromptPointOptions(
+                            windows.Count == 0
+                                ? "\nChọn góc đầu crossing window: "
+                                : "\nChọn góc đầu crossing window tiếp theo hoặc Space để xong: ");
+                    firstCornerOptions.AllowNone = windows.Count > 0;
 
-                if (firstCornerResult.Status != PromptStatus.OK)
-                {
-                    ClearSmartStretchSelection(selectedIds.ToArray());
-                    return null;
-                }
+                    PromptPointResult firstCornerResult = ed.GetPoint(firstCornerOptions);
+                    if (firstCornerResult.Status == PromptStatus.None)
+                    {
+                        break;
+                    }
 
-                PromptCornerOptions secondCornerOptions =
-                    new PromptCornerOptions(
-                        "\nChọn góc đối diện crossing window: ",
-                        firstCornerResult.Value);
-                PromptPointResult secondCornerResult = ed.GetCorner(secondCornerOptions);
-                if (secondCornerResult.Status != PromptStatus.OK)
-                {
-                    ClearSmartStretchSelection(selectedIds.ToArray());
-                    return null;
-                }
+                    if (firstCornerResult.Status != PromptStatus.OK)
+                    {
+                        ClearSmartStretchSelection(selectedIds.ToArray());
+                        return null;
+                    }
 
-                PromptSelectionResult crossingResult = ed.SelectCrossingWindow(
-                    firstCornerResult.Value,
-                    secondCornerResult.Value);
-                if (crossingResult.Status != PromptStatus.OK || crossingResult.Value == null)
-                {
-                    ed.WriteMessage("\nWindow này chưa bắt được đối tượng nào.");
-                    continue;
-                }
+                    PromptCornerOptions secondCornerOptions =
+                        new PromptCornerOptions(
+                            "\nChọn góc đối diện crossing window: ",
+                            firstCornerResult.Value);
+                    PromptPointResult secondCornerResult = ed.GetCorner(secondCornerOptions);
+                    if (secondCornerResult.Status != PromptStatus.OK)
+                    {
+                        ClearSmartStretchSelection(selectedIds.ToArray());
+                        return null;
+                    }
 
-                windows.Add(
-                    new SmartStretchWindowSelection(
+                    PromptSelectionResult crossingResult = ed.SelectCrossingWindow(
                         firstCornerResult.Value,
-                        secondCornerResult.Value));
+                        secondCornerResult.Value);
+                    if (crossingResult.Status != PromptStatus.OK || crossingResult.Value == null)
+                    {
+                        ed.WriteMessage("\nWindow này chưa bắt được đối tượng nào.");
+                        continue;
+                    }
 
-                foreach (ObjectId objectId in crossingResult.Value.GetObjectIds())
-                {
-                    selectedIds.Add(objectId);
+                    windows.Add(
+                        new SmartStretchWindowSelection(
+                            firstCornerResult.Value,
+                            secondCornerResult.Value));
+
+                    foreach (ObjectId objectId in crossingResult.Value.GetObjectIds())
+                    {
+                        selectedIds.Add(objectId);
+                    }
+
+                    ShowSmartStretchSelection(ed, selectedIds.ToArray());
+                    ed.WriteMessage($"\nĐã gom {selectedIds.Count} đối tượng. Có thể quét thêm hoặc nhấn Space/Enter để tiếp tục.");
                 }
-
-                ShowSmartStretchSelection(ed, selectedIds.ToArray());
-                ed.WriteMessage($"\nĐã gom {selectedIds.Count} đối tượng. Có thể quét thêm hoặc nhấn Space/Enter để tiếp tục.");
+            }
+            finally
+            {
+                if (previousSelectionOffscreen != null)
+                {
+                    Application.SetSystemVariable("SELECTIONOFFSCREEN", previousSelectionOffscreen);
+                }
             }
 
             if (windows.Count == 0 || selectedIds.Count == 0)
