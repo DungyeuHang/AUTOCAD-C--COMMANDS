@@ -958,70 +958,67 @@ namespace AUTOCAD_COMMANDS
                         $"\nCCC_SMART_COPY_TO_CENTER: dùng {sourceIds.Length} đối tượng PickFirst đã chọn sẵn.");
                 }
 
-                PromptPointResult seedPointResult =
-                    ed.GetPoint("\nChọn điểm nằm trong vùng đích: ");
-                if (seedPointResult.Status != PromptStatus.OK)
-                {
-                    return;
-                }
-
+                Point3d sourceCenter;
                 using (Transaction tr = db.TransactionManager.StartTransaction())
                 {
-                    Extents3d sourceExtents = GetSelectionExtents(sourceIds, tr);
-                    Point3d sourceCenter = GetCenter(sourceExtents);
-
-                    DBObjectCollection boundaries = ed.TraceBoundary(seedPointResult.Value, false);
-                    if (boundaries == null || boundaries.Count == 0)
+                    try
                     {
-                        ed.WriteMessage("\nCCC_SMART_COPY_TO_CENTER: không tìm được vùng bao quanh điểm đã chọn.");
+                        Extents3d sourceExtents = GetSelectionExtents(sourceIds, tr);
+                        sourceCenter = GetCenter(sourceExtents);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        ed.WriteMessage("\nCCC_SMART_COPY_TO_CENTER: không lấy được tâm hợp lệ từ selection nguồn.");
+                        return;
+                    }
+                }
+
+                int copiedZoneCount = 0;
+                int totalCopiedEntities = 0;
+
+                while (true)
+                {
+                    PromptPointOptions seedPointOptions =
+                        new PromptPointOptions(
+                            copiedZoneCount == 0
+                                ? "\nChọn điểm nằm trong vùng đích: "
+                                : "\nChọn điểm nằm trong vùng đích tiếp theo hoặc Enter để kết thúc: ");
+                    seedPointOptions.AllowNone = copiedZoneCount > 0;
+
+                    PromptPointResult seedPointResult = ed.GetPoint(seedPointOptions);
+                    if (seedPointResult.Status == PromptStatus.None)
+                    {
+                        break;
+                    }
+
+                    if (seedPointResult.Status != PromptStatus.OK)
+                    {
                         return;
                     }
 
-                    using (boundaries)
+                    int copiedCount = CopySourceToBoundaryCenter(
+                        db,
+                        ed,
+                        sourceIds,
+                        sourceCenter,
+                        seedPointResult.Value);
+
+                    if (copiedCount <= 0)
                     {
-                        Curve boundaryCurve = FindBestBoundaryCurve(boundaries, seedPointResult.Value);
-                        if (boundaryCurve == null)
-                        {
-                            ed.WriteMessage("\nCCC_SMART_COPY_TO_CENTER: không xác định được đường bao kín hợp lệ.");
-                            return;
-                        }
-
-                        using (boundaryCurve)
-                        {
-                            Point3d targetCenter = GetBoundaryCenter(boundaryCurve);
-                            Vector3d displacement = targetCenter - sourceCenter;
-
-                            ObjectId currentSpaceId = db.CurrentSpaceId;
-                            ObjectIdCollection sourceIdCollection =
-                                new ObjectIdCollection(sourceIds);
-                            IdMapping idMapping = new IdMapping();
-                            db.DeepCloneObjects(sourceIdCollection, currentSpaceId, idMapping, false);
-
-                            int copiedCount = 0;
-                            foreach (IdPair pair in idMapping)
-                            {
-                                if (!pair.IsCloned || pair.Value.IsNull)
-                                {
-                                    continue;
-                                }
-
-                                Entity clonedEntity =
-                                    tr.GetObject(pair.Value, OpenMode.ForWrite, false) as Entity;
-                                if (clonedEntity == null)
-                                {
-                                    continue;
-                                }
-
-                                clonedEntity.TransformBy(Matrix3d.Displacement(displacement));
-                                copiedCount++;
-                            }
-
-                            tr.Commit();
-
-                            ed.WriteMessage(
-                                $"\nCCC_SMART_COPY_TO_CENTER: đã copy {copiedCount} đối tượng từ tâm nguồn tới tâm vùng đích.");
-                        }
+                        continue;
                     }
+
+                    copiedZoneCount++;
+                    totalCopiedEntities += copiedCount;
+
+                    ed.WriteMessage(
+                        $"\nCCC_SMART_COPY_TO_CENTER: đã copy {copiedCount} đối tượng vào vùng thứ {copiedZoneCount}.");
+                }
+
+                if (copiedZoneCount > 1)
+                {
+                    ed.WriteMessage(
+                        $"\nCCC_SMART_COPY_TO_CENTER: hoàn tất {copiedZoneCount} vùng, tổng cộng {totalCopiedEntities} đối tượng đã được copy.");
                 }
             }
             finally
@@ -1029,6 +1026,67 @@ namespace AUTOCAD_COMMANDS
                 if (previousSelectionOffscreen != null)
                 {
                     Application.SetSystemVariable("SELECTIONOFFSCREEN", previousSelectionOffscreen);
+                }
+            }
+        }
+
+        private static int CopySourceToBoundaryCenter(
+            Database db,
+            Editor ed,
+            ObjectId[] sourceIds,
+            Point3d sourceCenter,
+            Point3d seedPoint)
+        {
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                DBObjectCollection boundaries = ed.TraceBoundary(seedPoint, false);
+                if (boundaries == null || boundaries.Count == 0)
+                {
+                    ed.WriteMessage("\nCCC_SMART_COPY_TO_CENTER: không tìm được vùng bao quanh điểm đã chọn.");
+                    return 0;
+                }
+
+                using (boundaries)
+                {
+                    Curve boundaryCurve = FindBestBoundaryCurve(boundaries, seedPoint);
+                    if (boundaryCurve == null)
+                    {
+                        ed.WriteMessage("\nCCC_SMART_COPY_TO_CENTER: không xác định được đường bao kín hợp lệ.");
+                        return 0;
+                    }
+
+                    using (boundaryCurve)
+                    {
+                        Point3d targetCenter = GetBoundaryCenter(boundaryCurve);
+                        Vector3d displacement = targetCenter - sourceCenter;
+
+                        ObjectId currentSpaceId = db.CurrentSpaceId;
+                        ObjectIdCollection sourceIdCollection = new ObjectIdCollection(sourceIds);
+                        IdMapping idMapping = new IdMapping();
+                        db.DeepCloneObjects(sourceIdCollection, currentSpaceId, idMapping, false);
+
+                        int copiedCount = 0;
+                        foreach (IdPair pair in idMapping)
+                        {
+                            if (!pair.IsCloned || pair.Value.IsNull)
+                            {
+                                continue;
+                            }
+
+                            Entity clonedEntity =
+                                tr.GetObject(pair.Value, OpenMode.ForWrite, false) as Entity;
+                            if (clonedEntity == null)
+                            {
+                                continue;
+                            }
+
+                            clonedEntity.TransformBy(Matrix3d.Displacement(displacement));
+                            copiedCount++;
+                        }
+
+                        tr.Commit();
+                        return copiedCount;
+                    }
                 }
             }
         }
@@ -1130,6 +1188,17 @@ namespace AUTOCAD_COMMANDS
 
         private static Point3d GetBoundaryCenter(Curve curve)
         {
+            try
+            {
+                // Với bài toán đặt block/đối tượng vào giữa ô, tâm extents của đường bao
+                // thường khớp trực quan hơn centroid hình học khi vùng có hốc/rỗng.
+                Extents3d boundaryExtents = curve.GeometricExtents;
+                return GetCenter(boundaryExtents);
+            }
+            catch
+            {
+            }
+
             DBObjectCollection curveCollection = new DBObjectCollection();
             curveCollection.Add(curve.Clone() as DBObject);
 
@@ -1164,8 +1233,8 @@ namespace AUTOCAD_COMMANDS
                 }
             }
 
-            Extents3d extents = curve.GeometricExtents;
-            return GetCenter(extents);
+            Extents3d fallbackExtents = curve.GeometricExtents;
+            return GetCenter(fallbackExtents);
         }
 
         private static Extents3d GetSelectionExtents(IEnumerable<ObjectId> objectIds, Transaction tr)
