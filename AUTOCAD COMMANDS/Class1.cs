@@ -709,7 +709,7 @@ namespace AUTOCAD_COMMANDS
         private const double TargetTextHeight = 5.0;
         private const double TextHeightTolerance = 1e-6;
 
-        [CommandMethod("TT_TEXT_CHANGE_5")]
+        [CommandMethod("TT_TEXT_CHANGE_5", CommandFlags.UsePickSet)]
         public void SyncTextHeightFiveContent()
         {
             Document doc = Application.DocumentManager.MdiActiveDocument;
@@ -720,6 +720,13 @@ namespace AUTOCAD_COMMANDS
 
             Editor ed = doc.Editor;
             Database db = doc.Database;
+            ObjectId[] targetIds = TryConsumePickFirst(ed);
+
+            if (targetIds != null && targetIds.Length > 0)
+            {
+                ed.WriteMessage(
+                    $"\nTT_TEXT_CHANGE_5: dùng {targetIds.Length} đối tượng PickFirst đã chọn sẵn.");
+            }
 
             PromptEntityOptions sourceOptions =
                 new PromptEntityOptions("\nChọn text gốc: ");
@@ -745,10 +752,15 @@ namespace AUTOCAD_COMMANDS
                     MessageForAdding = "\nQuét chọn vùng có text cần đổi nội dung: "
                 };
 
-                PromptSelectionResult selectionResult = ed.GetSelection(selectionOptions);
-                if (selectionResult.Status != PromptStatus.OK || selectionResult.Value == null)
+                if (targetIds == null || targetIds.Length == 0)
                 {
-                    return;
+                    PromptSelectionResult selectionResult = ed.GetSelection(selectionOptions);
+                    if (selectionResult.Status != PromptStatus.OK || selectionResult.Value == null)
+                    {
+                        return;
+                    }
+
+                    targetIds = selectionResult.Value.GetObjectIds();
                 }
 
                 using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -770,15 +782,15 @@ namespace AUTOCAD_COMMANDS
                     int replacedCount = 0;
                     int matchedCount = 0;
 
-                    foreach (SelectedObject selectedObject in selectionResult.Value)
+                    foreach (ObjectId objectId in targetIds)
                     {
-                        if (selectedObject == null || selectedObject.ObjectId.IsNull)
+                        if (objectId.IsNull)
                         {
                             continue;
                         }
 
                         Entity entity =
-                            tr.GetObject(selectedObject.ObjectId, OpenMode.ForRead) as Entity;
+                            tr.GetObject(objectId, OpenMode.ForRead) as Entity;
                         if (entity == null)
                         {
                             continue;
@@ -792,7 +804,7 @@ namespace AUTOCAD_COMMANDS
 
                         matchedCount++;
 
-                        if (selectedObject.ObjectId == sourceResult.ObjectId)
+                        if (objectId == sourceResult.ObjectId)
                         {
                             continue;
                         }
@@ -831,6 +843,24 @@ namespace AUTOCAD_COMMANDS
                     Application.SetSystemVariable("SELECTIONOFFSCREEN", previousSelectionOffscreen);
                 }
             }
+        }
+
+        private static ObjectId[] TryConsumePickFirst(Editor ed)
+        {
+            PromptSelectionResult impliedResult = ed.SelectImplied();
+            if (impliedResult.Status != PromptStatus.OK || impliedResult.Value == null)
+            {
+                return null;
+            }
+
+            ObjectId[] objectIds = impliedResult.Value.GetObjectIds();
+            if (objectIds == null || objectIds.Length == 0)
+            {
+                return null;
+            }
+
+            ed.SetImpliedSelection(Array.Empty<ObjectId>());
+            return objectIds;
         }
 
         private static TextSyncPayload GetTextSyncPayload(Entity entity)
@@ -882,6 +912,320 @@ namespace AUTOCAD_COMMANDS
             public string MTextContents { get; }
 
             public bool IsValid => !string.IsNullOrEmpty(PlainText) || MTextContents != null;
+        }
+    }
+
+    public class SmartCopyToCenterCommands
+    {
+        [CommandMethod("CCC_SMART_COPY_TO_CENTER", CommandFlags.UsePickSet)]
+        public void SmartCopyToCenter()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            if (doc == null)
+            {
+                return;
+            }
+
+            Editor ed = doc.Editor;
+            Database db = doc.Database;
+            ObjectId[] sourceIds = TryConsumePickFirst(ed);
+
+            object previousSelectionOffscreen = null;
+
+            try
+            {
+                previousSelectionOffscreen = Application.GetSystemVariable("SELECTIONOFFSCREEN");
+                Application.SetSystemVariable("SELECTIONOFFSCREEN", 2);
+
+                PromptSelectionOptions sourceSelectionOptions = new PromptSelectionOptions
+                {
+                    MessageForAdding = "\nQuét chọn đối tượng nguồn: "
+                };
+
+                if (sourceIds == null || sourceIds.Length == 0)
+                {
+                    PromptSelectionResult sourceSelectionResult = ed.GetSelection(sourceSelectionOptions);
+                    if (sourceSelectionResult.Status != PromptStatus.OK || sourceSelectionResult.Value == null)
+                    {
+                        return;
+                    }
+
+                    sourceIds = sourceSelectionResult.Value.GetObjectIds();
+                }
+                else
+                {
+                    ed.WriteMessage(
+                        $"\nCCC_SMART_COPY_TO_CENTER: dùng {sourceIds.Length} đối tượng PickFirst đã chọn sẵn.");
+                }
+
+                PromptPointResult seedPointResult =
+                    ed.GetPoint("\nChọn điểm nằm trong vùng đích: ");
+                if (seedPointResult.Status != PromptStatus.OK)
+                {
+                    return;
+                }
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    Extents3d sourceExtents = GetSelectionExtents(sourceIds, tr);
+                    Point3d sourceCenter = GetCenter(sourceExtents);
+
+                    DBObjectCollection boundaries = ed.TraceBoundary(seedPointResult.Value, false);
+                    if (boundaries == null || boundaries.Count == 0)
+                    {
+                        ed.WriteMessage("\nCCC_SMART_COPY_TO_CENTER: không tìm được vùng bao quanh điểm đã chọn.");
+                        return;
+                    }
+
+                    using (boundaries)
+                    {
+                        Curve boundaryCurve = FindBestBoundaryCurve(boundaries, seedPointResult.Value);
+                        if (boundaryCurve == null)
+                        {
+                            ed.WriteMessage("\nCCC_SMART_COPY_TO_CENTER: không xác định được đường bao kín hợp lệ.");
+                            return;
+                        }
+
+                        using (boundaryCurve)
+                        {
+                            Point3d targetCenter = GetBoundaryCenter(boundaryCurve);
+                            Vector3d displacement = targetCenter - sourceCenter;
+
+                            ObjectId currentSpaceId = db.CurrentSpaceId;
+                            ObjectIdCollection sourceIdCollection =
+                                new ObjectIdCollection(sourceIds);
+                            IdMapping idMapping = new IdMapping();
+                            db.DeepCloneObjects(sourceIdCollection, currentSpaceId, idMapping, false);
+
+                            int copiedCount = 0;
+                            foreach (IdPair pair in idMapping)
+                            {
+                                if (!pair.IsCloned || pair.Value.IsNull)
+                                {
+                                    continue;
+                                }
+
+                                Entity clonedEntity =
+                                    tr.GetObject(pair.Value, OpenMode.ForWrite, false) as Entity;
+                                if (clonedEntity == null)
+                                {
+                                    continue;
+                                }
+
+                                clonedEntity.TransformBy(Matrix3d.Displacement(displacement));
+                                copiedCount++;
+                            }
+
+                            tr.Commit();
+
+                            ed.WriteMessage(
+                                $"\nCCC_SMART_COPY_TO_CENTER: đã copy {copiedCount} đối tượng từ tâm nguồn tới tâm vùng đích.");
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                if (previousSelectionOffscreen != null)
+                {
+                    Application.SetSystemVariable("SELECTIONOFFSCREEN", previousSelectionOffscreen);
+                }
+            }
+        }
+
+        private static ObjectId[] TryConsumePickFirst(Editor ed)
+        {
+            PromptSelectionResult impliedResult = ed.SelectImplied();
+            if (impliedResult.Status != PromptStatus.OK || impliedResult.Value == null)
+            {
+                return null;
+            }
+
+            ObjectId[] objectIds = impliedResult.Value.GetObjectIds();
+            if (objectIds == null || objectIds.Length == 0)
+            {
+                return null;
+            }
+
+            ed.SetImpliedSelection(Array.Empty<ObjectId>());
+            return objectIds;
+        }
+
+        private static Curve FindBestBoundaryCurve(DBObjectCollection boundaries, Point3d seedPoint)
+        {
+            Curve bestCurve = null;
+            double bestArea = double.MaxValue;
+
+            foreach (DBObject dbObject in boundaries)
+            {
+                if (!(dbObject is Curve curve) || !curve.Closed)
+                {
+                    dbObject.Dispose();
+                    continue;
+                }
+
+                double? area = TryGetBoundaryArea(curve);
+                if (!area.HasValue || area.Value <= 1e-6)
+                {
+                    curve.Dispose();
+                    continue;
+                }
+
+                if (area.Value < bestArea)
+                {
+                    bestCurve?.Dispose();
+                    bestCurve = curve;
+                    bestArea = area.Value;
+                }
+                else
+                {
+                    curve.Dispose();
+                }
+            }
+
+            return bestCurve;
+        }
+
+        private static double? TryGetBoundaryArea(Curve curve)
+        {
+            DBObjectCollection curveCollection = new DBObjectCollection();
+            curveCollection.Add(curve.Clone() as DBObject);
+
+            DBObjectCollection regions = null;
+            try
+            {
+                regions = Autodesk.AutoCAD.DatabaseServices.Region.CreateFromCurves(curveCollection);
+                if (regions == null || regions.Count == 0)
+                {
+                    return null;
+                }
+
+                using (regions)
+                {
+                    Autodesk.AutoCAD.DatabaseServices.Region region =
+                        regions[0] as Autodesk.AutoCAD.DatabaseServices.Region;
+                    if (region == null)
+                    {
+                        return null;
+                    }
+
+                    using (region)
+                    {
+                        return region.Area;
+                    }
+                }
+            }
+            catch
+            {
+                return null;
+            }
+            finally
+            {
+                foreach (DBObject dbObject in curveCollection)
+                {
+                    dbObject?.Dispose();
+                }
+            }
+        }
+
+        private static Point3d GetBoundaryCenter(Curve curve)
+        {
+            DBObjectCollection curveCollection = new DBObjectCollection();
+            curveCollection.Add(curve.Clone() as DBObject);
+
+            try
+            {
+                using (DBObjectCollection regions =
+                    Autodesk.AutoCAD.DatabaseServices.Region.CreateFromCurves(curveCollection))
+                {
+                    if (regions != null &&
+                        regions.Count > 0 &&
+                        regions[0] is Autodesk.AutoCAD.DatabaseServices.Region region)
+                    {
+                        using (region)
+                        {
+                            Point3d origin = Point3d.Origin;
+                            Vector3d xAxis = Vector3d.XAxis;
+                            Vector3d yAxis = Vector3d.YAxis;
+                            RegionAreaProperties props = region.AreaProperties(ref origin, ref xAxis, ref yAxis);
+                            return new Point3d(props.Centroid.X, props.Centroid.Y, 0.0);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+            finally
+            {
+                foreach (DBObject dbObject in curveCollection)
+                {
+                    dbObject?.Dispose();
+                }
+            }
+
+            Extents3d extents = curve.GeometricExtents;
+            return GetCenter(extents);
+        }
+
+        private static Extents3d GetSelectionExtents(IEnumerable<ObjectId> objectIds, Transaction tr)
+        {
+            Extents3d? extents = null;
+
+            foreach (ObjectId objectId in objectIds)
+            {
+                if (objectId.IsNull)
+                {
+                    continue;
+                }
+
+                Entity entity = tr.GetObject(objectId, OpenMode.ForRead) as Entity;
+                if (entity == null)
+                {
+                    continue;
+                }
+
+                Extents3d currentExtents;
+                try
+                {
+                    currentExtents = entity.GeometricExtents;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (extents == null)
+                {
+                    extents = currentExtents;
+                    continue;
+                }
+
+                extents = new Extents3d(
+                    new Point3d(
+                        Math.Min(extents.Value.MinPoint.X, currentExtents.MinPoint.X),
+                        Math.Min(extents.Value.MinPoint.Y, currentExtents.MinPoint.Y),
+                        Math.Min(extents.Value.MinPoint.Z, currentExtents.MinPoint.Z)),
+                    new Point3d(
+                        Math.Max(extents.Value.MaxPoint.X, currentExtents.MaxPoint.X),
+                        Math.Max(extents.Value.MaxPoint.Y, currentExtents.MaxPoint.Y),
+                        Math.Max(extents.Value.MaxPoint.Z, currentExtents.MaxPoint.Z)));
+            }
+
+            if (extents == null)
+            {
+                throw new InvalidOperationException("Selection has no valid extents.");
+            }
+
+            return extents.Value;
+        }
+
+        private static Point3d GetCenter(Extents3d extents)
+        {
+            return new Point3d(
+                (extents.MinPoint.X + extents.MaxPoint.X) * 0.5,
+                (extents.MinPoint.Y + extents.MaxPoint.Y) * 0.5,
+                (extents.MinPoint.Z + extents.MaxPoint.Z) * 0.5);
         }
     }
 
