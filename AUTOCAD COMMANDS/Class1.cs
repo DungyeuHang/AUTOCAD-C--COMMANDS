@@ -704,6 +704,187 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    public class TextSyncCommands
+    {
+        private const double TargetTextHeight = 5.0;
+        private const double TextHeightTolerance = 1e-6;
+
+        [CommandMethod("TT_TEXT_CHANGE_5")]
+        public void SyncTextHeightFiveContent()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            if (doc == null)
+            {
+                return;
+            }
+
+            Editor ed = doc.Editor;
+            Database db = doc.Database;
+
+            PromptEntityOptions sourceOptions =
+                new PromptEntityOptions("\nChọn text gốc: ");
+            sourceOptions.SetRejectMessage("\nChỉ hỗ trợ DBText hoặc MText.");
+            sourceOptions.AddAllowedClass(typeof(DBText), true);
+            sourceOptions.AddAllowedClass(typeof(MText), true);
+
+            PromptEntityResult sourceResult = ed.GetEntity(sourceOptions);
+            if (sourceResult.Status != PromptStatus.OK)
+            {
+                return;
+            }
+
+            object previousSelectionOffscreen = null;
+
+            try
+            {
+                previousSelectionOffscreen = Application.GetSystemVariable("SELECTIONOFFSCREEN");
+                Application.SetSystemVariable("SELECTIONOFFSCREEN", 2);
+
+                PromptSelectionOptions selectionOptions = new PromptSelectionOptions
+                {
+                    MessageForAdding = "\nQuét chọn vùng có text cần đổi nội dung: "
+                };
+
+                PromptSelectionResult selectionResult = ed.GetSelection(selectionOptions);
+                if (selectionResult.Status != PromptStatus.OK || selectionResult.Value == null)
+                {
+                    return;
+                }
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    Entity sourceEntity =
+                        tr.GetObject(sourceResult.ObjectId, OpenMode.ForRead) as Entity;
+                    if (sourceEntity == null)
+                    {
+                        return;
+                    }
+
+                    TextSyncPayload payload = GetTextSyncPayload(sourceEntity);
+                    if (!payload.IsValid)
+                    {
+                        ed.WriteMessage("\nKhông đọc được nội dung text gốc.");
+                        return;
+                    }
+
+                    int replacedCount = 0;
+                    int matchedCount = 0;
+
+                    foreach (SelectedObject selectedObject in selectionResult.Value)
+                    {
+                        if (selectedObject == null || selectedObject.ObjectId.IsNull)
+                        {
+                            continue;
+                        }
+
+                        Entity entity =
+                            tr.GetObject(selectedObject.ObjectId, OpenMode.ForRead) as Entity;
+                        if (entity == null)
+                        {
+                            continue;
+                        }
+
+                        if (!TryGetTextHeight(entity, out double textHeight) ||
+                            Math.Abs(textHeight - TargetTextHeight) > TextHeightTolerance)
+                        {
+                            continue;
+                        }
+
+                        matchedCount++;
+
+                        if (selectedObject.ObjectId == sourceResult.ObjectId)
+                        {
+                            continue;
+                        }
+
+                        entity.UpgradeOpen();
+
+                        if (entity is DBText dbText)
+                        {
+                            if (!string.Equals(dbText.TextString, payload.PlainText, StringComparison.Ordinal))
+                            {
+                                dbText.TextString = payload.PlainText;
+                                replacedCount++;
+                            }
+                        }
+                        else if (entity is MText mText)
+                        {
+                            string desiredContent = payload.MTextContents ?? payload.PlainText;
+                            if (!string.Equals(mText.Contents, desiredContent, StringComparison.Ordinal))
+                            {
+                                mText.Contents = desiredContent;
+                                replacedCount++;
+                            }
+                        }
+                    }
+
+                    tr.Commit();
+
+                    ed.WriteMessage(
+                        $"\nTT_TEXT_CHANGE_5: đã đổi nội dung {replacedCount} text (lọc được {matchedCount} text có height = {TargetTextHeight.ToString("0.###", CultureInfo.InvariantCulture)}).");
+                }
+            }
+            finally
+            {
+                if (previousSelectionOffscreen != null)
+                {
+                    Application.SetSystemVariable("SELECTIONOFFSCREEN", previousSelectionOffscreen);
+                }
+            }
+        }
+
+        private static TextSyncPayload GetTextSyncPayload(Entity entity)
+        {
+            if (entity is DBText dbText)
+            {
+                return new TextSyncPayload(dbText.TextString, dbText.TextString);
+            }
+
+            if (entity is MText mText)
+            {
+                return new TextSyncPayload(mText.Text, mText.Contents);
+            }
+
+            return TextSyncPayload.Invalid;
+        }
+
+        private static bool TryGetTextHeight(Entity entity, out double textHeight)
+        {
+            if (entity is DBText dbText)
+            {
+                textHeight = dbText.Height;
+                return true;
+            }
+
+            if (entity is MText mText)
+            {
+                textHeight = mText.TextHeight;
+                return true;
+            }
+
+            textHeight = 0.0;
+            return false;
+        }
+
+        private readonly struct TextSyncPayload
+        {
+            public static readonly TextSyncPayload Invalid =
+                new TextSyncPayload(string.Empty, null);
+
+            public TextSyncPayload(string plainText, string mTextContents)
+            {
+                PlainText = plainText ?? string.Empty;
+                MTextContents = mTextContents;
+            }
+
+            public string PlainText { get; }
+
+            public string MTextContents { get; }
+
+            public bool IsValid => !string.IsNullOrEmpty(PlainText) || MTextContents != null;
+        }
+    }
+
     public class DungXPaletteEntry : IExtensionApplication
     {
         [CommandMethod("DXPALETTE")]
