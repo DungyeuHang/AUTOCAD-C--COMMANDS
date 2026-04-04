@@ -438,7 +438,6 @@ namespace AUTOCAD_COMMANDS
         private const double DirectionTolerance = 1e-6;
         private const double SearchDistance = 1000000.0;
 
-        [CommandMethod("SDX")]
         public void SmartDimX()
         {
             Document doc = Application.DocumentManager.MdiActiveDocument;
@@ -506,7 +505,6 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
-        [CommandMethod("SDY")]
         public void SmartDimY()
         {
             Document doc = Application.DocumentManager.MdiActiveDocument;
@@ -1215,7 +1213,7 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
-        [CommandMethod("BBB_BLOCK_TO_CENTER", CommandFlags.UsePickSet)]
+        [CommandMethod("BBB_BLOCK_TO_CENTER")]
         public void BlockToCenter()
         {
             Document doc = Application.DocumentManager.MdiActiveDocument;
@@ -1226,7 +1224,11 @@ namespace AUTOCAD_COMMANDS
 
             Editor ed = doc.Editor;
             Database db = doc.Database;
-            ObjectId sourceBlockId = TryConsumePickFirstSingleBlock(ed, db);
+            ObjectId blockDefinitionId = PromptForBlockDefinition(db);
+            if (blockDefinitionId.IsNull)
+            {
+                return;
+            }
 
             object previousSelectionOffscreen = null;
 
@@ -1235,42 +1237,27 @@ namespace AUTOCAD_COMMANDS
                 previousSelectionOffscreen = Application.GetSystemVariable("SELECTIONOFFSCREEN");
                 Application.SetSystemVariable("SELECTIONOFFSCREEN", 2);
 
-                if (sourceBlockId.IsNull)
-                {
-                    PromptEntityOptions blockOptions =
-                        new PromptEntityOptions("\nChọn block nguồn: ");
-                    blockOptions.SetRejectMessage("\nChỉ hỗ trợ BlockReference.");
-                    blockOptions.AddAllowedClass(typeof(BlockReference), true);
-
-                    PromptEntityResult blockResult = ed.GetEntity(blockOptions);
-                    if (blockResult.Status != PromptStatus.OK)
-                    {
-                        return;
-                    }
-
-                    sourceBlockId = blockResult.ObjectId;
-                }
-                else
-                {
-                    ed.WriteMessage("\nBBB_BLOCK_TO_CENTER: dùng block PickFirst đã chọn sẵn.");
-                }
-
-                Point3d sourceCenter;
+                Point3d blockCenterInDefinition;
+                Point3d blockOriginInDefinition;
                 using (Transaction tr = db.TransactionManager.StartTransaction())
                 {
                     try
                     {
-                        Extents3d sourceExtents = GetSelectionExtents(new[] { sourceBlockId }, tr);
-                        sourceCenter = GetCenter(sourceExtents);
+                        GetBlockDefinitionPlacementData(
+                            blockDefinitionId,
+                            tr,
+                            out blockCenterInDefinition,
+                            out blockOriginInDefinition);
                     }
                     catch (InvalidOperationException)
                     {
-                        ed.WriteMessage("\nBBB_BLOCK_TO_CENTER: không lấy được tâm hợp lệ từ block nguồn.");
+                        ed.WriteMessage("\nBBB_BLOCK_TO_CENTER: không lấy được dữ liệu hợp lệ từ block đã chọn.");
                         return;
                     }
                 }
 
                 int copiedZoneCount = 0;
+                int insertedBlockCount = 0;
                 while (true)
                 {
                     PromptPointOptions seedPointOptions =
@@ -1291,21 +1278,29 @@ namespace AUTOCAD_COMMANDS
                         return;
                     }
 
-                    int copiedCount = CopySourceToBoundaryCenter(
+                    int insertedCount = InsertBlockDefinitionToBoundaryCenter(
                         db,
                         ed,
-                        new[] { sourceBlockId },
-                        sourceCenter,
+                        blockDefinitionId,
+                        blockCenterInDefinition,
+                        blockOriginInDefinition,
                         seedPointResult.Value);
 
-                    if (copiedCount <= 0)
+                    if (insertedCount <= 0)
                     {
                         continue;
                     }
 
                     copiedZoneCount++;
+                    insertedBlockCount += insertedCount;
                     ed.WriteMessage(
-                        $"\nBBB_BLOCK_TO_CENTER: đã copy block vào vùng thứ {copiedZoneCount}.");
+                        $"\nBBB_BLOCK_TO_CENTER: đã chèn block vào vùng thứ {copiedZoneCount}.");
+                }
+
+                if (copiedZoneCount > 1)
+                {
+                    ed.WriteMessage(
+                        $"\nBBB_BLOCK_TO_CENTER: hoàn tất {copiedZoneCount} vùng, tổng cộng {insertedBlockCount} block đã được chèn.");
                 }
             }
             finally
@@ -1313,6 +1308,59 @@ namespace AUTOCAD_COMMANDS
                 if (previousSelectionOffscreen != null)
                 {
                     Application.SetSystemVariable("SELECTIONOFFSCREEN", previousSelectionOffscreen);
+                }
+            }
+        }
+
+        private static int InsertBlockDefinitionToBoundaryCenter(
+            Database db,
+            Editor ed,
+            ObjectId blockDefinitionId,
+            Point3d blockCenterInDefinition,
+            Point3d blockOriginInDefinition,
+            Point3d seedPoint)
+        {
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                DBObjectCollection boundaries = ed.TraceBoundary(seedPoint, false);
+                if (boundaries == null || boundaries.Count == 0)
+                {
+                    ed.WriteMessage("\nBBB_BLOCK_TO_CENTER: không tìm được vùng bao quanh điểm đã chọn.");
+                    return 0;
+                }
+
+                using (boundaries)
+                {
+                    Curve boundaryCurve = FindBestBoundaryCurve(boundaries, seedPoint);
+                    if (boundaryCurve == null)
+                    {
+                        ed.WriteMessage("\nBBB_BLOCK_TO_CENTER: không xác định được đường bao kín hợp lệ.");
+                        return 0;
+                    }
+
+                    using (boundaryCurve)
+                    {
+                        Point3d targetCenter = GetBoundaryCenter(boundaryCurve);
+                        Vector3d centerOffset = blockCenterInDefinition - blockOriginInDefinition;
+                        Point3d insertionPoint = targetCenter - centerOffset;
+
+                        BlockTableRecord currentSpace =
+                            tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
+                        if (currentSpace == null)
+                        {
+                            return 0;
+                        }
+
+                        BlockReference blockReference =
+                            new BlockReference(insertionPoint, blockDefinitionId);
+                        currentSpace.AppendEntity(blockReference);
+                        tr.AddNewlyCreatedDBObject(blockReference, true);
+
+                        AppendBlockAttributes(blockReference, tr);
+
+                        tr.Commit();
+                        return 1;
+                    }
                 }
             }
         }
@@ -1420,22 +1468,6 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
-        private static ObjectId TryConsumePickFirstSingleBlock(Editor ed, Database db)
-        {
-            ObjectId[] objectIds = TryConsumePickFirst(ed);
-            if (objectIds == null || objectIds.Length != 1)
-            {
-                return ObjectId.Null;
-            }
-
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                return tr.GetObject(objectIds[0], OpenMode.ForRead) is BlockReference
-                    ? objectIds[0]
-                    : ObjectId.Null;
-            }
-        }
-
         private static Curve FindBestBoundaryCurve(DBObjectCollection boundaries, Point3d seedPoint)
         {
             Curve bestCurve = null;
@@ -1469,6 +1501,164 @@ namespace AUTOCAD_COMMANDS
             }
 
             return bestCurve;
+        }
+
+        private static ObjectId PromptForBlockDefinition(Database db)
+        {
+            List<BlockDefinitionChoice> blocks = LoadInsertableBlocks(db);
+            if (blocks.Count == 0)
+            {
+                WF.MessageBox.Show(
+                    "Khong tim thay block nao co the chen trong ban ve hien tai.",
+                    "BBB_BLOCK_TO_CENTER",
+                    WF.MessageBoxButtons.OK,
+                    WF.MessageBoxIcon.Information);
+                return ObjectId.Null;
+            }
+
+            using (BlockDefinitionPickerForm form = new BlockDefinitionPickerForm(blocks))
+            {
+                return Application.ShowModalDialog(form) == WF.DialogResult.OK
+                    ? form.SelectedBlockId
+                    : ObjectId.Null;
+            }
+        }
+
+        private static List<BlockDefinitionChoice> LoadInsertableBlocks(Database db)
+        {
+            List<BlockDefinitionChoice> result = new List<BlockDefinitionChoice>();
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                BlockTable blockTable =
+                    tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                if (blockTable == null)
+                {
+                    return result;
+                }
+
+                foreach (ObjectId blockId in blockTable)
+                {
+                    BlockTableRecord record =
+                        tr.GetObject(blockId, OpenMode.ForRead) as BlockTableRecord;
+                    if (record == null)
+                    {
+                        continue;
+                    }
+
+                    if (record.IsLayout ||
+                        record.IsAnonymous ||
+                        record.IsDependent ||
+                        record.IsFromExternalReference ||
+                        record.IsFromOverlayReference ||
+                        string.IsNullOrWhiteSpace(record.Name))
+                    {
+                        continue;
+                    }
+
+                    result.Add(new BlockDefinitionChoice(blockId, record.Name));
+                }
+            }
+
+            return result
+                .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private static void GetBlockDefinitionPlacementData(
+            ObjectId blockDefinitionId,
+            Transaction tr,
+            out Point3d blockCenterInDefinition,
+            out Point3d blockOriginInDefinition)
+        {
+            BlockTableRecord record =
+                tr.GetObject(blockDefinitionId, OpenMode.ForRead) as BlockTableRecord;
+            if (record == null)
+            {
+                throw new InvalidOperationException("Invalid block definition.");
+            }
+
+            blockOriginInDefinition = record.Origin;
+            Extents3d? extents = null;
+
+            foreach (ObjectId entityId in record)
+            {
+                Entity entity = tr.GetObject(entityId, OpenMode.ForRead) as Entity;
+                if (entity == null || entity.IsErased)
+                {
+                    continue;
+                }
+
+                if (entity is AttributeDefinition attributeDefinition && attributeDefinition.Invisible)
+                {
+                    continue;
+                }
+
+                Extents3d currentExtents;
+                try
+                {
+                    currentExtents = entity.GeometricExtents;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (extents == null)
+                {
+                    extents = currentExtents;
+                    continue;
+                }
+
+                extents = new Extents3d(
+                    new Point3d(
+                        Math.Min(extents.Value.MinPoint.X, currentExtents.MinPoint.X),
+                        Math.Min(extents.Value.MinPoint.Y, currentExtents.MinPoint.Y),
+                        Math.Min(extents.Value.MinPoint.Z, currentExtents.MinPoint.Z)),
+                    new Point3d(
+                        Math.Max(extents.Value.MaxPoint.X, currentExtents.MaxPoint.X),
+                        Math.Max(extents.Value.MaxPoint.Y, currentExtents.MaxPoint.Y),
+                        Math.Max(extents.Value.MaxPoint.Z, currentExtents.MaxPoint.Z)));
+            }
+
+            blockCenterInDefinition = extents.HasValue
+                ? GetCenter(extents.Value)
+                : blockOriginInDefinition;
+        }
+
+        private static void AppendBlockAttributes(BlockReference blockReference, Transaction tr)
+        {
+            BlockTableRecord definition =
+                tr.GetObject(blockReference.BlockTableRecord, OpenMode.ForRead) as BlockTableRecord;
+            if (definition == null || !definition.HasAttributeDefinitions)
+            {
+                return;
+            }
+
+            foreach (ObjectId entityId in definition)
+            {
+                AttributeDefinition attributeDefinition =
+                    tr.GetObject(entityId, OpenMode.ForRead) as AttributeDefinition;
+                if (attributeDefinition == null || attributeDefinition.Constant)
+                {
+                    continue;
+                }
+
+                AttributeReference attributeReference = new AttributeReference();
+                attributeReference.SetAttributeFromBlock(
+                    attributeDefinition,
+                    blockReference.BlockTransform);
+                attributeReference.Position =
+                    attributeDefinition.Position.TransformBy(blockReference.BlockTransform);
+
+                if (attributeReference.IsMTextAttribute)
+                {
+                    attributeReference.UpdateMTextAttribute();
+                }
+
+                blockReference.AttributeCollection.AppendAttribute(attributeReference);
+                tr.AddNewlyCreatedDBObject(attributeReference, true);
+            }
         }
 
         private static double? TryGetBoundaryArea(Curve curve)
@@ -1625,6 +1815,180 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    internal sealed class BlockDefinitionChoice
+    {
+        public BlockDefinitionChoice(ObjectId id, string name)
+        {
+            Id = id;
+            Name = name ?? string.Empty;
+        }
+
+        public ObjectId Id { get; }
+
+        public string Name { get; }
+
+        public override string ToString()
+        {
+            return Name;
+        }
+    }
+
+    internal sealed class BlockDefinitionPickerForm : WF.Form
+    {
+        private readonly List<BlockDefinitionChoice> _allBlocks;
+        private readonly WF.TextBox _searchBox;
+        private readonly WF.ListBox _listBox;
+        private readonly WF.Label _countLabel;
+        private readonly WF.Button _okButton;
+
+        public BlockDefinitionPickerForm(IEnumerable<BlockDefinitionChoice> blocks)
+        {
+            _allBlocks = blocks?
+                .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList()
+                ?? new List<BlockDefinitionChoice>();
+
+            Text = "Chon Block Nguon";
+            StartPosition = WF.FormStartPosition.CenterParent;
+            MinimumSize = new Size(420, 520);
+            Size = new Size(460, 580);
+            FormBorderStyle = WF.FormBorderStyle.SizableToolWindow;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            Font = new System.Drawing.Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+
+            WF.TableLayoutPanel layout = new WF.TableLayoutPanel
+            {
+                Dock = WF.DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 4,
+                Padding = new WF.Padding(10)
+            };
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.Percent, 100f));
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            Controls.Add(layout);
+
+            WF.Label searchLabel = new WF.Label
+            {
+                Text = "Tim block:",
+                Dock = WF.DockStyle.Fill,
+                AutoSize = true,
+                Margin = new WF.Padding(0, 0, 0, 6)
+            };
+            layout.Controls.Add(searchLabel, 0, 0);
+
+            _searchBox = new WF.TextBox
+            {
+                Dock = WF.DockStyle.Top,
+                Margin = new WF.Padding(0, 0, 0, 8)
+            };
+            _searchBox.TextChanged += (_, __) => ApplyFilter();
+            layout.Controls.Add(_searchBox, 0, 1);
+
+            _listBox = new WF.ListBox
+            {
+                Dock = WF.DockStyle.Fill,
+                IntegralHeight = false
+            };
+            _listBox.SelectedIndexChanged += (_, __) => UpdateSelectionState();
+            _listBox.DoubleClick += (_, __) => ConfirmSelection();
+            layout.Controls.Add(_listBox, 0, 2);
+
+            WF.FlowLayoutPanel footer = new WF.FlowLayoutPanel
+            {
+                Dock = WF.DockStyle.Fill,
+                FlowDirection = WF.FlowDirection.RightToLeft,
+                AutoSize = true,
+                WrapContents = false,
+                Margin = new WF.Padding(0, 8, 0, 0)
+            };
+            layout.Controls.Add(footer, 0, 3);
+
+            _okButton = new WF.Button
+            {
+                Text = "OK",
+                AutoSize = true,
+                Enabled = false
+            };
+            _okButton.Click += (_, __) => ConfirmSelection();
+            footer.Controls.Add(_okButton);
+
+            WF.Button cancelButton = new WF.Button
+            {
+                Text = "Cancel",
+                AutoSize = true,
+                DialogResult = WF.DialogResult.Cancel
+            };
+            footer.Controls.Add(cancelButton);
+
+            _countLabel = new WF.Label
+            {
+                AutoSize = true,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new WF.Padding(0, 8, 12, 0)
+            };
+            footer.Controls.Add(_countLabel);
+
+            AcceptButton = _okButton;
+            CancelButton = cancelButton;
+
+            ApplyFilter();
+        }
+
+        public ObjectId SelectedBlockId =>
+            _listBox.SelectedItem is BlockDefinitionChoice choice
+                ? choice.Id
+                : ObjectId.Null;
+
+        private void ApplyFilter()
+        {
+            string keyword = (_searchBox.Text ?? string.Empty).Trim();
+            IEnumerable<BlockDefinitionChoice> filtered = _allBlocks;
+
+            if (!string.IsNullOrWhiteSpace(keyword))
+            {
+                filtered = filtered.Where(item =>
+                    item.Name.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0);
+            }
+
+            List<BlockDefinitionChoice> items = filtered.ToList();
+            _listBox.BeginUpdate();
+            _listBox.Items.Clear();
+            foreach (BlockDefinitionChoice item in items)
+            {
+                _listBox.Items.Add(item);
+            }
+            _listBox.EndUpdate();
+
+            if (_listBox.Items.Count > 0)
+            {
+                _listBox.SelectedIndex = 0;
+            }
+
+            _countLabel.Text = $"{items.Count} block";
+            UpdateSelectionState();
+        }
+
+        private void UpdateSelectionState()
+        {
+            _okButton.Enabled = _listBox.SelectedItem is BlockDefinitionChoice;
+        }
+
+        private void ConfirmSelection()
+        {
+            if (!(_listBox.SelectedItem is BlockDefinitionChoice))
+            {
+                return;
+            }
+
+            DialogResult = WF.DialogResult.OK;
+            Close();
+        }
+    }
+
     public class DungXPaletteEntry : IExtensionApplication
     {
         [CommandMethod("DXPALETTE")]
@@ -1673,7 +2037,7 @@ namespace AUTOCAD_COMMANDS
     {
         private const string TabId = "DUNGX_RIBBON_TAB";
         private static readonly string[] DimensionCommands =
-            { "DAA_Dim_auto", "SDX", "SDY", "CDD2_CHIADIM" };
+            { "DAA_Dim_auto", "SDXY", "CDD2_CHIADIM" };
 
         private static readonly string[] StretchCommands = { "SS" };
 
@@ -2106,24 +2470,15 @@ namespace AUTOCAD_COMMANDS
                     "DA",
                     Color.FromArgb(33, 45, 74),
                     Color.FromArgb(72, 140, 255)),
-                ["SDX"] = new RibbonCommandStyle(
-                    "Smart Dim X",
-                    "Smart\nDim X",
-                    "Dim X",
-                    "DX",
-                    "Dimension to the nearest object along the X axis.",
+                ["SDXY"] = new RibbonCommandStyle(
+                    "Smart Dim XY",
+                    "Smart\nDim XY",
+                    "Dim XY",
+                    "DXY",
+                    "Dimension to the nearest object along X or Y based on click direction.",
                     "SX",
-                    Color.FromArgb(28, 62, 78),
-                    Color.FromArgb(0, 184, 212)),
-                ["SDY"] = new RibbonCommandStyle(
-                    "Smart Dim Y",
-                    "Smart\nDim Y",
-                    "Dim Y",
-                    "DY",
-                    "Dimension to the nearest object along the Y axis.",
-                    "SY",
-                    Color.FromArgb(21, 74, 70),
-                    Color.FromArgb(0, 200, 150)),
+                    Color.FromArgb(25, 67, 75),
+                    Color.FromArgb(0, 196, 176)),
                 ["CDD2_CHIADIM"] = new RibbonCommandStyle(
                     "Split Dimension",
                     "Split\nDim",
