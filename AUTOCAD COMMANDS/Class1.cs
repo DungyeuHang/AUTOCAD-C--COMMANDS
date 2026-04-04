@@ -186,22 +186,22 @@ namespace AUTOCAD_COMMANDS
                 }
                 else
                 {
-                    PromptSelectionOptions baseOpt = new PromptSelectionOptions();
-                    baseOpt.MessageForAdding = "\nChọn Polyline hoặc nhóm đối tượng gốc:";
-                    PromptSelectionResult baseRes = ed.GetSelection(baseOpt);
-                    if (baseRes.Status != PromptStatus.OK) return;
+                    SelectionSet baseSelection = PromptForSelection(
+                        ed,
+                        "\nChọn Polyline hoặc nhóm đối tượng gốc:");
+                    if (baseSelection == null) return;
 
-                    baseExt = GetSelectionExtents(baseRes.Value, tr);
+                    baseExt = GetSelectionExtents(baseSelection, tr);
                     baseCenter = GetCenter(baseExt);
                 }
 
                 // =============================
                 // 2. CHỌN ĐƯỜNG BAO (LINE / PLINE)
                 // =============================
-                PromptSelectionOptions boundOpt = new PromptSelectionOptions();
-                boundOpt.MessageForAdding = "\nChọn các đường bao (Line / Polyline):";
-                PromptSelectionResult boundRes = ed.GetSelection(boundOpt);
-                if (boundRes.Status != PromptStatus.OK) return;
+                SelectionSet boundSelection = PromptForSelection(
+                    ed,
+                    "\nChọn các đường bao (Line / Polyline):");
+                if (boundSelection == null) return;
 
                 Entity leftEntity = null;
                 Entity rightEntity = null;
@@ -212,7 +212,7 @@ namespace AUTOCAD_COMMANDS
                 double topDistance = double.MaxValue;
                 double bottomDistance = double.MaxValue;
 
-                foreach (SelectedObject sel in boundRes.Value)
+                foreach (SelectedObject sel in boundSelection)
                 {
                     Entity ent = tr.GetObject(sel.ObjectId, OpenMode.ForRead) as Entity;
                     if (ent == null) continue;
@@ -404,6 +404,28 @@ namespace AUTOCAD_COMMANDS
                 0
             );
         }
+
+        private SelectionSet PromptForSelection(Editor ed, string message)
+        {
+            while (true)
+            {
+                PromptSelectionOptions options = new PromptSelectionOptions();
+                options.MessageForAdding = message;
+
+                PromptSelectionResult result = ed.GetSelection(options);
+                if (result.Status == PromptStatus.OK && result.Value != null && result.Value.Count > 0)
+                {
+                    return result.Value;
+                }
+
+                if (result.Status == PromptStatus.Cancel)
+                {
+                    return null;
+                }
+
+                ed.WriteMessage("\nChưa chọn được đối tượng hợp lệ, hãy chọn lại.");
+            }
+        }
     }
 
 
@@ -427,22 +449,16 @@ namespace AUTOCAD_COMMANDS
                 ed.GetPoint("\nChọn điểm đầu dim: ");
             if (startRes.Status != PromptStatus.OK) return;
 
-            PromptPointOptions dirOpt =
-                new PromptPointOptions("\nChọn điểm để xác định hướng X (+/-): ");
-            dirOpt.BasePoint = startRes.Value;
-            dirOpt.UseBasePoint = true;
-
-            PromptPointResult dirRes = ed.GetPoint(dirOpt);
-            if (dirRes.Status != PromptStatus.OK) return;
-
-            double deltaX = dirRes.Value.X - startRes.Value.X;
-            if (Math.Abs(deltaX) < DirectionTolerance)
+            if (!TryPromptAxisDirection(
+                ed,
+                startRes.Value,
+                "\nChọn điểm để xác định hướng X (+/-): ",
+                true,
+                out PromptPointResult dirRes,
+                out double direction))
             {
-                ed.WriteMessage("\nĐiểm hướng phải lệch theo trục X.");
                 return;
             }
-
-            double direction = deltaX > 0 ? 1.0 : -1.0;
 
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
@@ -501,22 +517,16 @@ namespace AUTOCAD_COMMANDS
                 ed.GetPoint("\nChọn điểm đầu dim: ");
             if (startRes.Status != PromptStatus.OK) return;
 
-            PromptPointOptions dirOpt =
-                new PromptPointOptions("\nChọn điểm để xác định hướng Y (+/-): ");
-            dirOpt.BasePoint = startRes.Value;
-            dirOpt.UseBasePoint = true;
-
-            PromptPointResult dirRes = ed.GetPoint(dirOpt);
-            if (dirRes.Status != PromptStatus.OK) return;
-
-            double deltaY = dirRes.Value.Y - startRes.Value.Y;
-            if (Math.Abs(deltaY) < DirectionTolerance)
+            if (!TryPromptAxisDirection(
+                ed,
+                startRes.Value,
+                "\nChọn điểm để xác định hướng Y (+/-): ",
+                false,
+                out PromptPointResult dirRes,
+                out double direction))
             {
-                ed.WriteMessage("\nĐiểm hướng phải lệch theo trục Y.");
                 return;
             }
-
-            double direction = deltaY > 0 ? 1.0 : -1.0;
 
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
@@ -561,6 +571,155 @@ namespace AUTOCAD_COMMANDS
                 currentSpace.AppendEntity(dim);
                 tr.AddNewlyCreatedDBObject(dim, true);
                 tr.Commit();
+            }
+        }
+
+        [CommandMethod("SDXY")]
+        public void SmartDimXY()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            Editor ed = doc.Editor;
+            Database db = doc.Database;
+
+            PromptPointResult startRes =
+                ed.GetPoint("\nChọn điểm đầu dim: ");
+            if (startRes.Status != PromptStatus.OK) return;
+
+            if (!TryPromptAxisDirection(
+                ed,
+                startRes.Value,
+                "\nChọn điểm để xác định hướng dim X/Y: ",
+                null,
+                out PromptPointResult dirRes,
+                out double direction,
+                out bool useXAxis))
+            {
+                return;
+            }
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                BlockTableRecord currentSpace =
+                    tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
+
+                if (currentSpace == null) return;
+
+                Point3d? targetPoint = useXAxis
+                    ? FindNearestPointOnXAxis(currentSpace, tr, startRes.Value, direction)
+                    : FindNearestPointOnYAxis(currentSpace, tr, startRes.Value, direction);
+
+                if (!targetPoint.HasValue)
+                {
+                    ed.WriteMessage(
+                        useXAxis
+                            ? "\nKhông tìm thấy đối tượng nào gần nhất theo đúng hướng X đã chọn."
+                            : "\nKhông tìm thấy đối tượng nào gần nhất theo đúng hướng Y đã chọn.");
+                    return;
+                }
+
+                Point3d endPoint = useXAxis
+                    ? new Point3d(targetPoint.Value.X, startRes.Value.Y, startRes.Value.Z)
+                    : new Point3d(startRes.Value.X, targetPoint.Value.Y, startRes.Value.Z);
+
+                if (startRes.Value.DistanceTo(endPoint) < DirectionTolerance)
+                {
+                    ed.WriteMessage("\nKhoảng dim quá nhỏ hoặc trùng điểm đầu.");
+                    return;
+                }
+
+                ObjectId dimLayerId = EnsureDimLayer(db, tr);
+
+                RotatedDimension dim = new RotatedDimension
+                {
+                    XLine1Point = startRes.Value,
+                    XLine2Point = endPoint,
+                    DimLinePoint = dirRes.Value,
+                    Rotation = useXAxis ? 0.0 : Math.PI / 2.0,
+                    DimensionStyle = db.Dimstyle,
+                    LayerId = dimLayerId
+                };
+
+                currentSpace.AppendEntity(dim);
+                tr.AddNewlyCreatedDBObject(dim, true);
+                tr.Commit();
+            }
+        }
+
+        private bool TryPromptAxisDirection(
+            Editor ed,
+            Point3d startPoint,
+            string message,
+            bool? forceXAxis,
+            out PromptPointResult pointResult,
+            out double direction)
+        {
+            return TryPromptAxisDirection(
+                ed,
+                startPoint,
+                message,
+                forceXAxis,
+                out pointResult,
+                out direction,
+                out _);
+        }
+
+        private bool TryPromptAxisDirection(
+            Editor ed,
+            Point3d startPoint,
+            string message,
+            bool? forceXAxis,
+            out PromptPointResult pointResult,
+            out double direction,
+            out bool useXAxis)
+        {
+            while (true)
+            {
+                PromptPointOptions dirOpt = new PromptPointOptions(message)
+                {
+                    BasePoint = startPoint,
+                    UseBasePoint = true
+                };
+
+                pointResult = ed.GetPoint(dirOpt);
+                if (pointResult.Status != PromptStatus.OK)
+                {
+                    direction = 0.0;
+                    useXAxis = forceXAxis ?? true;
+                    return false;
+                }
+
+                double deltaX = pointResult.Value.X - startPoint.X;
+                double deltaY = pointResult.Value.Y - startPoint.Y;
+
+                if (forceXAxis.HasValue)
+                {
+                    useXAxis = forceXAxis.Value;
+                    double axisDelta = useXAxis ? deltaX : deltaY;
+                    if (Math.Abs(axisDelta) < DirectionTolerance)
+                    {
+                        ed.WriteMessage(
+                            useXAxis
+                                ? "\nĐiểm hướng phải lệch theo trục X. Hãy chọn lại."
+                                : "\nĐiểm hướng phải lệch theo trục Y. Hãy chọn lại.");
+                        continue;
+                    }
+
+                    direction = axisDelta > 0.0 ? 1.0 : -1.0;
+                    return true;
+                }
+
+                if (Math.Abs(deltaX) < DirectionTolerance &&
+                    Math.Abs(deltaY) < DirectionTolerance)
+                {
+                    ed.WriteMessage("\nĐiểm hướng phải lệch theo X hoặc Y. Hãy chọn lại.");
+                    continue;
+                }
+
+                useXAxis = Math.Abs(deltaX) >= Math.Abs(deltaY);
+                direction = useXAxis
+                    ? (deltaX >= 0.0 ? 1.0 : -1.0)
+                    : (deltaY >= 0.0 ? 1.0 : -1.0);
+                return true;
             }
         }
 
@@ -754,7 +913,8 @@ namespace AUTOCAD_COMMANDS
 
                 if (targetIds == null || targetIds.Length == 0)
                 {
-                    PromptSelectionResult selectionResult = ed.GetSelection(selectionOptions);
+                    PromptSelectionResult selectionResult =
+                        PromptForSelection(ed, selectionOptions.MessageForAdding);
                     if (selectionResult.Status != PromptStatus.OK || selectionResult.Value == null)
                     {
                         return;
@@ -863,6 +1023,30 @@ namespace AUTOCAD_COMMANDS
             return objectIds;
         }
 
+        private static PromptSelectionResult PromptForSelection(Editor ed, string message)
+        {
+            while (true)
+            {
+                PromptSelectionOptions options = new PromptSelectionOptions
+                {
+                    MessageForAdding = message
+                };
+
+                PromptSelectionResult result = ed.GetSelection(options);
+                if (result.Status == PromptStatus.OK && result.Value != null && result.Value.Count > 0)
+                {
+                    return result;
+                }
+
+                if (result.Status == PromptStatus.Cancel)
+                {
+                    return result;
+                }
+
+                ed.WriteMessage("\nChưa chọn được đối tượng hợp lệ, hãy chọn lại.");
+            }
+        }
+
         private static TextSyncPayload GetTextSyncPayload(Entity entity)
         {
             if (entity is DBText dbText)
@@ -944,7 +1128,8 @@ namespace AUTOCAD_COMMANDS
 
                 if (sourceIds == null || sourceIds.Length == 0)
                 {
-                    PromptSelectionResult sourceSelectionResult = ed.GetSelection(sourceSelectionOptions);
+                    PromptSelectionResult sourceSelectionResult =
+                        PromptForSelection(ed, sourceSelectionOptions.MessageForAdding);
                     if (sourceSelectionResult.Status != PromptStatus.OK || sourceSelectionResult.Value == null)
                     {
                         return;
@@ -1019,6 +1204,108 @@ namespace AUTOCAD_COMMANDS
                 {
                     ed.WriteMessage(
                         $"\nCCC_SMART_COPY_TO_CENTER: hoàn tất {copiedZoneCount} vùng, tổng cộng {totalCopiedEntities} đối tượng đã được copy.");
+                }
+            }
+            finally
+            {
+                if (previousSelectionOffscreen != null)
+                {
+                    Application.SetSystemVariable("SELECTIONOFFSCREEN", previousSelectionOffscreen);
+                }
+            }
+        }
+
+        [CommandMethod("BBB_BLOCK_TO_CENTER", CommandFlags.UsePickSet)]
+        public void BlockToCenter()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            if (doc == null)
+            {
+                return;
+            }
+
+            Editor ed = doc.Editor;
+            Database db = doc.Database;
+            ObjectId sourceBlockId = TryConsumePickFirstSingleBlock(ed, db);
+
+            object previousSelectionOffscreen = null;
+
+            try
+            {
+                previousSelectionOffscreen = Application.GetSystemVariable("SELECTIONOFFSCREEN");
+                Application.SetSystemVariable("SELECTIONOFFSCREEN", 2);
+
+                if (sourceBlockId.IsNull)
+                {
+                    PromptEntityOptions blockOptions =
+                        new PromptEntityOptions("\nChọn block nguồn: ");
+                    blockOptions.SetRejectMessage("\nChỉ hỗ trợ BlockReference.");
+                    blockOptions.AddAllowedClass(typeof(BlockReference), true);
+
+                    PromptEntityResult blockResult = ed.GetEntity(blockOptions);
+                    if (blockResult.Status != PromptStatus.OK)
+                    {
+                        return;
+                    }
+
+                    sourceBlockId = blockResult.ObjectId;
+                }
+                else
+                {
+                    ed.WriteMessage("\nBBB_BLOCK_TO_CENTER: dùng block PickFirst đã chọn sẵn.");
+                }
+
+                Point3d sourceCenter;
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    try
+                    {
+                        Extents3d sourceExtents = GetSelectionExtents(new[] { sourceBlockId }, tr);
+                        sourceCenter = GetCenter(sourceExtents);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        ed.WriteMessage("\nBBB_BLOCK_TO_CENTER: không lấy được tâm hợp lệ từ block nguồn.");
+                        return;
+                    }
+                }
+
+                int copiedZoneCount = 0;
+                while (true)
+                {
+                    PromptPointOptions seedPointOptions =
+                        new PromptPointOptions(
+                            copiedZoneCount == 0
+                                ? "\nChọn điểm nằm trong vùng đích: "
+                                : "\nChọn điểm nằm trong vùng đích tiếp theo hoặc Enter để kết thúc: ");
+                    seedPointOptions.AllowNone = copiedZoneCount > 0;
+
+                    PromptPointResult seedPointResult = ed.GetPoint(seedPointOptions);
+                    if (seedPointResult.Status == PromptStatus.None)
+                    {
+                        break;
+                    }
+
+                    if (seedPointResult.Status != PromptStatus.OK)
+                    {
+                        return;
+                    }
+
+                    int copiedCount = CopySourceToBoundaryCenter(
+                        db,
+                        ed,
+                        new[] { sourceBlockId },
+                        sourceCenter,
+                        seedPointResult.Value);
+
+                    if (copiedCount <= 0)
+                    {
+                        continue;
+                    }
+
+                    copiedZoneCount++;
+                    ed.WriteMessage(
+                        $"\nBBB_BLOCK_TO_CENTER: đã copy block vào vùng thứ {copiedZoneCount}.");
                 }
             }
             finally
@@ -1107,6 +1394,46 @@ namespace AUTOCAD_COMMANDS
 
             ed.SetImpliedSelection(Array.Empty<ObjectId>());
             return objectIds;
+        }
+
+        private static PromptSelectionResult PromptForSelection(Editor ed, string message)
+        {
+            while (true)
+            {
+                PromptSelectionOptions options = new PromptSelectionOptions
+                {
+                    MessageForAdding = message
+                };
+
+                PromptSelectionResult result = ed.GetSelection(options);
+                if (result.Status == PromptStatus.OK && result.Value != null && result.Value.Count > 0)
+                {
+                    return result;
+                }
+
+                if (result.Status == PromptStatus.Cancel)
+                {
+                    return result;
+                }
+
+                ed.WriteMessage("\nChưa chọn được đối tượng hợp lệ, hãy chọn lại.");
+            }
+        }
+
+        private static ObjectId TryConsumePickFirstSingleBlock(Editor ed, Database db)
+        {
+            ObjectId[] objectIds = TryConsumePickFirst(ed);
+            if (objectIds == null || objectIds.Length != 1)
+            {
+                return ObjectId.Null;
+            }
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                return tr.GetObject(objectIds[0], OpenMode.ForRead) is BlockReference
+                    ? objectIds[0]
+                    : ObjectId.Null;
+            }
         }
 
         private static Curve FindBestBoundaryCurve(DBObjectCollection boundaries, Point3d seedPoint)
