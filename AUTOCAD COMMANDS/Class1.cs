@@ -3832,47 +3832,62 @@ namespace AUTOCAD_COMMANDS
             double length,
             string commandLabel)
         {
-            SmartStretchSettingsStore.SaveLength(length);
+            object previousOsMode = null;
 
-            SmartStretchSelectionInput selectionInput = GetSmartStretchSelectionInput(ed);
-            if (selectionInput == null)
+            try
             {
-                return;
-            }
+                previousOsMode = Application.GetSystemVariable("OSMODE");
+                Application.SetSystemVariable("OSMODE", 0);
 
-            ShowSmartStretchSelection(ed, selectionInput.SelectedObjectIds);
+                SmartStretchSettingsStore.SaveLength(length);
 
-            PromptPointResult startResult = ed.GetPoint("\nChọn điểm đầu: ");
-            if (startResult.Status != PromptStatus.OK)
-            {
+                SmartStretchSelectionInput selectionInput = GetSmartStretchSelectionInput(ed);
+                if (selectionInput == null)
+                {
+                    return;
+                }
+
+                ShowSmartStretchSelection(ed, selectionInput.SelectedObjectIds);
+
+                PromptPointResult startResult = ed.GetPoint("\nChọn điểm đầu: ");
+                if (startResult.Status != PromptStatus.OK)
+                {
+                    ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
+                    return;
+                }
+
+                PromptResult directionResult = GetDirectionWithPreview(
+                    ed,
+                    selectionInput,
+                    startResult.Value,
+                    length,
+                    out SmartStretchDirection direction,
+                    out Point3d secondPoint);
+                if (directionResult.Status != PromptStatus.OK)
+                {
+                    ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
+                    return;
+                }
+                if (direction == SmartStretchDirection.None)
+                {
+                    ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
+                    ed.WriteMessage("\nKhông xác định được hướng stretch.");
+                    return;
+                }
+
                 ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
-                return;
-            }
+                ExecuteNativeStretch(ed, selectionInput, startResult.Value, secondPoint);
 
-            PromptResult directionResult = GetDirectionWithPreview(
-                ed,
-                selectionInput,
-                startResult.Value,
-                length,
-                out SmartStretchDirection direction,
-                out Point3d secondPoint);
-            if (directionResult.Status != PromptStatus.OK)
+                ed.WriteMessage(
+                    $"\n{commandLabel}: đã gọi STRETCH gốc theo {GetDirectionLabel(direction)} với L = {length.ToString("0.###", CultureInfo.InvariantCulture)}.");
+            }
+            finally
             {
-                ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
-                return;
+                if (previousOsMode != null)
+                {
+                    Application.SetSystemVariable("OSMODE", previousOsMode);
+                }
             }
-            if (direction == SmartStretchDirection.None)
-            {
-                ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
-                ed.WriteMessage("\nKhông xác định được hướng stretch.");
-                return;
-            }
-
-            ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
-            ExecuteNativeStretch(ed, selectionInput, startResult.Value, secondPoint);
-
-            ed.WriteMessage(
-                $"\n{commandLabel}: đã gọi STRETCH gốc theo {GetDirectionLabel(direction)} với L = {length.ToString("0.###", CultureInfo.InvariantCulture)}.");
         }
 
         private static bool TryPromptStretchLength(Editor ed, out double length)
