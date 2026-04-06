@@ -2039,7 +2039,8 @@ namespace AUTOCAD_COMMANDS
         private static readonly string[] DimensionCommands =
             { "DAA_Dim_auto", "SDXY", "CDD2_CHIADIM" };
 
-        private static readonly string[] StretchCommands = { "SS" };
+        private static readonly string[] StretchCommands =
+            { "SS", "SSD_SMART_STRETCH_BY_DIM" };
 
         private static readonly string[] ToolCommands =
             { "DXPALETTE", "DXPALETTERELOAD", "DXPALETTESETFOLDER", "DXRIBBONRELOAD" };
@@ -2497,6 +2498,15 @@ namespace AUTOCAD_COMMANDS
                     "SS",
                     Color.FromArgb(90, 48, 32),
                     Color.FromArgb(255, 144, 64)),
+                ["SSD_SMART_STRETCH_BY_DIM"] = new RibbonCommandStyle(
+                    "Stretch By Dim",
+                    "Stretch\nBy Dim",
+                    "By Dim",
+                    "SD",
+                    "Smart stretch with L derived from two dimensions.",
+                    "SB",
+                    Color.FromArgb(96, 58, 28),
+                    Color.FromArgb(255, 172, 82)),
                 ["DXPALETTE"] = new RibbonCommandStyle(
                     "DX Palette",
                     "DX\nPalette",
@@ -3788,32 +3798,40 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
-            double savedLength = SmartStretchSettingsStore.LoadLength();
-            PromptDoubleOptions lengthOptions =
-                new PromptDoubleOptions(
-                    $"\nNhập L cho smart stretch <{savedLength.ToString("0.###", CultureInfo.InvariantCulture)}>:");
-            lengthOptions.AllowNegative = false;
-            lengthOptions.AllowZero = false;
-            lengthOptions.AllowNone = true;
-            lengthOptions.DefaultValue = savedLength;
-            lengthOptions.UseDefaultValue = true;
-
-            PromptDoubleResult lengthResult = ed.GetDouble(lengthOptions);
-            if (lengthResult.Status == PromptStatus.Cancel)
+            if (!TryPromptStretchLength(ed, out double length))
             {
                 return;
             }
 
-            double length = lengthResult.Status == PromptStatus.None
-                ? savedLength
-                : lengthResult.Value;
+            RunSmartStretchWithLength(ed, db, length, "SS");
+        }
 
-            if (length <= ComparisonTolerance)
+        [CommandMethod("SSD_SMART_STRETCH_BY_DIM")]
+        public void SmartStretchByDim()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            Editor ed = doc?.Editor;
+            Database db = doc?.Database;
+
+            if (doc == null || ed == null || db == null)
             {
-                ed.WriteMessage("\nGiá trị L phải lớn hơn 0.");
                 return;
             }
 
+            if (!TryPromptStretchLengthFromDimensions(ed, db, out double length))
+            {
+                return;
+            }
+
+            RunSmartStretchWithLength(ed, db, length, "SSD_SMART_STRETCH_BY_DIM");
+        }
+
+        private static void RunSmartStretchWithLength(
+            Editor ed,
+            Database db,
+            double length,
+            string commandLabel)
+        {
             SmartStretchSettingsStore.SaveLength(length);
 
             SmartStretchSelectionInput selectionInput = GetSmartStretchSelectionInput(ed);
@@ -3854,7 +3872,121 @@ namespace AUTOCAD_COMMANDS
             ExecuteNativeStretch(ed, selectionInput, startResult.Value, secondPoint);
 
             ed.WriteMessage(
-                $"\nSS: đã gọi STRETCH gốc theo {GetDirectionLabel(direction)} với L = {length.ToString("0.###", CultureInfo.InvariantCulture)}.");
+                $"\n{commandLabel}: đã gọi STRETCH gốc theo {GetDirectionLabel(direction)} với L = {length.ToString("0.###", CultureInfo.InvariantCulture)}.");
+        }
+
+        private static bool TryPromptStretchLength(Editor ed, out double length)
+        {
+            double savedLength = SmartStretchSettingsStore.LoadLength();
+            PromptDoubleOptions lengthOptions =
+                new PromptDoubleOptions(
+                    $"\nNhập L cho smart stretch <{savedLength.ToString("0.###", CultureInfo.InvariantCulture)}>:");
+            lengthOptions.AllowNegative = false;
+            lengthOptions.AllowZero = false;
+            lengthOptions.AllowNone = true;
+            lengthOptions.DefaultValue = savedLength;
+            lengthOptions.UseDefaultValue = true;
+
+            PromptDoubleResult lengthResult = ed.GetDouble(lengthOptions);
+            if (lengthResult.Status == PromptStatus.Cancel)
+            {
+                length = 0.0;
+                return false;
+            }
+
+            length = lengthResult.Status == PromptStatus.None
+                ? savedLength
+                : lengthResult.Value;
+
+            if (length <= ComparisonTolerance)
+            {
+                ed.WriteMessage("\nGiá trị L phải lớn hơn 0.");
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryPromptStretchLengthFromDimensions(
+            Editor ed,
+            Database db,
+            out double length)
+        {
+            length = 0.0;
+
+            while (true)
+            {
+                if (!TryPromptDimensionMeasurement(
+                    ed,
+                    db,
+                    "\nChọn dim gốc: ",
+                    out double baseMeasurement))
+                {
+                    return false;
+                }
+
+                if (!TryPromptDimensionMeasurement(
+                    ed,
+                    db,
+                    "\nChọn dim hiện hành: ",
+                    out double currentMeasurement))
+                {
+                    return false;
+                }
+
+                length = Math.Abs(baseMeasurement - currentMeasurement);
+                if (length <= ComparisonTolerance)
+                {
+                    ed.WriteMessage("\nHai dim đang cho chênh lệch bằng 0. Hãy chọn lại.");
+                    continue;
+                }
+
+                ed.WriteMessage(
+                    $"\nL = |{baseMeasurement.ToString("0.###", CultureInfo.InvariantCulture)} - {currentMeasurement.ToString("0.###", CultureInfo.InvariantCulture)}| = {length.ToString("0.###", CultureInfo.InvariantCulture)}");
+                return true;
+            }
+        }
+
+        private static bool TryPromptDimensionMeasurement(
+            Editor ed,
+            Database db,
+            string message,
+            out double measurement)
+        {
+            measurement = 0.0;
+
+            while (true)
+            {
+                PromptEntityOptions options = new PromptEntityOptions(message);
+                options.SetRejectMessage("\nChỉ hỗ trợ các loại DIM hợp lệ.");
+                options.AddAllowedClass(typeof(Dimension), false);
+
+                PromptEntityResult result = ed.GetEntity(options);
+                if (result.Status != PromptStatus.OK)
+                {
+                    return false;
+                }
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    Dimension dimension =
+                        tr.GetObject(result.ObjectId, OpenMode.ForRead) as Dimension;
+                    if (dimension == null)
+                    {
+                        ed.WriteMessage("\nKhông đọc được dim. Hãy chọn lại.");
+                        continue;
+                    }
+
+                    measurement = Math.Abs(dimension.Measurement);
+                    if (measurement <= ComparisonTolerance)
+                    {
+                        ed.WriteMessage("\nDim có giá trị không hợp lệ. Hãy chọn lại.");
+                        continue;
+                    }
+
+                    return true;
+                }
+            }
         }
 
         private static SmartStretchSelectionInput GetSmartStretchSelectionInput(Editor ed)
