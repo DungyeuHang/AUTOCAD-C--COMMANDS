@@ -2040,7 +2040,7 @@ namespace AUTOCAD_COMMANDS
             { "DAA_Dim_auto", "SDXY", "CDD2_CHIADIM" };
 
         private static readonly string[] StretchCommands =
-            { "SS", "SSD_SMART_STRETCH_BY_DIM" };
+            { "SS", "SSD_SMART_STRETCH_BY_DIM", "SSD2_SMART_STRETCH_BY_DIM2" };
 
         private static readonly string[] ToolCommands =
             { "DXPALETTE", "DXPALETTERELOAD", "DXPALETTESETFOLDER", "DXRIBBONRELOAD" };
@@ -2507,6 +2507,15 @@ namespace AUTOCAD_COMMANDS
                     "SB",
                     Color.FromArgb(96, 58, 28),
                     Color.FromArgb(255, 172, 82)),
+                ["SSD2_SMART_STRETCH_BY_DIM2"] = new RibbonCommandStyle(
+                    "Stretch By Dim2",
+                    "Stretch\nBy Dim2",
+                    "By Dim2",
+                    "S2",
+                    "Smart stretch with L = |dim1 - dim2| / 2 and two stretch passes.",
+                    "S2",
+                    Color.FromArgb(110, 70, 34),
+                    Color.FromArgb(255, 196, 106)),
                 ["DXPALETTE"] = new RibbonCommandStyle(
                     "DX Palette",
                     "DX\nPalette",
@@ -3818,7 +3827,11 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
-            if (!TryPromptStretchLengthFromDimensions(ed, db, out double length))
+            if (!TryPromptStretchLengthFromDimensions(
+                ed,
+                db,
+                halfDifference: false,
+                out double length))
             {
                 return;
             }
@@ -3826,7 +3839,46 @@ namespace AUTOCAD_COMMANDS
             RunSmartStretchWithLength(ed, db, length, "SSD_SMART_STRETCH_BY_DIM");
         }
 
-        private static void RunSmartStretchWithLength(
+        [CommandMethod("SSD2_SMART_STRETCH_BY_DIM2")]
+        public void SmartStretchByHalfDimDifference()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            Editor ed = doc?.Editor;
+            Database db = doc?.Database;
+
+            if (doc == null || ed == null || db == null)
+            {
+                return;
+            }
+
+            if (!TryPromptStretchLengthFromDimensions(
+                ed,
+                db,
+                halfDifference: true,
+                out double length))
+            {
+                return;
+            }
+
+            for (int pass = 1; pass <= 2; pass++)
+            {
+                ed.WriteMessage(
+                    $"\nSSD2_SMART_STRETCH_BY_DIM2: thực hiện stretch lần {pass}/2 với L = {length.ToString("0.###", CultureInfo.InvariantCulture)}.");
+
+                bool completed = RunSmartStretchWithLength(
+                    ed,
+                    db,
+                    length,
+                    $"SSD2_SMART_STRETCH_BY_DIM2 [{pass}/2]");
+
+                if (!completed)
+                {
+                    return;
+                }
+            }
+        }
+
+        private static bool RunSmartStretchWithLength(
             Editor ed,
             Database db,
             double length,
@@ -3844,7 +3896,7 @@ namespace AUTOCAD_COMMANDS
                 SmartStretchSelectionInput selectionInput = GetSmartStretchSelectionInput(ed);
                 if (selectionInput == null)
                 {
-                    return;
+                    return false;
                 }
 
                 ShowSmartStretchSelection(ed, selectionInput.SelectedObjectIds);
@@ -3853,7 +3905,7 @@ namespace AUTOCAD_COMMANDS
                 if (startResult.Status != PromptStatus.OK)
                 {
                     ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
-                    return;
+                    return false;
                 }
 
                 PromptResult directionResult = GetDirectionWithPreview(
@@ -3866,13 +3918,13 @@ namespace AUTOCAD_COMMANDS
                 if (directionResult.Status != PromptStatus.OK)
                 {
                     ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
-                    return;
+                    return false;
                 }
                 if (direction == SmartStretchDirection.None)
                 {
                     ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
                     ed.WriteMessage("\nKhông xác định được hướng stretch.");
-                    return;
+                    return false;
                 }
 
                 ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
@@ -3880,6 +3932,7 @@ namespace AUTOCAD_COMMANDS
 
                 ed.WriteMessage(
                     $"\n{commandLabel}: đã gọi STRETCH gốc theo {GetDirectionLabel(direction)} với L = {length.ToString("0.###", CultureInfo.InvariantCulture)}.");
+                return true;
             }
             finally
             {
@@ -3925,6 +3978,7 @@ namespace AUTOCAD_COMMANDS
         private static bool TryPromptStretchLengthFromDimensions(
             Editor ed,
             Database db,
+            bool halfDifference,
             out double length)
         {
             length = 0.0;
@@ -3949,15 +4003,24 @@ namespace AUTOCAD_COMMANDS
                     return false;
                 }
 
-                length = Math.Abs(baseMeasurement - currentMeasurement);
+                double difference = Math.Abs(baseMeasurement - currentMeasurement);
+                length = halfDifference ? difference / 2.0 : difference;
                 if (length <= ComparisonTolerance)
                 {
                     ed.WriteMessage("\nHai dim đang cho chênh lệch bằng 0. Hãy chọn lại.");
                     continue;
                 }
 
-                ed.WriteMessage(
-                    $"\nL = |{baseMeasurement.ToString("0.###", CultureInfo.InvariantCulture)} - {currentMeasurement.ToString("0.###", CultureInfo.InvariantCulture)}| = {length.ToString("0.###", CultureInfo.InvariantCulture)}");
+                if (halfDifference)
+                {
+                    ed.WriteMessage(
+                        $"\nL = (|{baseMeasurement.ToString("0.###", CultureInfo.InvariantCulture)} - {currentMeasurement.ToString("0.###", CultureInfo.InvariantCulture)}|) / 2 = {length.ToString("0.###", CultureInfo.InvariantCulture)}");
+                }
+                else
+                {
+                    ed.WriteMessage(
+                        $"\nL = |{baseMeasurement.ToString("0.###", CultureInfo.InvariantCulture)} - {currentMeasurement.ToString("0.###", CultureInfo.InvariantCulture)}| = {length.ToString("0.###", CultureInfo.InvariantCulture)}");
+                }
                 return true;
             }
         }
