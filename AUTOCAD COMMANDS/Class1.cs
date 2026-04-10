@@ -2835,6 +2835,7 @@ namespace AUTOCAD_COMMANDS
         private readonly WF.Button _addSourceButton;
         private readonly WF.Button _addManualButton;
         private readonly WF.Button _removeSourceButton;
+        private readonly WF.Label _summaryLabel;
         private readonly WF.Label _statusLabel;
         private readonly WF.CheckBox _autoShowCheckBox;
         private List<PaletteCommandItem> _items;
@@ -2856,10 +2857,11 @@ namespace AUTOCAD_COMMANDS
             {
                 Dock = WF.DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 4,
+                RowCount = 5,
                 Padding = new WF.Padding(8),
                 BackColor = BackgroundColor
             };
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
             layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
             layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
             layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.Percent, 100f));
@@ -2989,6 +2991,18 @@ namespace AUTOCAD_COMMANDS
             _buttonPanel.Controls.Add(_refreshButton);
             _buttonPanel.Controls.Add(_autoShowCheckBox);
 
+            _summaryLabel = CreateLabel("Tong lenh: 0");
+            _summaryLabel.Dock = WF.DockStyle.Fill;
+            _summaryLabel.Padding = new WF.Padding(0, 2, 0, 6);
+            _summaryLabel.Margin = new WF.Padding(0, 0, 0, 2);
+            _summaryLabel.AutoEllipsis = true;
+            _summaryLabel.Font = new System.Drawing.Font(
+                "Segoe UI",
+                8.25F,
+                FontStyle.Regular,
+                GraphicsUnit.Point);
+            layout.Controls.Add(_summaryLabel, 0, 2);
+
             _commandGrid = CreateGrid();
             _commandGrid.AllowDrop = true;
             _commandGrid.CellClick += CommandGrid_CellClick;
@@ -2999,12 +3013,12 @@ namespace AUTOCAD_COMMANDS
             _commandGrid.MouseMove += CommandGrid_MouseMove;
             _commandGrid.DragOver += CommandGrid_DragOver;
             _commandGrid.DragDrop += CommandGrid_DragDrop;
-            layout.Controls.Add(_commandGrid, 0, 2);
+            layout.Controls.Add(_commandGrid, 0, 3);
 
             _statusLabel = CreateLabel("San sang");
             _statusLabel.Dock = WF.DockStyle.Fill;
             _statusLabel.Padding = new WF.Padding(0, 8, 0, 0);
-            layout.Controls.Add(_statusLabel, 0, 3);
+            layout.Controls.Add(_statusLabel, 0, 4);
 
             _items = new List<PaletteCommandItem>();
             Resize += (_, __) => ApplyResponsiveLayout();
@@ -3200,11 +3214,12 @@ namespace AUTOCAD_COMMANDS
                     item.SourceLabel.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0);
             }
 
-            filtered = ApplySortMode(filtered);
+            List<PaletteCommandItem> filteredItems = ApplySortMode(filtered).ToList();
+            UpdateSummary(filteredItems);
 
             _commandGrid.Rows.Clear();
 
-            foreach (PaletteCommandItem item in filtered)
+            foreach (PaletteCommandItem item in filteredItems)
             {
                 int rowIndex =
                     _commandGrid.Rows.Add(
@@ -3231,6 +3246,28 @@ namespace AUTOCAD_COMMANDS
                 selectedRow.Selected = true;
                 _commandGrid.CurrentCell = selectedRow.Cells["Command"];
             }
+        }
+
+        private void UpdateSummary(IReadOnlyCollection<PaletteCommandItem> filteredItems)
+        {
+            IReadOnlyCollection<PaletteCommandItem> allItems =
+                _items ?? (IReadOnlyCollection<PaletteCommandItem>)Array.Empty<PaletteCommandItem>();
+            IReadOnlyCollection<PaletteCommandItem> visibleItems =
+                filteredItems ?? (IReadOnlyCollection<PaletteCommandItem>)Array.Empty<PaletteCommandItem>();
+
+            List<string> sourceParts = allItems
+                .GroupBy(item => item.SourceLabel ?? string.Empty)
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(group => $"{group.Key}: {group.Count()}")
+                .ToList();
+
+            string sourceSummary = sourceParts.Count == 0
+                ? "Chua co source nao"
+                : string.Join(" | ", sourceParts);
+
+            _summaryLabel.Text =
+                $"Tong lenh: {allItems.Count} | Dang hien: {visibleItems.Count} | Theo nguon: {sourceSummary}";
         }
 
         private static WF.DataGridView CreateGrid()
