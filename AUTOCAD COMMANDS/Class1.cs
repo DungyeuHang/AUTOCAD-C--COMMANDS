@@ -1146,7 +1146,10 @@ namespace AUTOCAD_COMMANDS
                 {
                     try
                     {
-                        Extents3d sourceExtents = GetSelectionExtents(sourceIds, tr);
+                        Extents3d sourceExtents = GetSelectionExtents(
+                            sourceIds,
+                            tr,
+                            ignoreDimensions: true);
                         sourceCenter = GetCenter(sourceExtents);
                     }
                     catch (InvalidOperationException)
@@ -1754,7 +1757,10 @@ namespace AUTOCAD_COMMANDS
             return GetCenter(fallbackExtents);
         }
 
-        private static Extents3d GetSelectionExtents(IEnumerable<ObjectId> objectIds, Transaction tr)
+        private static Extents3d GetSelectionExtents(
+            IEnumerable<ObjectId> objectIds,
+            Transaction tr,
+            bool ignoreDimensions = false)
         {
             Extents3d? extents = null;
 
@@ -1767,6 +1773,11 @@ namespace AUTOCAD_COMMANDS
 
                 Entity entity = tr.GetObject(objectId, OpenMode.ForRead) as Entity;
                 if (entity == null)
+                {
+                    continue;
+                }
+
+                if (ignoreDimensions && entity is Dimension)
                 {
                     continue;
                 }
