@@ -1616,7 +1616,7 @@ namespace AUTOCAD_COMMANDS
                 foreach (ObjectId id in currentSpace)
                 {
                     Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                    if (!IsAxisScanCandidate(entity, startPoint, useXAxis: true, direction))
+                    if (!IsAxisScanCandidate(entity, tr, startPoint, useXAxis: true, direction))
                     {
                         continue;
                     }
@@ -1658,7 +1658,7 @@ namespace AUTOCAD_COMMANDS
                 foreach (ObjectId id in currentSpace)
                 {
                     Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                    if (!IsAxisScanCandidate(entity, startPoint, useXAxis: false, direction))
+                    if (!IsAxisScanCandidate(entity, tr, startPoint, useXAxis: false, direction))
                     {
                         continue;
                     }
@@ -1688,11 +1688,16 @@ namespace AUTOCAD_COMMANDS
 
         private static bool IsAxisScanCandidate(
             Entity entity,
+            Transaction tr,
             Point3d startPoint,
             bool useXAxis,
             double direction)
         {
-            if (entity == null || entity.IsErased || entity is Dimension || !(entity is Curve))
+            if (entity == null ||
+                entity.IsErased ||
+                entity is Dimension ||
+                !(entity is Curve) ||
+                !IsEntityDisplayed(entity, tr))
             {
                 return false;
             }
@@ -1726,6 +1731,36 @@ namespace AUTOCAD_COMMANDS
             catch
             {
                 return false;
+            }
+        }
+
+        private static bool IsEntityDisplayed(Entity entity, Transaction tr)
+        {
+            try
+            {
+                if (!entity.Visible)
+                {
+                    return false;
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                LayerTableRecord layer =
+                    tr.GetObject(entity.LayerId, OpenMode.ForRead) as LayerTableRecord;
+                if (layer == null)
+                {
+                    return true;
+                }
+
+                return !layer.IsOff && !layer.IsFrozen;
+            }
+            catch
+            {
+                return true;
             }
         }
 
