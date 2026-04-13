@@ -1152,7 +1152,8 @@ namespace AUTOCAD_COMMANDS
                         Extents3d sourceExtents = GetSelectionExtents(
                             sourceIds,
                             tr,
-                            ignoreDimensions: true);
+                            ignoreDimensions: true,
+                            ignoreTextEntities: true);
                         sourceCenter = GetCenter(sourceExtents);
                     }
                     catch (InvalidOperationException)
@@ -2062,7 +2063,8 @@ namespace AUTOCAD_COMMANDS
         private static Extents3d GetSelectionExtents(
             IEnumerable<ObjectId> objectIds,
             Transaction tr,
-            bool ignoreDimensions = false)
+            bool ignoreDimensions = false,
+            bool ignoreTextEntities = false)
         {
             Extents3d? extents = null;
 
@@ -2074,22 +2076,12 @@ namespace AUTOCAD_COMMANDS
                 }
 
                 Entity entity = tr.GetObject(objectId, OpenMode.ForRead) as Entity;
-                if (entity == null)
-                {
-                    continue;
-                }
-
-                if (ignoreDimensions && entity is Dimension)
-                {
-                    continue;
-                }
-
-                Extents3d currentExtents;
-                try
-                {
-                    currentExtents = entity.GeometricExtents;
-                }
-                catch
+                if (!TryGetFilteredEntityExtents(
+                    entity,
+                    tr,
+                    ignoreDimensions,
+                    ignoreTextEntities,
+                    out Extents3d currentExtents))
                 {
                     continue;
                 }
@@ -2100,15 +2092,7 @@ namespace AUTOCAD_COMMANDS
                     continue;
                 }
 
-                extents = new Extents3d(
-                    new Point3d(
-                        Math.Min(extents.Value.MinPoint.X, currentExtents.MinPoint.X),
-                        Math.Min(extents.Value.MinPoint.Y, currentExtents.MinPoint.Y),
-                        Math.Min(extents.Value.MinPoint.Z, currentExtents.MinPoint.Z)),
-                    new Point3d(
-                        Math.Max(extents.Value.MaxPoint.X, currentExtents.MaxPoint.X),
-                        Math.Max(extents.Value.MaxPoint.Y, currentExtents.MaxPoint.Y),
-                        Math.Max(extents.Value.MaxPoint.Z, currentExtents.MaxPoint.Z)));
+                extents = UnionExtents(extents.Value, currentExtents);
             }
 
             if (extents == null)
@@ -2117,6 +2101,290 @@ namespace AUTOCAD_COMMANDS
             }
 
             return extents.Value;
+        }
+
+        private static bool TryGetFilteredEntityExtents(
+            Entity entity,
+            Transaction tr,
+            bool ignoreDimensions,
+            bool ignoreTextEntities,
+            out Extents3d extents,
+            HashSet<ObjectId> visitedBlockDefinitions = null)
+        {
+            extents = default;
+
+            if (entity == null)
+            {
+                return false;
+            }
+
+            if (ignoreDimensions && entity is Dimension)
+            {
+                return false;
+            }
+
+            if (ignoreTextEntities &&
+                (entity is DBText ||
+                 entity is MText ||
+                 entity is AttributeDefinition ||
+                 entity is AttributeReference))
+            {
+                return false;
+            }
+
+            if (entity is BlockReference blockReference)
+            {
+                return TryGetFilteredBlockReferenceExtents(
+                    blockReference,
+                    tr,
+                    ignoreDimensions,
+                    ignoreTextEntities,
+                    out extents,
+                    visitedBlockDefinitions ?? new HashSet<ObjectId>());
+            }
+
+            try
+            {
+                extents = entity.GeometricExtents;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryGetFilteredBlockReferenceExtents(
+            BlockReference blockReference,
+            Transaction tr,
+            bool ignoreDimensions,
+            bool ignoreTextEntities,
+            out Extents3d extents,
+            HashSet<ObjectId> visitedBlockDefinitions)
+        {
+            extents = default;
+            if (blockReference == null)
+            {
+                return false;
+            }
+
+            ObjectId blockDefinitionId = blockReference.BlockTableRecord;
+            if (blockDefinitionId.IsNull || visitedBlockDefinitions.Contains(blockDefinitionId))
+            {
+                return false;
+            }
+
+            if (CanUseDirectBlockReferenceExtents(
+                blockReference,
+                tr,
+                ignoreDimensions,
+                ignoreTextEntities,
+                visitedBlockDefinitions))
+            {
+                try
+                {
+                    extents = blockReference.GeometricExtents;
+                    return true;
+                }
+                catch
+                {
+                }
+            }
+
+            visitedBlockDefinitions.Add(blockDefinitionId);
+
+            try
+            {
+                Extents3d? combinedExtents = null;
+                BlockTableRecord definition =
+                    tr.GetObject(blockDefinitionId, OpenMode.ForRead) as BlockTableRecord;
+                if (definition != null)
+                {
+                    foreach (ObjectId childId in definition)
+                    {
+                        Entity childEntity =
+                            tr.GetObject(childId, OpenMode.ForRead) as Entity;
+                        if (!TryGetFilteredEntityExtents(
+                            childEntity,
+                            tr,
+                            ignoreDimensions,
+                            ignoreTextEntities,
+                            out Extents3d childExtents,
+                            visitedBlockDefinitions))
+                        {
+                            continue;
+                        }
+
+                        Extents3d transformedExtents =
+                            TransformExtents(childExtents, blockReference.BlockTransform);
+                        combinedExtents = combinedExtents == null
+                            ? transformedExtents
+                            : UnionExtents(combinedExtents.Value, transformedExtents);
+                    }
+                }
+
+                if (!ignoreTextEntities)
+                {
+                    foreach (ObjectId attributeId in blockReference.AttributeCollection)
+                    {
+                        AttributeReference attribute =
+                            tr.GetObject(attributeId, OpenMode.ForRead, false) as AttributeReference;
+                        if (attribute == null)
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            Extents3d attributeExtents = attribute.GeometricExtents;
+                            combinedExtents = combinedExtents == null
+                                ? attributeExtents
+                                : UnionExtents(combinedExtents.Value, attributeExtents);
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
+
+                if (combinedExtents == null)
+                {
+                    return false;
+                }
+
+                extents = combinedExtents.Value;
+                return true;
+            }
+            finally
+            {
+                visitedBlockDefinitions.Remove(blockDefinitionId);
+            }
+        }
+
+        private static bool CanUseDirectBlockReferenceExtents(
+            BlockReference blockReference,
+            Transaction tr,
+            bool ignoreDimensions,
+            bool ignoreTextEntities,
+            HashSet<ObjectId> visitedBlockDefinitions)
+        {
+            if ((!ignoreDimensions && !ignoreTextEntities) || blockReference == null)
+            {
+                return true;
+            }
+
+            if (ignoreTextEntities && blockReference.AttributeCollection.Count > 0)
+            {
+                return false;
+            }
+
+            ObjectId blockDefinitionId = blockReference.BlockTableRecord;
+            if (blockDefinitionId.IsNull || visitedBlockDefinitions.Contains(blockDefinitionId))
+            {
+                return true;
+            }
+
+            visitedBlockDefinitions.Add(blockDefinitionId);
+
+            try
+            {
+                BlockTableRecord definition =
+                    tr.GetObject(blockDefinitionId, OpenMode.ForRead) as BlockTableRecord;
+                if (definition == null)
+                {
+                    return true;
+                }
+
+                foreach (ObjectId childId in definition)
+                {
+                    Entity childEntity = tr.GetObject(childId, OpenMode.ForRead) as Entity;
+                    if (childEntity == null)
+                    {
+                        continue;
+                    }
+
+                    if (ShouldExcludeEntityFromCenter(childEntity, ignoreDimensions, ignoreTextEntities))
+                    {
+                        return false;
+                    }
+
+                    if (childEntity is BlockReference nestedBlockReference &&
+                        !CanUseDirectBlockReferenceExtents(
+                            nestedBlockReference,
+                            tr,
+                            ignoreDimensions,
+                            ignoreTextEntities,
+                            visitedBlockDefinitions))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+            finally
+            {
+                visitedBlockDefinitions.Remove(blockDefinitionId);
+            }
+        }
+
+        private static bool ShouldExcludeEntityFromCenter(
+            Entity entity,
+            bool ignoreDimensions,
+            bool ignoreTextEntities)
+        {
+            if (entity == null)
+            {
+                return false;
+            }
+
+            if (ignoreDimensions && entity is Dimension)
+            {
+                return true;
+            }
+
+            return ignoreTextEntities &&
+                   (entity is DBText ||
+                    entity is MText ||
+                    entity is AttributeDefinition ||
+                    entity is AttributeReference);
+        }
+
+        private static Extents3d TransformExtents(Extents3d extents, Matrix3d transform)
+        {
+            Point3d[] corners =
+            {
+                new Point3d(extents.MinPoint.X, extents.MinPoint.Y, extents.MinPoint.Z),
+                new Point3d(extents.MinPoint.X, extents.MinPoint.Y, extents.MaxPoint.Z),
+                new Point3d(extents.MinPoint.X, extents.MaxPoint.Y, extents.MinPoint.Z),
+                new Point3d(extents.MinPoint.X, extents.MaxPoint.Y, extents.MaxPoint.Z),
+                new Point3d(extents.MaxPoint.X, extents.MinPoint.Y, extents.MinPoint.Z),
+                new Point3d(extents.MaxPoint.X, extents.MinPoint.Y, extents.MaxPoint.Z),
+                new Point3d(extents.MaxPoint.X, extents.MaxPoint.Y, extents.MinPoint.Z),
+                new Point3d(extents.MaxPoint.X, extents.MaxPoint.Y, extents.MaxPoint.Z)
+            };
+
+            Point3d firstPoint = corners[0].TransformBy(transform);
+            Extents3d transformed = new Extents3d(firstPoint, firstPoint);
+            for (int i = 1; i < corners.Length; i++)
+            {
+                transformed.AddPoint(corners[i].TransformBy(transform));
+            }
+
+            return transformed;
+        }
+
+        private static Extents3d UnionExtents(Extents3d left, Extents3d right)
+        {
+            return new Extents3d(
+                new Point3d(
+                    Math.Min(left.MinPoint.X, right.MinPoint.X),
+                    Math.Min(left.MinPoint.Y, right.MinPoint.Y),
+                    Math.Min(left.MinPoint.Z, right.MinPoint.Z)),
+                new Point3d(
+                    Math.Max(left.MaxPoint.X, right.MaxPoint.X),
+                    Math.Max(left.MaxPoint.Y, right.MaxPoint.Y),
+                    Math.Max(left.MaxPoint.Z, right.MaxPoint.Z)));
         }
 
         private static Point3d GetCenter(Extents3d extents)
