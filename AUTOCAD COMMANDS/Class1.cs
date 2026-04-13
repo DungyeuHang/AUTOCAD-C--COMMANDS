@@ -1099,6 +1099,9 @@ namespace AUTOCAD_COMMANDS
 
     public class SmartCopyToCenterCommands
     {
+        private const double BoundarySearchDistance = 1000000.0;
+        private const double BoundaryTolerance = 1e-6;
+
         [CommandMethod("CCC_SMART_COPY_TO_CENTER", CommandFlags.UsePickSet)]
         public void SmartCopyToCenter()
         {
@@ -1325,46 +1328,36 @@ namespace AUTOCAD_COMMANDS
         {
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
-                DBObjectCollection boundaries = ed.TraceBoundary(seedPoint, false);
-                if (boundaries == null || boundaries.Count == 0)
+                if (!TryResolveBoundaryCenter(
+                    db,
+                    ed,
+                    tr,
+                    seedPoint,
+                    "BBB_BLOCK_TO_CENTER",
+                    out Point3d targetCenter))
                 {
-                    ed.WriteMessage("\nBBB_BLOCK_TO_CENTER: không tìm được vùng bao quanh điểm đã chọn.");
                     return 0;
                 }
 
-                using (boundaries)
+                Vector3d centerOffset = blockCenterInDefinition - blockOriginInDefinition;
+                Point3d insertionPoint = targetCenter - centerOffset;
+
+                BlockTableRecord currentSpace =
+                    tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
+                if (currentSpace == null)
                 {
-                    Curve boundaryCurve = FindBestBoundaryCurve(boundaries, seedPoint);
-                    if (boundaryCurve == null)
-                    {
-                        ed.WriteMessage("\nBBB_BLOCK_TO_CENTER: không xác định được đường bao kín hợp lệ.");
-                        return 0;
-                    }
-
-                    using (boundaryCurve)
-                    {
-                        Point3d targetCenter = GetBoundaryCenter(boundaryCurve);
-                        Vector3d centerOffset = blockCenterInDefinition - blockOriginInDefinition;
-                        Point3d insertionPoint = targetCenter - centerOffset;
-
-                        BlockTableRecord currentSpace =
-                            tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
-                        if (currentSpace == null)
-                        {
-                            return 0;
-                        }
-
-                        BlockReference blockReference =
-                            new BlockReference(insertionPoint, blockDefinitionId);
-                        currentSpace.AppendEntity(blockReference);
-                        tr.AddNewlyCreatedDBObject(blockReference, true);
-
-                        AppendBlockAttributes(blockReference, tr);
-
-                        tr.Commit();
-                        return 1;
-                    }
+                    return 0;
                 }
+
+                BlockReference blockReference =
+                    new BlockReference(insertionPoint, blockDefinitionId);
+                currentSpace.AppendEntity(blockReference);
+                tr.AddNewlyCreatedDBObject(blockReference, true);
+
+                AppendBlockAttributes(blockReference, tr);
+
+                tr.Commit();
+                return 1;
             }
         }
 
@@ -1377,55 +1370,45 @@ namespace AUTOCAD_COMMANDS
         {
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
-                DBObjectCollection boundaries = ed.TraceBoundary(seedPoint, false);
-                if (boundaries == null || boundaries.Count == 0)
+                if (!TryResolveBoundaryCenter(
+                    db,
+                    ed,
+                    tr,
+                    seedPoint,
+                    "CCC_SMART_COPY_TO_CENTER",
+                    out Point3d targetCenter))
                 {
-                    ed.WriteMessage("\nCCC_SMART_COPY_TO_CENTER: không tìm được vùng bao quanh điểm đã chọn.");
                     return 0;
                 }
 
-                using (boundaries)
+                Vector3d displacement = targetCenter - sourceCenter;
+
+                ObjectId currentSpaceId = db.CurrentSpaceId;
+                ObjectIdCollection sourceIdCollection = new ObjectIdCollection(sourceIds);
+                IdMapping idMapping = new IdMapping();
+                db.DeepCloneObjects(sourceIdCollection, currentSpaceId, idMapping, false);
+
+                int copiedCount = 0;
+                foreach (IdPair pair in idMapping)
                 {
-                    Curve boundaryCurve = FindBestBoundaryCurve(boundaries, seedPoint);
-                    if (boundaryCurve == null)
+                    if (!pair.IsCloned || pair.Value.IsNull)
                     {
-                        ed.WriteMessage("\nCCC_SMART_COPY_TO_CENTER: không xác định được đường bao kín hợp lệ.");
-                        return 0;
+                        continue;
                     }
 
-                    using (boundaryCurve)
+                    Entity clonedEntity =
+                        tr.GetObject(pair.Value, OpenMode.ForWrite, false) as Entity;
+                    if (clonedEntity == null)
                     {
-                        Point3d targetCenter = GetBoundaryCenter(boundaryCurve);
-                        Vector3d displacement = targetCenter - sourceCenter;
-
-                        ObjectId currentSpaceId = db.CurrentSpaceId;
-                        ObjectIdCollection sourceIdCollection = new ObjectIdCollection(sourceIds);
-                        IdMapping idMapping = new IdMapping();
-                        db.DeepCloneObjects(sourceIdCollection, currentSpaceId, idMapping, false);
-
-                        int copiedCount = 0;
-                        foreach (IdPair pair in idMapping)
-                        {
-                            if (!pair.IsCloned || pair.Value.IsNull)
-                            {
-                                continue;
-                            }
-
-                            Entity clonedEntity =
-                                tr.GetObject(pair.Value, OpenMode.ForWrite, false) as Entity;
-                            if (clonedEntity == null)
-                            {
-                                continue;
-                            }
-
-                            clonedEntity.TransformBy(Matrix3d.Displacement(displacement));
-                            copiedCount++;
-                        }
-
-                        tr.Commit();
-                        return copiedCount;
+                        continue;
                     }
+
+                    clonedEntity.TransformBy(Matrix3d.Displacement(displacement));
+                    copiedCount++;
                 }
+
+                tr.Commit();
+                return copiedCount;
             }
         }
 
@@ -1504,6 +1487,290 @@ namespace AUTOCAD_COMMANDS
             }
 
             return bestCurve;
+        }
+
+        private static bool TryResolveBoundaryCenter(
+            Database db,
+            Editor ed,
+            Transaction tr,
+            Point3d seedPoint,
+            string commandLabel,
+            out Point3d targetCenter)
+        {
+            targetCenter = Point3d.Origin;
+
+            if (TryEstimateBoundaryCenterFast(
+                db,
+                tr,
+                seedPoint,
+                out targetCenter))
+            {
+                return true;
+            }
+
+            if (TryTraceBoundaryCenter(ed, seedPoint, out targetCenter, out string failureMessage))
+            {
+                return true;
+            }
+
+            ed.WriteMessage($"\n{commandLabel}: {failureMessage}");
+            return false;
+        }
+
+        private static bool TryTraceBoundaryCenter(
+            Editor ed,
+            Point3d seedPoint,
+            out Point3d targetCenter,
+            out string failureMessage)
+        {
+            targetCenter = Point3d.Origin;
+            failureMessage = "không tìm được vùng bao quanh điểm đã chọn.";
+
+            DBObjectCollection boundaries = ed.TraceBoundary(seedPoint, false);
+            if (boundaries == null || boundaries.Count == 0)
+            {
+                return false;
+            }
+
+            using (boundaries)
+            {
+                Curve boundaryCurve = FindBestBoundaryCurve(boundaries, seedPoint);
+                if (boundaryCurve == null)
+                {
+                    failureMessage = "không xác định được đường bao kín hợp lệ.";
+                    return false;
+                }
+
+                using (boundaryCurve)
+                {
+                    targetCenter = GetBoundaryCenter(boundaryCurve);
+                    return true;
+                }
+            }
+        }
+
+        private static bool TryEstimateBoundaryCenterFast(
+            Database db,
+            Transaction tr,
+            Point3d seedPoint,
+            out Point3d targetCenter)
+        {
+            targetCenter = Point3d.Origin;
+
+            BlockTableRecord currentSpace =
+                tr.GetObject(db.CurrentSpaceId, OpenMode.ForRead) as BlockTableRecord;
+            if (currentSpace == null)
+            {
+                return false;
+            }
+
+            Point3d? leftPoint = FindNearestPointOnXAxis(currentSpace, tr, seedPoint, -1.0);
+            Point3d? rightPoint = FindNearestPointOnXAxis(currentSpace, tr, seedPoint, 1.0);
+            Point3d? bottomPoint = FindNearestPointOnYAxis(currentSpace, tr, seedPoint, -1.0);
+            Point3d? topPoint = FindNearestPointOnYAxis(currentSpace, tr, seedPoint, 1.0);
+
+            if (!leftPoint.HasValue ||
+                !rightPoint.HasValue ||
+                !bottomPoint.HasValue ||
+                !topPoint.HasValue)
+            {
+                return false;
+            }
+
+            double minX = leftPoint.Value.X;
+            double maxX = rightPoint.Value.X;
+            double minY = bottomPoint.Value.Y;
+            double maxY = topPoint.Value.Y;
+
+            if (maxX - minX <= BoundaryTolerance || maxY - minY <= BoundaryTolerance)
+            {
+                return false;
+            }
+
+            if (seedPoint.X <= minX + BoundaryTolerance ||
+                seedPoint.X >= maxX - BoundaryTolerance ||
+                seedPoint.Y <= minY + BoundaryTolerance ||
+                seedPoint.Y >= maxY - BoundaryTolerance)
+            {
+                return false;
+            }
+
+            targetCenter = new Point3d(
+                (minX + maxX) * 0.5,
+                (minY + maxY) * 0.5,
+                seedPoint.Z);
+            return true;
+        }
+
+        private static Point3d? FindNearestPointOnXAxis(
+            BlockTableRecord currentSpace,
+            Transaction tr,
+            Point3d startPoint,
+            double direction)
+        {
+            Point3d? bestPoint = null;
+            double bestDistance = double.MaxValue;
+
+            using (Line scanLine = CreateScanLine(startPoint, direction))
+            {
+                foreach (ObjectId id in currentSpace)
+                {
+                    Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
+                    if (!IsAxisScanCandidate(entity, startPoint, useXAxis: true, direction))
+                    {
+                        continue;
+                    }
+
+                    Point3dCollection intersections = TryGetIntersections(entity as Curve, scanLine);
+                    if (intersections == null || intersections.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    foreach (Point3d point in intersections)
+                    {
+                        double projectedDistance = (point.X - startPoint.X) * direction;
+                        if (projectedDistance <= BoundaryTolerance || projectedDistance >= bestDistance)
+                        {
+                            continue;
+                        }
+
+                        bestDistance = projectedDistance;
+                        bestPoint = point;
+                    }
+                }
+            }
+
+            return bestPoint;
+        }
+
+        private static Point3d? FindNearestPointOnYAxis(
+            BlockTableRecord currentSpace,
+            Transaction tr,
+            Point3d startPoint,
+            double direction)
+        {
+            Point3d? bestPoint = null;
+            double bestDistance = double.MaxValue;
+
+            using (Line scanLine = CreateVerticalScanLine(startPoint, direction))
+            {
+                foreach (ObjectId id in currentSpace)
+                {
+                    Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
+                    if (!IsAxisScanCandidate(entity, startPoint, useXAxis: false, direction))
+                    {
+                        continue;
+                    }
+
+                    Point3dCollection intersections = TryGetIntersections(entity as Curve, scanLine);
+                    if (intersections == null || intersections.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    foreach (Point3d point in intersections)
+                    {
+                        double projectedDistance = (point.Y - startPoint.Y) * direction;
+                        if (projectedDistance <= BoundaryTolerance || projectedDistance >= bestDistance)
+                        {
+                            continue;
+                        }
+
+                        bestDistance = projectedDistance;
+                        bestPoint = point;
+                    }
+                }
+            }
+
+            return bestPoint;
+        }
+
+        private static bool IsAxisScanCandidate(
+            Entity entity,
+            Point3d startPoint,
+            bool useXAxis,
+            double direction)
+        {
+            if (entity == null || entity.IsErased || entity is Dimension || !(entity is Curve))
+            {
+                return false;
+            }
+
+            try
+            {
+                Extents3d extents = entity.GeometricExtents;
+                if (useXAxis)
+                {
+                    if (extents.MinPoint.Y > startPoint.Y + BoundaryTolerance ||
+                        extents.MaxPoint.Y < startPoint.Y - BoundaryTolerance)
+                    {
+                        return false;
+                    }
+
+                    return direction > 0.0
+                        ? extents.MaxPoint.X > startPoint.X + BoundaryTolerance
+                        : extents.MinPoint.X < startPoint.X - BoundaryTolerance;
+                }
+
+                if (extents.MinPoint.X > startPoint.X + BoundaryTolerance ||
+                    extents.MaxPoint.X < startPoint.X - BoundaryTolerance)
+                {
+                    return false;
+                }
+
+                return direction > 0.0
+                    ? extents.MaxPoint.Y > startPoint.Y + BoundaryTolerance
+                    : extents.MinPoint.Y < startPoint.Y - BoundaryTolerance;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static Point3dCollection TryGetIntersections(Curve curve, Line scanLine)
+        {
+            if (curve == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                Point3dCollection intersections = new Point3dCollection();
+                curve.IntersectWith(
+                    scanLine,
+                    Intersect.OnBothOperands,
+                    intersections,
+                    IntPtr.Zero,
+                    IntPtr.Zero);
+                return intersections;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static Line CreateScanLine(Point3d startPoint, double direction)
+        {
+            return new Line(
+                startPoint,
+                new Point3d(
+                    startPoint.X + BoundarySearchDistance * direction,
+                    startPoint.Y,
+                    startPoint.Z));
+        }
+
+        private static Line CreateVerticalScanLine(Point3d startPoint, double direction)
+        {
+            return new Line(
+                startPoint,
+                new Point3d(
+                    startPoint.X,
+                    startPoint.Y + BoundarySearchDistance * direction,
+                    startPoint.Z));
         }
 
         private static ObjectId PromptForBlockDefinition(Database db)
