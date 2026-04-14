@@ -2610,6 +2610,7 @@ namespace AUTOCAD_COMMANDS
 
         public void Terminate()
         {
+            DungXPaletteHost.Terminate();
             DungXRibbonHost.Terminate();
         }
     }
@@ -3257,11 +3258,17 @@ namespace AUTOCAD_COMMANDS
         public static void Initialize()
         {
             EnsurePalette();
+            PaletteCommandUsageTracker.Initialize();
             if (PaletteStartupStore.LoadAutoShow())
             {
                 ReloadPaletteData(false);
                 _paletteSet.Visible = true;
             }
+        }
+
+        public static void Terminate()
+        {
+            PaletteCommandUsageTracker.Terminate();
         }
 
         public static void ShowPalette()
@@ -3323,8 +3330,13 @@ namespace AUTOCAD_COMMANDS
             }
 
             doc.SendStringToExecute(item.CommandName + " ", true, false, false);
-            _paletteControl.SetStatus(
+            _paletteControl?.SetStatus(
                 $"Dang chay {item.CommandName} | {item.SourceLabel}");
+        }
+
+        public static void NotifyCommandUsage(string commandName, int usageCount)
+        {
+            _paletteControl?.RecordUsage(commandName, usageCount);
         }
 
         private static bool EnsureSourceLoaded(Document doc, PaletteCommandItem item)
@@ -3416,6 +3428,7 @@ namespace AUTOCAD_COMMANDS
         private readonly WF.Button _addSourceButton;
         private readonly WF.Button _addManualButton;
         private readonly WF.Button _removeSourceButton;
+        private readonly WF.Button _resetUsageButton;
         private readonly WF.Label _summaryLabel;
         private readonly WF.Label _statusLabel;
         private readonly WF.CheckBox _autoShowCheckBox;
@@ -3561,6 +3574,7 @@ namespace AUTOCAD_COMMANDS
             _addManualButton = CreateButton("Add Manual", (_, __) => AddManualAlias());
             _removeSourceButton = CreateButton("Remove Source", (_, __) => RemoveSelectedSource());
             _refreshButton = CreateButton("Refresh List", (_, __) => ReloadData(true));
+            _resetUsageButton = CreateButton("Reset Stats", (_, __) => ResetUsageStats());
             _autoShowCheckBox = CreateCheckBox("Auto Open", AutoShowCheckBox_CheckedChanged);
 
             _buttonPanel.Controls.Add(_runButton);
@@ -3570,6 +3584,7 @@ namespace AUTOCAD_COMMANDS
             _buttonPanel.Controls.Add(_addManualButton);
             _buttonPanel.Controls.Add(_removeSourceButton);
             _buttonPanel.Controls.Add(_refreshButton);
+            _buttonPanel.Controls.Add(_resetUsageButton);
             _buttonPanel.Controls.Add(_autoShowCheckBox);
 
             _summaryLabel = CreateLabel("Tong lenh: 0");
@@ -3614,6 +3629,8 @@ namespace AUTOCAD_COMMANDS
             string currentFilter = Convert.ToString(_sourceFilter.SelectedItem) ?? "All";
             string selectedCommand = GetSelectedCommandName();
             _items = PaletteCommandCatalog.BuildItems();
+            PaletteCommandUsageTracker.SetKnownCommands(_items.Select(item => item.CommandName));
+            PaletteUsageStore.ApplyUsage(_items);
             PaletteLayoutStore.ApplyLayout(_items);
             PaletteLayoutStore.SaveLayout(_items);
             RefreshSourceFilter(currentFilter);
@@ -3752,14 +3769,17 @@ namespace AUTOCAD_COMMANDS
             _addManualButton.Text = compact ? "+Cmd" : "Add Manual";
             _removeSourceButton.Text = compact ? "-Src" : "Remove Source";
             _refreshButton.Text = compact ? "Ref" : "Refresh List";
+            _resetUsageButton.Text = compact ? "Reset" : "Reset Stats";
 
             _commandGrid.Columns["Favorite"].Visible = true;
-            _commandGrid.Columns["Description"].Visible = !compact;
-            _commandGrid.Columns["Source"].Visible = !compact;
-            _commandGrid.Columns["Command"].AutoSizeMode = compact
-                ? WF.DataGridViewAutoSizeColumnMode.Fill
-                : WF.DataGridViewAutoSizeColumnMode.None;
-            _commandGrid.Columns["Command"].Width = compact ? 80 : 140;
+            _commandGrid.Columns["Used"].Visible = true;
+            _commandGrid.Columns["Description"].Visible = true;
+            _commandGrid.Columns["Source"].Visible = true;
+            _commandGrid.Columns["Favorite"].AutoSizeMode = WF.DataGridViewAutoSizeColumnMode.None;
+            _commandGrid.Columns["Command"].AutoSizeMode = WF.DataGridViewAutoSizeColumnMode.None;
+            _commandGrid.Columns["Used"].AutoSizeMode = WF.DataGridViewAutoSizeColumnMode.None;
+            _commandGrid.Columns["Description"].AutoSizeMode = WF.DataGridViewAutoSizeColumnMode.None;
+            _commandGrid.Columns["Source"].AutoSizeMode = WF.DataGridViewAutoSizeColumnMode.None;
 
             _statusLabel.Visible = !ultraCompact;
 
@@ -3806,6 +3826,7 @@ namespace AUTOCAD_COMMANDS
                     _commandGrid.Rows.Add(
                         item.IsFavorite ? "★" : "☆",
                         item.CommandName,
+                        item.UsageCount,
                         item.Description,
                         item.SourceLabel);
                 _commandGrid.Rows[rowIndex].Tag = item;
@@ -3835,6 +3856,12 @@ namespace AUTOCAD_COMMANDS
                 _items ?? (IReadOnlyCollection<PaletteCommandItem>)Array.Empty<PaletteCommandItem>();
             IReadOnlyCollection<PaletteCommandItem> visibleItems =
                 filteredItems ?? (IReadOnlyCollection<PaletteCommandItem>)Array.Empty<PaletteCommandItem>();
+            int totalUsage = allItems
+                .GroupBy(item => item.CommandName, StringComparer.OrdinalIgnoreCase)
+                .Sum(group => group.Max(item => item.UsageCount));
+            int usedCommandCount = allItems
+                .GroupBy(item => item.CommandName, StringComparer.OrdinalIgnoreCase)
+                .Count(group => group.Max(item => item.UsageCount) > 0);
 
             List<string> sourceParts = allItems
                 .GroupBy(item => item.SourceLabel ?? string.Empty)
@@ -3848,7 +3875,7 @@ namespace AUTOCAD_COMMANDS
                 : string.Join(" | ", sourceParts);
 
             _summaryLabel.Text =
-                $"Tong lenh: {allItems.Count} | Dang hien: {visibleItems.Count} | Theo nguon: {sourceSummary}";
+                $"Tong lenh: {allItems.Count} | Dang hien: {visibleItems.Count} | Da dung: {usedCommandCount} | Tong luot: {totalUsage} | Theo nguon: {sourceSummary}";
         }
 
         private static WF.DataGridView CreateGrid()
@@ -3859,6 +3886,7 @@ namespace AUTOCAD_COMMANDS
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
                 AllowUserToResizeRows = false,
+                AllowUserToResizeColumns = true,
                 MultiSelect = false,
                 SelectionMode = WF.DataGridViewSelectionMode.FullRowSelect,
                 EditMode = WF.DataGridViewEditMode.EditOnKeystrokeOrF2,
@@ -3866,7 +3894,9 @@ namespace AUTOCAD_COMMANDS
                 BorderStyle = WF.BorderStyle.FixedSingle,
                 GridColor = BorderColor,
                 RowHeadersVisible = false,
-                EnableHeadersVisualStyles = false
+                EnableHeadersVisualStyles = false,
+                ScrollBars = WF.ScrollBars.Both,
+                AutoSizeColumnsMode = WF.DataGridViewAutoSizeColumnsMode.None
             };
 
             grid.ColumnHeadersBorderStyle = WF.DataGridViewHeaderBorderStyle.Single;
@@ -3904,11 +3934,20 @@ namespace AUTOCAD_COMMANDS
                 ReadOnly = true,
                 SortMode = WF.DataGridViewColumnSortMode.NotSortable
             };
+            WF.DataGridViewTextBoxColumn usedColumn = new WF.DataGridViewTextBoxColumn
+            {
+                Name = "Used",
+                HeaderText = "Used",
+                Width = 58,
+                ReadOnly = true,
+                SortMode = WF.DataGridViewColumnSortMode.NotSortable
+            };
+            usedColumn.DefaultCellStyle.Alignment = WF.DataGridViewContentAlignment.MiddleCenter;
             WF.DataGridViewTextBoxColumn descriptionColumn = new WF.DataGridViewTextBoxColumn
             {
                 Name = "Description",
                 HeaderText = "Description",
-                AutoSizeMode = WF.DataGridViewAutoSizeColumnMode.Fill,
+                Width = 220,
                 SortMode = WF.DataGridViewColumnSortMode.NotSortable
             };
             WF.DataGridViewTextBoxColumn sourceColumn = new WF.DataGridViewTextBoxColumn
@@ -3920,7 +3959,12 @@ namespace AUTOCAD_COMMANDS
                 SortMode = WF.DataGridViewColumnSortMode.NotSortable
             };
 
-            grid.Columns.AddRange(favoriteColumn, commandColumn, descriptionColumn, sourceColumn);
+            grid.Columns.AddRange(
+                favoriteColumn,
+                commandColumn,
+                usedColumn,
+                descriptionColumn,
+                sourceColumn);
             return grid;
         }
 
@@ -4345,6 +4389,44 @@ namespace AUTOCAD_COMMANDS
             PaletteSourceStore.RemoveSource(item.SourcePath);
             ReloadData(false);
             SetStatus("Da xoa source khoi palette.");
+        }
+
+        private void ResetUsageStats()
+        {
+            WF.DialogResult result = WF.MessageBox.Show(
+                "Ban co chac muon reset toan bo thong ke su dung command?",
+                "Reset DungX Stats",
+                WF.MessageBoxButtons.YesNo,
+                WF.MessageBoxIcon.Question);
+            if (result != WF.DialogResult.Yes)
+            {
+                return;
+            }
+
+            PaletteUsageStore.Reset();
+            foreach (PaletteCommandItem item in _items)
+            {
+                item.UsageCount = 0;
+            }
+
+            BindGrid(GetSelectedCommandName());
+            SetStatus("Da reset thong ke su dung command.");
+        }
+
+        public void RecordUsage(string commandName, int usageCount)
+        {
+            if (string.IsNullOrWhiteSpace(commandName))
+            {
+                return;
+            }
+
+            foreach (PaletteCommandItem item in _items.Where(current =>
+                string.Equals(current.CommandName, commandName, StringComparison.OrdinalIgnoreCase)))
+            {
+                item.UsageCount = usageCount;
+            }
+
+            BindGrid(commandName);
         }
 
         private void RefreshSourceFilter(string preferredSelection)
@@ -5455,6 +5537,8 @@ namespace AUTOCAD_COMMANDS
         public bool IsFavorite { get; set; }
 
         public int ManualOrder { get; set; }
+
+        public int UsageCount { get; set; }
     }
 
     internal enum PaletteSortMode
@@ -5487,6 +5571,243 @@ namespace AUTOCAD_COMMANDS
         public string DisplayName { get; }
 
         public PaletteSourceKind SourceKind { get; }
+    }
+
+    internal static class PaletteCommandUsageTracker
+    {
+        private static readonly HashSet<string> KnownCommands =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly HashSet<IntPtr> HookedDocumentPointers =
+            new HashSet<IntPtr>();
+        private static readonly Dictionary<IntPtr, string> PendingLispCommands =
+            new Dictionary<IntPtr, string>();
+
+        private static bool _initialized;
+
+        public static void Initialize()
+        {
+            if (_initialized)
+            {
+                return;
+            }
+
+            DocumentCollection documentManager = Application.DocumentManager;
+            documentManager.DocumentCreated += OnDocumentCreated;
+            documentManager.DocumentToBeDestroyed += OnDocumentToBeDestroyed;
+
+            foreach (Document document in documentManager)
+            {
+                HookDocument(document);
+            }
+
+            _initialized = true;
+        }
+
+        public static void Terminate()
+        {
+            if (!_initialized)
+            {
+                return;
+            }
+
+            DocumentCollection documentManager = Application.DocumentManager;
+            documentManager.DocumentCreated -= OnDocumentCreated;
+            documentManager.DocumentToBeDestroyed -= OnDocumentToBeDestroyed;
+
+            foreach (Document document in documentManager)
+            {
+                UnhookDocument(document);
+            }
+
+            HookedDocumentPointers.Clear();
+            PendingLispCommands.Clear();
+            _initialized = false;
+        }
+
+        public static void SetKnownCommands(IEnumerable<string> commandNames)
+        {
+            KnownCommands.Clear();
+            foreach (string commandName in commandNames ?? Enumerable.Empty<string>())
+            {
+                string normalized = NormalizeCommandName(commandName);
+                if (!string.IsNullOrWhiteSpace(normalized))
+                {
+                    KnownCommands.Add(normalized);
+                }
+            }
+        }
+
+        private static void OnDocumentCreated(object sender, DocumentCollectionEventArgs e)
+        {
+            HookDocument(e.Document);
+        }
+
+        private static void OnDocumentToBeDestroyed(object sender, DocumentCollectionEventArgs e)
+        {
+            UnhookDocument(e.Document);
+        }
+
+        private static void HookDocument(Document document)
+        {
+            if (document == null)
+            {
+                return;
+            }
+
+            IntPtr pointer = document.UnmanagedObject;
+            if (pointer == IntPtr.Zero || !HookedDocumentPointers.Add(pointer))
+            {
+                return;
+            }
+
+            document.CommandEnded += OnDocumentCommandEnded;
+            document.LispWillStart += OnDocumentLispWillStart;
+            document.LispEnded += OnDocumentLispEnded;
+            document.LispCancelled += OnDocumentLispCancelled;
+        }
+
+        private static void UnhookDocument(Document document)
+        {
+            if (document == null)
+            {
+                return;
+            }
+
+            IntPtr pointer = document.UnmanagedObject;
+            if (pointer != IntPtr.Zero && HookedDocumentPointers.Remove(pointer))
+            {
+                document.CommandEnded -= OnDocumentCommandEnded;
+                document.LispWillStart -= OnDocumentLispWillStart;
+                document.LispEnded -= OnDocumentLispEnded;
+                document.LispCancelled -= OnDocumentLispCancelled;
+                PendingLispCommands.Remove(pointer);
+            }
+        }
+
+        private static void OnDocumentCommandEnded(object sender, CommandEventArgs e)
+        {
+            string commandName = NormalizeCommandName(e?.GlobalCommandName);
+            if (string.IsNullOrWhiteSpace(commandName) || !KnownCommands.Contains(commandName))
+            {
+                return;
+            }
+
+            int usageCount = PaletteUsageStore.Increment(commandName);
+            DungXPaletteHost.NotifyCommandUsage(commandName, usageCount);
+        }
+
+        private static void OnDocumentLispWillStart(object sender, LispWillStartEventArgs e)
+        {
+            Document document = sender as Document;
+            if (document == null)
+            {
+                return;
+            }
+
+            string commandName = TryResolveKnownLispCommandName(e?.FirstLine);
+            if (string.IsNullOrWhiteSpace(commandName))
+            {
+                return;
+            }
+
+            PendingLispCommands[document.UnmanagedObject] = commandName;
+        }
+
+        private static void OnDocumentLispEnded(object sender, EventArgs e)
+        {
+            CompletePendingLispCommand(sender as Document);
+        }
+
+        private static void OnDocumentLispCancelled(object sender, EventArgs e)
+        {
+            Document document = sender as Document;
+            if (document == null)
+            {
+                return;
+            }
+
+            PendingLispCommands.Remove(document.UnmanagedObject);
+        }
+
+        private static void CompletePendingLispCommand(Document document)
+        {
+            if (document == null)
+            {
+                return;
+            }
+
+            IntPtr pointer = document.UnmanagedObject;
+            if (pointer == IntPtr.Zero ||
+                !PendingLispCommands.TryGetValue(pointer, out string commandName) ||
+                string.IsNullOrWhiteSpace(commandName))
+            {
+                return;
+            }
+
+            PendingLispCommands.Remove(pointer);
+            int usageCount = PaletteUsageStore.Increment(commandName);
+            DungXPaletteHost.NotifyCommandUsage(commandName, usageCount);
+        }
+
+        private static string NormalizeCommandName(string commandName)
+        {
+            string normalized = (commandName ?? string.Empty).Trim();
+            while (normalized.StartsWith(".", StringComparison.Ordinal) ||
+                   normalized.StartsWith("_", StringComparison.Ordinal))
+            {
+                normalized = normalized.Substring(1);
+            }
+
+            return normalized;
+        }
+
+        private static string TryResolveKnownLispCommandName(string firstLine)
+        {
+            string normalizedLine = NormalizeCommandName(firstLine);
+            if (!string.IsNullOrWhiteSpace(normalizedLine) && KnownCommands.Contains(normalizedLine))
+            {
+                return normalizedLine;
+            }
+
+            string line = (firstLine ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                return null;
+            }
+
+            Match cCommandMatch = Regex.Match(
+                line,
+                @"(?i)(?:\(\s*defun\s+[cC]:|[cC]:)(?<name>[a-z0-9_\-$]+)");
+            if (cCommandMatch.Success)
+            {
+                string candidate = NormalizeCommandName(cCommandMatch.Groups["name"].Value);
+                if (KnownCommands.Contains(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            string trimmed = line.TrimStart();
+            if (trimmed.StartsWith("(", StringComparison.Ordinal))
+            {
+                trimmed = trimmed.Substring(1).TrimStart();
+            }
+
+            string leadingToken = new string(
+                trimmed.TakeWhile(ch =>
+                    !char.IsWhiteSpace(ch) &&
+                    ch != '(' &&
+                    ch != ')' &&
+                    ch != '"' &&
+                    ch != '\'')
+                .ToArray());
+
+            string normalizedToken = NormalizeCommandName(leadingToken);
+            return KnownCommands.Contains(normalizedToken)
+                ? normalizedToken
+                : null;
+        }
     }
 
     internal static class DungXLispResolver
@@ -5688,6 +6009,94 @@ namespace AUTOCAD_COMMANDS
                 .ToList();
 
             File.WriteAllLines(DescriptionFilePath, lines, Encoding.UTF8);
+        }
+    }
+
+    internal static class PaletteUsageStore
+    {
+        private static readonly string UsageFilePath =
+            Path.Combine(
+                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
+                "dungx_palette_usage.tsv");
+
+        public static void ApplyUsage(IEnumerable<PaletteCommandItem> items)
+        {
+            Dictionary<string, int> usageMap = Load();
+            foreach (PaletteCommandItem item in items ?? Enumerable.Empty<PaletteCommandItem>())
+            {
+                item.UsageCount = usageMap.TryGetValue(item.CommandName, out int count)
+                    ? count
+                    : 0;
+            }
+        }
+
+        public static int Increment(string commandName)
+        {
+            if (string.IsNullOrWhiteSpace(commandName))
+            {
+                return 0;
+            }
+
+            Dictionary<string, int> usageMap = Load();
+            usageMap[commandName] = usageMap.TryGetValue(commandName, out int count)
+                ? count + 1
+                : 1;
+            SaveAll(usageMap);
+            return usageMap[commandName];
+        }
+
+        public static void Reset()
+        {
+            if (File.Exists(UsageFilePath))
+            {
+                File.Delete(UsageFilePath);
+            }
+        }
+
+        private static Dictionary<string, int> Load()
+        {
+            Dictionary<string, int> map =
+                new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            if (!File.Exists(UsageFilePath))
+            {
+                return map;
+            }
+
+            foreach (string line in File.ReadAllLines(UsageFilePath, Encoding.UTF8))
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                string[] parts = line.Split(new[] { '\t' }, 2);
+                if (parts.Length < 2)
+                {
+                    continue;
+                }
+
+                string commandName = parts[0].Trim();
+                if (string.IsNullOrWhiteSpace(commandName) ||
+                    !int.TryParse(parts[1].Trim(), out int usageCount))
+                {
+                    continue;
+                }
+
+                map[commandName] = Math.Max(0, usageCount);
+            }
+
+            return map;
+        }
+
+        private static void SaveAll(Dictionary<string, int> usageMap)
+        {
+            List<string> lines = usageMap
+                .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(kvp => kvp.Key + "\t" + Math.Max(0, kvp.Value).ToString(CultureInfo.InvariantCulture))
+                .ToList();
+
+            File.WriteAllLines(UsageFilePath, lines, Encoding.UTF8);
         }
     }
 
