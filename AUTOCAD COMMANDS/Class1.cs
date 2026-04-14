@@ -3430,6 +3430,7 @@ namespace AUTOCAD_COMMANDS
         private readonly WF.Button _removeSourceButton;
         private readonly WF.Button _resetUsageButton;
         private readonly WF.Label _summaryLabel;
+        private readonly WF.Label _usageSummaryLabel;
         private readonly WF.Label _statusLabel;
         private readonly WF.CheckBox _autoShowCheckBox;
         private List<PaletteCommandItem> _items;
@@ -3451,10 +3452,11 @@ namespace AUTOCAD_COMMANDS
             {
                 Dock = WF.DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 5,
+                RowCount = 6,
                 Padding = new WF.Padding(8),
                 BackColor = BackgroundColor
             };
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
             layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
             layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
             layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
@@ -3536,7 +3538,8 @@ namespace AUTOCAD_COMMANDS
             _sortModeFilter.Items.AddRange(new object[]
             {
                 "Custom",
-                "A-Z"
+                "A-Z",
+                "Used"
             });
             _sortModeFilter.SelectedIndexChanged += SortModeFilter_SelectedIndexChanged;
             _filterPanel.Controls.Add(_sortModeFilter, 5, 0);
@@ -3599,6 +3602,18 @@ namespace AUTOCAD_COMMANDS
                 GraphicsUnit.Point);
             layout.Controls.Add(_summaryLabel, 0, 2);
 
+            _usageSummaryLabel = CreateLabel("Thong ke dung: chua co du lieu");
+            _usageSummaryLabel.Dock = WF.DockStyle.Fill;
+            _usageSummaryLabel.Padding = new WF.Padding(0, 0, 0, 6);
+            _usageSummaryLabel.Margin = new WF.Padding(0, 0, 0, 2);
+            _usageSummaryLabel.AutoEllipsis = true;
+            _usageSummaryLabel.Font = new System.Drawing.Font(
+                "Segoe UI",
+                8.25F,
+                FontStyle.Regular,
+                GraphicsUnit.Point);
+            layout.Controls.Add(_usageSummaryLabel, 0, 3);
+
             _commandGrid = CreateGrid();
             _commandGrid.AllowDrop = true;
             _commandGrid.CellClick += CommandGrid_CellClick;
@@ -3609,12 +3624,12 @@ namespace AUTOCAD_COMMANDS
             _commandGrid.MouseMove += CommandGrid_MouseMove;
             _commandGrid.DragOver += CommandGrid_DragOver;
             _commandGrid.DragDrop += CommandGrid_DragDrop;
-            layout.Controls.Add(_commandGrid, 0, 3);
+            layout.Controls.Add(_commandGrid, 0, 4);
 
             _statusLabel = CreateLabel("San sang");
             _statusLabel.Dock = WF.DockStyle.Fill;
             _statusLabel.Padding = new WF.Padding(0, 8, 0, 0);
-            layout.Controls.Add(_statusLabel, 0, 4);
+            layout.Controls.Add(_statusLabel, 0, 5);
 
             _items = new List<PaletteCommandItem>();
             Resize += (_, __) => ApplyResponsiveLayout();
@@ -3875,7 +3890,10 @@ namespace AUTOCAD_COMMANDS
                 : string.Join(" | ", sourceParts);
 
             _summaryLabel.Text =
-                $"Tong lenh: {allItems.Count} | Dang hien: {visibleItems.Count} | Da dung: {usedCommandCount} | Tong luot: {totalUsage} | Theo nguon: {sourceSummary}";
+                $"Tong lenh: {allItems.Count} | Dang hien: {visibleItems.Count} | Theo nguon: {sourceSummary}";
+            _usageSummaryLabel.Text = totalUsage > 0
+                ? $"Tong luot dung: {totalUsage} | So lenh da dung: {usedCommandCount}"
+                : "Tong luot dung: 0 | So lenh da dung: 0";
         }
 
         private static WF.DataGridView CreateGrid()
@@ -4027,9 +4045,12 @@ namespace AUTOCAD_COMMANDS
             PaletteSortMode mode = GetCurrentSortMode();
             PaletteLayoutStore.SaveSortMode(mode);
             BindGrid();
-            SetStatus(mode == PaletteSortMode.Custom
-                ? "Dang sap xep theo yeu thich + thu tu tuy chinh."
-                : "Dang sap xep theo ABC.");
+            SetStatus(
+                mode == PaletteSortMode.Custom
+                    ? "Dang sap xep theo yeu thich + thu tu tuy chinh."
+                    : mode == PaletteSortMode.Used
+                        ? "Dang sap xep theo so lan su dung."
+                        : "Dang sap xep theo ABC.");
         }
 
         private IEnumerable<PaletteCommandItem> ApplySortMode(IEnumerable<PaletteCommandItem> items)
@@ -4039,6 +4060,12 @@ namespace AUTOCAD_COMMANDS
                 case PaletteSortMode.Alphabetical:
                     return items
                         .OrderByDescending(item => item.IsFavorite)
+                        .ThenBy(item => item.CommandName, StringComparer.OrdinalIgnoreCase)
+                        .ThenBy(item => item.SourceLabel, StringComparer.OrdinalIgnoreCase);
+                case PaletteSortMode.Used:
+                    return items
+                        .OrderByDescending(item => item.UsageCount)
+                        .ThenByDescending(item => item.IsFavorite)
                         .ThenBy(item => item.CommandName, StringComparer.OrdinalIgnoreCase)
                         .ThenBy(item => item.SourceLabel, StringComparer.OrdinalIgnoreCase);
                 default:
@@ -4052,14 +4079,27 @@ namespace AUTOCAD_COMMANDS
         private PaletteSortMode GetCurrentSortMode()
         {
             string selected = Convert.ToString(_sortModeFilter.SelectedItem) ?? "Custom";
-            return string.Equals(selected, "A-Z", StringComparison.OrdinalIgnoreCase)
-                ? PaletteSortMode.Alphabetical
-                : PaletteSortMode.Custom;
+            if (string.Equals(selected, "A-Z", StringComparison.OrdinalIgnoreCase))
+            {
+                return PaletteSortMode.Alphabetical;
+            }
+
+            if (string.Equals(selected, "Used", StringComparison.OrdinalIgnoreCase))
+            {
+                return PaletteSortMode.Used;
+            }
+
+            return PaletteSortMode.Custom;
         }
 
         private void SetSortMode(PaletteSortMode mode)
         {
-            string label = mode == PaletteSortMode.Alphabetical ? "A-Z" : "Custom";
+            string label =
+                mode == PaletteSortMode.Alphabetical
+                    ? "A-Z"
+                    : mode == PaletteSortMode.Used
+                        ? "Used"
+                        : "Custom";
             int index = _sortModeFilter.FindStringExact(label);
             _sortModeFilter.SelectedIndex = index >= 0 ? index : 0;
         }
@@ -5544,7 +5584,8 @@ namespace AUTOCAD_COMMANDS
     internal enum PaletteSortMode
     {
         Custom,
-        Alphabetical
+        Alphabetical,
+        Used
     }
 
     internal enum PaletteSourceKind
@@ -6444,14 +6485,27 @@ namespace AUTOCAD_COMMANDS
             }
 
             string mode = (File.ReadAllText(SortModeFilePath, Encoding.UTF8) ?? string.Empty).Trim();
-            return string.Equals(mode, "A-Z", StringComparison.OrdinalIgnoreCase)
-                ? PaletteSortMode.Alphabetical
-                : PaletteSortMode.Custom;
+            if (string.Equals(mode, "A-Z", StringComparison.OrdinalIgnoreCase))
+            {
+                return PaletteSortMode.Alphabetical;
+            }
+
+            if (string.Equals(mode, "Used", StringComparison.OrdinalIgnoreCase))
+            {
+                return PaletteSortMode.Used;
+            }
+
+            return PaletteSortMode.Custom;
         }
 
         public static void SaveSortMode(PaletteSortMode mode)
         {
-            string value = mode == PaletteSortMode.Alphabetical ? "A-Z" : "Custom";
+            string value =
+                mode == PaletteSortMode.Alphabetical
+                    ? "A-Z"
+                    : mode == PaletteSortMode.Used
+                        ? "Used"
+                        : "Custom";
             File.WriteAllText(SortModeFilePath, value, Encoding.UTF8);
         }
 
