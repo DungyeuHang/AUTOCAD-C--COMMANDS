@@ -3436,6 +3436,7 @@ namespace AUTOCAD_COMMANDS
         private List<PaletteCommandItem> _items;
         private Point _dragStartPoint;
         private int _dragRowIndex = -1;
+        private bool _isApplyingColumnWidths;
 
         public DungXPaletteControl()
         {
@@ -3624,7 +3625,9 @@ namespace AUTOCAD_COMMANDS
             _commandGrid.MouseMove += CommandGrid_MouseMove;
             _commandGrid.DragOver += CommandGrid_DragOver;
             _commandGrid.DragDrop += CommandGrid_DragDrop;
+            _commandGrid.ColumnWidthChanged += CommandGrid_ColumnWidthChanged;
             layout.Controls.Add(_commandGrid, 0, 4);
+            ApplySavedColumnWidths();
 
             _statusLabel = CreateLabel("San sang");
             _statusLabel.Dock = WF.DockStyle.Fill;
@@ -4330,6 +4333,64 @@ namespace AUTOCAD_COMMANDS
             PaletteLayoutStore.SaveLayout(_items);
             BindGrid(draggedItem.CommandName);
             SetStatus($"Da cap nhat thu tu: {draggedItem.CommandName}");
+        }
+
+        private void CommandGrid_ColumnWidthChanged(object sender, WF.DataGridViewColumnEventArgs e)
+        {
+            if (_isApplyingColumnWidths || e?.Column == null || e.Column.Width <= 0)
+            {
+                return;
+            }
+
+            PaletteLayoutStore.SaveColumnWidths(GetCurrentColumnWidths());
+        }
+
+        private Dictionary<string, int> GetCurrentColumnWidths()
+        {
+            Dictionary<string, int> widths = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (WF.DataGridViewColumn column in _commandGrid.Columns)
+            {
+                if (column == null || string.IsNullOrWhiteSpace(column.Name) || column.Width <= 0)
+                {
+                    continue;
+                }
+
+                widths[column.Name] = column.Width;
+            }
+
+            return widths;
+        }
+
+        private void ApplySavedColumnWidths()
+        {
+            if (_commandGrid.Columns.Count == 0)
+            {
+                return;
+            }
+
+            Dictionary<string, int> widths = PaletteLayoutStore.LoadColumnWidths();
+            if (widths.Count == 0)
+            {
+                return;
+            }
+
+            _isApplyingColumnWidths = true;
+            try
+            {
+                foreach (KeyValuePair<string, int> entry in widths)
+                {
+                    if (!_commandGrid.Columns.Contains(entry.Key))
+                    {
+                        continue;
+                    }
+
+                    _commandGrid.Columns[entry.Key].Width = Math.Max(24, entry.Value);
+                }
+            }
+            finally
+            {
+                _isApplyingColumnWidths = false;
+            }
         }
 
         private void RunSelected()
@@ -6434,6 +6495,11 @@ namespace AUTOCAD_COMMANDS
                 Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
                 "dungx_palette_sort.txt");
 
+        private static readonly string ColumnWidthsFilePath =
+            Path.Combine(
+                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
+                "dungx_palette_columns.tsv");
+
         public static void ApplyLayout(List<PaletteCommandItem> items)
         {
             Dictionary<string, Tuple<bool, int>> saved = LoadLayout();
@@ -6507,6 +6573,64 @@ namespace AUTOCAD_COMMANDS
                         ? "Used"
                         : "Custom";
             File.WriteAllText(SortModeFilePath, value, Encoding.UTF8);
+        }
+
+        public static Dictionary<string, int> LoadColumnWidths()
+        {
+            Dictionary<string, int> widths =
+                new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            if (!File.Exists(ColumnWidthsFilePath))
+            {
+                return widths;
+            }
+
+            foreach (string rawLine in File.ReadAllLines(ColumnWidthsFilePath, Encoding.UTF8))
+            {
+                if (string.IsNullOrWhiteSpace(rawLine))
+                {
+                    continue;
+                }
+
+                string[] parts = rawLine.Split('\t');
+                if (parts.Length < 2)
+                {
+                    continue;
+                }
+
+                string columnName = parts[0].Trim();
+                if (string.IsNullOrWhiteSpace(columnName) ||
+                    !int.TryParse(parts[1].Trim(), out int width) ||
+                    width <= 0)
+                {
+                    continue;
+                }
+
+                widths[columnName] = width;
+            }
+
+            return widths;
+        }
+
+        public static void SaveColumnWidths(IReadOnlyDictionary<string, int> widths)
+        {
+            if (widths == null || widths.Count == 0)
+            {
+                return;
+            }
+
+            List<string> lines = widths
+                .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Key) && kvp.Value > 0)
+                .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(kvp => kvp.Key + "\t" + kvp.Value.ToString())
+                .ToList();
+
+            if (lines.Count == 0)
+            {
+                return;
+            }
+
+            File.WriteAllLines(ColumnWidthsFilePath, lines, Encoding.UTF8);
         }
 
         private static Dictionary<string, Tuple<bool, int>> LoadLayout()
