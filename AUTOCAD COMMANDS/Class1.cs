@@ -3808,32 +3808,7 @@ namespace AUTOCAD_COMMANDS
         private void BindGrid(string preferredCommandName = null)
         {
             preferredCommandName = preferredCommandName ?? GetSelectedCommandName();
-            string search = (_searchBox.Text ?? string.Empty).Trim();
-            string source = Convert.ToString(_sourceFilter.SelectedItem) ?? "All";
-            string type = Convert.ToString(_typeFilter.SelectedItem) ?? "All";
-
-            IEnumerable<PaletteCommandItem> filtered = _items;
-
-            if (!string.Equals(source, "All", StringComparison.OrdinalIgnoreCase))
-            {
-                filtered = filtered.Where(
-                    item => string.Equals(item.SourceLabel, source, StringComparison.OrdinalIgnoreCase));
-            }
-
-            if (!string.Equals(type, "All", StringComparison.OrdinalIgnoreCase))
-            {
-                filtered = filtered.Where(item => MatchesTypeFilter(item.SourceKind, type));
-            }
-
-            if (!string.IsNullOrWhiteSpace(search))
-            {
-                filtered = filtered.Where(item =>
-                    item.CommandName.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    item.Description.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    item.SourceLabel.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0);
-            }
-
-            List<PaletteCommandItem> filteredItems = ApplySortMode(filtered).ToList();
+            List<PaletteCommandItem> filteredItems = GetFilteredItems();
             UpdateSummary(filteredItems);
 
             _commandGrid.Rows.Clear();
@@ -4393,6 +4368,36 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
+        private List<PaletteCommandItem> GetFilteredItems()
+        {
+            string search = (_searchBox.Text ?? string.Empty).Trim();
+            string source = Convert.ToString(_sourceFilter.SelectedItem) ?? "All";
+            string type = Convert.ToString(_typeFilter.SelectedItem) ?? "All";
+
+            IEnumerable<PaletteCommandItem> filtered = _items;
+
+            if (!string.Equals(source, "All", StringComparison.OrdinalIgnoreCase))
+            {
+                filtered = filtered.Where(
+                    item => string.Equals(item.SourceLabel, source, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (!string.Equals(type, "All", StringComparison.OrdinalIgnoreCase))
+            {
+                filtered = filtered.Where(item => MatchesTypeFilter(item.SourceKind, type));
+            }
+
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                filtered = filtered.Where(item =>
+                    item.CommandName.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    item.Description.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    item.SourceLabel.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0);
+            }
+
+            return ApplySortMode(filtered).ToList();
+        }
+
         private void RunSelected()
         {
             PaletteCommandItem item = GetSelectedItem();
@@ -4521,13 +4526,31 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
+            string selectedCommandName = GetSelectedCommandName();
             foreach (PaletteCommandItem item in _items.Where(current =>
                 string.Equals(current.CommandName, commandName, StringComparison.OrdinalIgnoreCase)))
             {
                 item.UsageCount = usageCount;
             }
 
-            BindGrid(commandName);
+            if (GetCurrentSortMode() == PaletteSortMode.Used)
+            {
+                BindGrid(selectedCommandName);
+                return;
+            }
+
+            UpdateSummary(GetFilteredItems());
+
+            foreach (WF.DataGridViewRow row in _commandGrid.Rows)
+            {
+                PaletteCommandItem item = row.Tag as PaletteCommandItem;
+                if (item == null)
+                {
+                    continue;
+                }
+
+                row.Cells["Used"].Value = item.UsageCount;
+            }
         }
 
         private void RefreshSourceFilter(string preferredSelection)
