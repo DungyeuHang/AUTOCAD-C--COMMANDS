@@ -341,6 +341,210 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
+        [CommandMethod("DDD_Dim_4_direction", CommandFlags.UsePickSet)]
+        public void AutoDimFourDirections()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            if (doc == null)
+            {
+                return;
+            }
+
+            Database db = doc.Database;
+            Editor ed = doc.Editor;
+
+            ObjectId[] sourceIds = TryConsumePickFirst(ed);
+            if (sourceIds == null || sourceIds.Length == 0)
+            {
+                SelectionSet sourceSelection = PromptForSelection(
+                    ed,
+                    "\nChọn đối tượng gốc hoặc nhóm đối tượng:");
+                if (sourceSelection == null)
+                {
+                    return;
+                }
+
+                sourceIds = sourceSelection.GetObjectIds();
+            }
+
+            DddTargetFilter savedFilter = DddTargetFilterStore.Load();
+            if (!PromptForDddTargetFilter(ed, db, savedFilter, out DddTargetFilter targetFilter))
+            {
+                return;
+            }
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                Extents3d? sourceExtents = TryGetSelectionExtentsSafe(sourceIds, tr);
+                if (!sourceExtents.HasValue)
+                {
+                    ed.WriteMessage("\nDDD_Dim_4_direction: không lấy được extents của đối tượng gốc.");
+                    return;
+                }
+
+                Point3d sourceCenter = GetCenter(sourceExtents.Value);
+                HashSet<ObjectId> sourceSet = new HashSet<ObjectId>(sourceIds);
+
+                BlockTableRecord currentSpace =
+                    tr.GetObject(db.CurrentSpaceId, OpenMode.ForRead) as BlockTableRecord;
+                if (currentSpace == null)
+                {
+                    return;
+                }
+
+                Extents3d? leftExtents = null;
+                Extents3d? rightExtents = null;
+                Extents3d? topExtents = null;
+                Extents3d? bottomExtents = null;
+                double leftDistance = double.MaxValue;
+                double rightDistance = double.MaxValue;
+                double topDistance = double.MaxValue;
+                double bottomDistance = double.MaxValue;
+
+                foreach (ObjectId id in currentSpace)
+                {
+                    if (sourceSet.Contains(id))
+                    {
+                        continue;
+                    }
+
+                    Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
+                    if (!IsAutoDimTargetCandidate(entity, tr, targetFilter))
+                    {
+                        continue;
+                    }
+
+                    if (!TryGetEntityExtentsSafe(entity, out Extents3d extents))
+                    {
+                        continue;
+                    }
+
+                    if (HasVerticalOverlap(sourceExtents.Value, extents))
+                    {
+                        double currentLeftDistance = sourceExtents.Value.MinPoint.X - extents.MaxPoint.X;
+                        if (currentLeftDistance >= -AutoDimTolerance &&
+                            currentLeftDistance < leftDistance)
+                        {
+                            leftDistance = Math.Max(0.0, currentLeftDistance);
+                            leftExtents = extents;
+                        }
+
+                        double currentRightDistance = extents.MinPoint.X - sourceExtents.Value.MaxPoint.X;
+                        if (currentRightDistance >= -AutoDimTolerance &&
+                            currentRightDistance < rightDistance)
+                        {
+                            rightDistance = Math.Max(0.0, currentRightDistance);
+                            rightExtents = extents;
+                        }
+                    }
+
+                    if (HasHorizontalOverlap(sourceExtents.Value, extents))
+                    {
+                        double currentTopDistance = extents.MinPoint.Y - sourceExtents.Value.MaxPoint.Y;
+                        if (currentTopDistance >= -AutoDimTolerance &&
+                            currentTopDistance < topDistance)
+                        {
+                            topDistance = Math.Max(0.0, currentTopDistance);
+                            topExtents = extents;
+                        }
+
+                        double currentBottomDistance = sourceExtents.Value.MinPoint.Y - extents.MaxPoint.Y;
+                        if (currentBottomDistance >= -AutoDimTolerance &&
+                            currentBottomDistance < bottomDistance)
+                        {
+                            bottomDistance = Math.Max(0.0, currentBottomDistance);
+                            bottomExtents = extents;
+                        }
+                    }
+                }
+
+                if (!leftExtents.HasValue &&
+                    !rightExtents.HasValue &&
+                    !topExtents.HasValue &&
+                    !bottomExtents.HasValue)
+                {
+                    ed.WriteMessage("\nDDD_Dim_4_direction: không tìm thấy đối tượng bao quanh phù hợp.");
+                    return;
+                }
+
+                BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                BlockTableRecord ms =
+                    tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
+                if (ms == null)
+                {
+                    return;
+                }
+
+                ObjectId dimLayerId = EnsureAutoDimLayer(db, tr);
+                int createdCount = 0;
+
+                if (leftExtents.HasValue && leftDistance > AutoDimTolerance)
+                {
+                    CreateDimWithLayer(
+                        ms,
+                        tr,
+                        db,
+                        dimLayerId,
+                        0.0,
+                        new Point3d(leftExtents.Value.MaxPoint.X, sourceCenter.Y, 0.0),
+                        new Point3d(sourceExtents.Value.MinPoint.X, sourceCenter.Y, 0.0),
+                        new Point3d(sourceCenter.X, sourceCenter.Y, 0.0));
+                    createdCount++;
+                }
+
+                if (rightExtents.HasValue && rightDistance > AutoDimTolerance)
+                {
+                    CreateDimWithLayer(
+                        ms,
+                        tr,
+                        db,
+                        dimLayerId,
+                        0.0,
+                        new Point3d(sourceExtents.Value.MaxPoint.X, sourceCenter.Y, 0.0),
+                        new Point3d(rightExtents.Value.MinPoint.X, sourceCenter.Y, 0.0),
+                        new Point3d(sourceCenter.X, sourceCenter.Y, 0.0));
+                    createdCount++;
+                }
+
+                if (topExtents.HasValue && topDistance > AutoDimTolerance)
+                {
+                    CreateDimWithLayer(
+                        ms,
+                        tr,
+                        db,
+                        dimLayerId,
+                        Math.PI / 2.0,
+                        new Point3d(sourceCenter.X, sourceExtents.Value.MaxPoint.Y, 0.0),
+                        new Point3d(sourceCenter.X, topExtents.Value.MinPoint.Y, 0.0),
+                        new Point3d(sourceCenter.X, sourceCenter.Y, 0.0));
+                    createdCount++;
+                }
+
+                if (bottomExtents.HasValue && bottomDistance > AutoDimTolerance)
+                {
+                    CreateDimWithLayer(
+                        ms,
+                        tr,
+                        db,
+                        dimLayerId,
+                        Math.PI / 2.0,
+                        new Point3d(sourceCenter.X, bottomExtents.Value.MaxPoint.Y, 0.0),
+                        new Point3d(sourceCenter.X, sourceExtents.Value.MinPoint.Y, 0.0),
+                        new Point3d(sourceCenter.X, sourceCenter.Y, 0.0));
+                    createdCount++;
+                }
+
+                if (createdCount == 0)
+                {
+                    ed.WriteMessage("\nDDD_Dim_4_direction: không có khoảng hở hợp lệ để dim.");
+                    return;
+                }
+
+                tr.Commit();
+                ed.WriteMessage($"\nDDD_Dim_4_direction: đã tạo {createdCount} dim.");
+            }
+        }
+
         // ======================================================
         // HÀM TẠO DIM
         // ======================================================
@@ -357,6 +561,36 @@ namespace AUTOCAD_COMMANDS
                 angle, p1, p2, dimPoint, "", db.Dimstyle);
             // 👉 SET LAYER Ở ĐÂY
             dim.Layer = "_mss.kichthuoc";
+            ms.AppendEntity(dim);
+            tr.AddNewlyCreatedDBObject(dim, true);
+        }
+
+        private void CreateDimWithLayer(
+            BlockTableRecord ms,
+            Transaction tr,
+            Database db,
+            ObjectId layerId,
+            double angle,
+            Point3d p1,
+            Point3d p2,
+            Point3d dimPoint)
+        {
+            RotatedDimension dim = new RotatedDimension(
+                angle,
+                p1,
+                p2,
+                dimPoint,
+                string.Empty,
+                db.Dimstyle);
+            if (!layerId.IsNull)
+            {
+                dim.LayerId = layerId;
+            }
+            else
+            {
+                dim.Layer = "_mss.kichthuoc";
+            }
+
             ms.AppendEntity(dim);
             tr.AddNewlyCreatedDBObject(dim, true);
         }
@@ -424,6 +658,384 @@ namespace AUTOCAD_COMMANDS
                 }
 
                 ed.WriteMessage("\nChưa chọn được đối tượng hợp lệ, hãy chọn lại.");
+            }
+        }
+
+        private static ObjectId[] TryConsumePickFirst(Editor ed)
+        {
+            PromptSelectionResult impliedResult = ed.SelectImplied();
+            if (impliedResult.Status != PromptStatus.OK || impliedResult.Value == null)
+            {
+                return null;
+            }
+
+            ObjectId[] objectIds = impliedResult.Value.GetObjectIds();
+            if (objectIds == null || objectIds.Length == 0)
+            {
+                return null;
+            }
+
+            ed.SetImpliedSelection(Array.Empty<ObjectId>());
+            return objectIds;
+        }
+
+        private Extents3d? TryGetSelectionExtentsSafe(IEnumerable<ObjectId> objectIds, Transaction tr)
+        {
+            Extents3d? extents = null;
+            foreach (ObjectId objectId in objectIds ?? Enumerable.Empty<ObjectId>())
+            {
+                if (objectId.IsNull)
+                {
+                    continue;
+                }
+
+                Entity entity = tr.GetObject(objectId, OpenMode.ForRead) as Entity;
+                if (!TryGetEntityExtentsSafe(entity, out Extents3d currentExtents))
+                {
+                    continue;
+                }
+
+                extents = extents.HasValue
+                    ? MergeExtents(extents.Value, currentExtents)
+                    : currentExtents;
+            }
+
+            return extents;
+        }
+
+        private bool TryGetEntityExtentsSafe(Entity entity, out Extents3d extents)
+        {
+            try
+            {
+                if (entity == null || entity.IsErased)
+                {
+                    extents = default;
+                    return false;
+                }
+
+                extents = entity.GeometricExtents;
+                return true;
+            }
+            catch
+            {
+                extents = default;
+                return false;
+            }
+        }
+
+        private static Extents3d MergeExtents(Extents3d left, Extents3d right)
+        {
+            return new Extents3d(
+                new Point3d(
+                    Math.Min(left.MinPoint.X, right.MinPoint.X),
+                    Math.Min(left.MinPoint.Y, right.MinPoint.Y),
+                    Math.Min(left.MinPoint.Z, right.MinPoint.Z)),
+                new Point3d(
+                    Math.Max(left.MaxPoint.X, right.MaxPoint.X),
+                    Math.Max(left.MaxPoint.Y, right.MaxPoint.Y),
+                    Math.Max(left.MaxPoint.Z, right.MaxPoint.Z)));
+        }
+
+        private bool IsAutoDimTargetCandidate(
+            Entity entity,
+            Transaction tr,
+            DddTargetFilter targetFilter)
+        {
+            if (entity == null || entity.IsErased)
+            {
+                return false;
+            }
+
+            if (entity is Dimension ||
+                entity is DBText ||
+                entity is MText ||
+                entity is AttributeDefinition ||
+                entity is AttributeReference)
+            {
+                return false;
+            }
+
+            try
+            {
+                if (!entity.Visible)
+                {
+                    return false;
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                LayerTableRecord layer =
+                    tr.GetObject(entity.LayerId, OpenMode.ForRead) as LayerTableRecord;
+                if (layer != null && (layer.IsOff || layer.IsFrozen))
+                {
+                    return false;
+                }
+            }
+            catch
+            {
+            }
+
+            if (targetFilter == null)
+            {
+                return true;
+            }
+
+            if (!string.Equals(entity.Layer, targetFilter.LayerName, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return TryGetDddTargetKind(entity, out DddTargetKind kind) && kind == targetFilter.Kind;
+        }
+
+        private bool PromptForDddTargetFilter(
+            Editor ed,
+            Database db,
+            DddTargetFilter savedFilter,
+            out DddTargetFilter targetFilter)
+        {
+            while (true)
+            {
+                string defaultLabel = savedFilter?.ToDisplayText() ?? "None";
+                PromptKeywordOptions options =
+                    new PromptKeywordOptions(
+                        $"\nChọn đối tượng đích [Pick/None] <{defaultLabel}>: ");
+                options.AllowNone = true;
+                options.Keywords.Add("Pick");
+                options.Keywords.Add("None");
+
+                PromptResult result = ed.GetKeywords(options);
+                if (result.Status == PromptStatus.Cancel)
+                {
+                    targetFilter = null;
+                    return false;
+                }
+
+                if (result.Status == PromptStatus.None)
+                {
+                    targetFilter = savedFilter;
+                    return true;
+                }
+
+                if (string.Equals(result.StringResult, "None", StringComparison.OrdinalIgnoreCase))
+                {
+                    targetFilter = null;
+                    DddTargetFilterStore.Save(null);
+                    return true;
+                }
+
+                PromptEntityOptions entityOptions =
+                    new PromptEntityOptions("\nChọn Line / Polyline / Block làm mẫu đích: ");
+                entityOptions.SetRejectMessage("\nChỉ hỗ trợ Line, Polyline hoặc BlockReference.");
+                entityOptions.AddAllowedClass(typeof(Line), true);
+                entityOptions.AddAllowedClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline), true);
+                entityOptions.AddAllowedClass(typeof(Polyline2d), true);
+                entityOptions.AddAllowedClass(typeof(Polyline3d), true);
+                entityOptions.AddAllowedClass(typeof(BlockReference), true);
+
+                PromptEntityResult entityResult = ed.GetEntity(entityOptions);
+                if (entityResult.Status == PromptStatus.Cancel)
+                {
+                    targetFilter = null;
+                    return false;
+                }
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    Entity entity = tr.GetObject(entityResult.ObjectId, OpenMode.ForRead) as Entity;
+                    if (TryCreateDddTargetFilter(entity, out DddTargetFilter pickedFilter))
+                    {
+                        targetFilter = pickedFilter;
+                        DddTargetFilterStore.Save(targetFilter);
+                        return true;
+                    }
+                }
+
+                ed.WriteMessage("\nKhông đọc được filter từ đối tượng vừa chọn, hãy chọn lại.");
+            }
+        }
+
+        private bool TryCreateDddTargetFilter(Entity entity, out DddTargetFilter targetFilter)
+        {
+            targetFilter = null;
+            if (entity == null || string.IsNullOrWhiteSpace(entity.Layer))
+            {
+                return false;
+            }
+
+            if (!TryGetDddTargetKind(entity, out DddTargetKind kind))
+            {
+                return false;
+            }
+
+            targetFilter = new DddTargetFilter
+            {
+                Kind = kind,
+                LayerName = entity.Layer
+            };
+            return true;
+        }
+
+        private bool TryGetDddTargetKind(Entity entity, out DddTargetKind kind)
+        {
+            if (entity is Line)
+            {
+                kind = DddTargetKind.Line;
+                return true;
+            }
+
+            if (entity is Autodesk.AutoCAD.DatabaseServices.Polyline ||
+                entity is Polyline2d ||
+                entity is Polyline3d)
+            {
+                kind = DddTargetKind.Polyline;
+                return true;
+            }
+
+            if (entity is BlockReference)
+            {
+                kind = DddTargetKind.Block;
+                return true;
+            }
+
+            kind = default;
+            return false;
+        }
+
+        private bool HasVerticalOverlap(Extents3d sourceExtents, Extents3d targetExtents)
+        {
+            return targetExtents.MaxPoint.Y >= sourceExtents.MinPoint.Y - AutoDimTolerance &&
+                   targetExtents.MinPoint.Y <= sourceExtents.MaxPoint.Y + AutoDimTolerance;
+        }
+
+        private bool HasHorizontalOverlap(Extents3d sourceExtents, Extents3d targetExtents)
+        {
+            return targetExtents.MaxPoint.X >= sourceExtents.MinPoint.X - AutoDimTolerance &&
+                   targetExtents.MinPoint.X <= sourceExtents.MaxPoint.X + AutoDimTolerance;
+        }
+
+        private ObjectId EnsureAutoDimLayer(Database db, Transaction tr)
+        {
+            const string dimLayerName = "_mss.kichthuoc";
+            LayerTable layerTable =
+                tr.GetObject(db.LayerTableId, OpenMode.ForRead) as LayerTable;
+
+            if (layerTable == null)
+            {
+                return ObjectId.Null;
+            }
+
+            if (layerTable.Has(dimLayerName))
+            {
+                return layerTable[dimLayerName];
+            }
+
+            layerTable.UpgradeOpen();
+            LayerTableRecord layer = new LayerTableRecord
+            {
+                Name = dimLayerName
+            };
+
+            ObjectId layerId = layerTable.Add(layer);
+            tr.AddNewlyCreatedDBObject(layer, true);
+            return layerId;
+        }
+
+        private enum DddTargetKind
+        {
+            Line,
+            Polyline,
+            Block
+        }
+
+        private sealed class DddTargetFilter
+        {
+            public DddTargetKind Kind { get; set; }
+            public string LayerName { get; set; }
+
+            public string ToDisplayText()
+            {
+                return $"{Kind} | {LayerName}";
+            }
+        }
+
+        private static class DddTargetFilterStore
+        {
+            private static readonly string FilePath =
+                Path.Combine(
+                    Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
+                    "ddd_dim_target_filter.tsv");
+
+            public static DddTargetFilter Load()
+            {
+                if (!File.Exists(FilePath))
+                {
+                    return null;
+                }
+
+                try
+                {
+                    string raw = File.ReadAllText(FilePath, Encoding.UTF8);
+                    if (string.IsNullOrWhiteSpace(raw))
+                    {
+                        return null;
+                    }
+
+                    string[] parts = raw.Split('\t');
+                    if (parts.Length < 2)
+                    {
+                        return null;
+                    }
+
+                    if (!Enum.TryParse(parts[0].Trim(), true, out DddTargetKind kind))
+                    {
+                        return null;
+                    }
+
+                    string layerName = parts[1].Trim();
+                    if (string.IsNullOrWhiteSpace(layerName))
+                    {
+                        return null;
+                    }
+
+                    return new DddTargetFilter
+                    {
+                        Kind = kind,
+                        LayerName = layerName
+                    };
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+
+            public static void Save(DddTargetFilter filter)
+            {
+                try
+                {
+                    if (filter == null)
+                    {
+                        if (File.Exists(FilePath))
+                        {
+                            File.Delete(FilePath);
+                        }
+
+                        return;
+                    }
+
+                    File.WriteAllText(
+                        FilePath,
+                        filter.Kind + "\t" + (filter.LayerName ?? string.Empty),
+                        Encoding.UTF8);
+                }
+                catch
+                {
+                }
             }
         }
     }
