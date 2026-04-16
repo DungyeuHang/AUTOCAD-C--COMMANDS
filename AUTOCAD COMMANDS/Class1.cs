@@ -462,7 +462,7 @@ namespace AUTOCAD_COMMANDS
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
                 BlockTableRecord currentSpace =
-                    tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
+                    tr.GetObject(db.CurrentSpaceId, OpenMode.ForRead) as BlockTableRecord;
 
                 if (currentSpace == null) return;
 
@@ -488,6 +488,7 @@ namespace AUTOCAD_COMMANDS
                 }
 
                 ObjectId dimLayerId = EnsureDimLayer(db, tr);
+                currentSpace.UpgradeOpen();
 
                 RotatedDimension dim = new RotatedDimension
                 {
@@ -603,8 +604,18 @@ namespace AUTOCAD_COMMANDS
                 if (currentSpace == null) return;
 
                 Point3d? targetPoint = useXAxis
-                    ? FindNearestPointOnXAxis(currentSpace, tr, startRes.Value, direction)
-                    : FindNearestPointOnYAxis(currentSpace, tr, startRes.Value, direction);
+                    ? FindNearestPointOnXAxisFromProbe(
+                        currentSpace,
+                        tr,
+                        startRes.Value,
+                        dirRes.Value,
+                        direction)
+                    : FindNearestPointOnYAxisFromProbe(
+                        currentSpace,
+                        tr,
+                        startRes.Value,
+                        dirRes.Value,
+                        direction);
 
                 if (!targetPoint.HasValue)
                 {
@@ -737,10 +748,21 @@ namespace AUTOCAD_COMMANDS
                     Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
                     if (entity == null || entity.IsErased) continue;
                     if (entity is Dimension) continue;
-                    if (!(entity is Curve)) continue;
+                    Curve curve = entity as Curve;
+                    if (curve == null) continue;
+                    if (!IsHorizontalRayCandidate(
+                        curve,
+                        startPoint.Y,
+                        startPoint.X,
+                        startPoint.X,
+                        direction,
+                        bestDistance))
+                    {
+                        continue;
+                    }
 
                     Point3dCollection intersections =
-                        TryGetIntersections(entity, scanLine);
+                        TryGetIntersections(curve, scanLine);
                     if (intersections == null || intersections.Count == 0) continue;
 
                     foreach (Point3d point in intersections)
@@ -752,6 +774,62 @@ namespace AUTOCAD_COMMANDS
                         if (projectedDistance >= bestDistance) continue;
 
                         bestDistance = projectedDistance;
+                        bestPoint = point;
+                    }
+                }
+            }
+
+            return bestPoint;
+        }
+
+        private Point3d? FindNearestPointOnXAxisFromProbe(
+            BlockTableRecord currentSpace,
+            Transaction tr,
+            Point3d startPoint,
+            Point3d probePoint,
+            double direction)
+        {
+            Point3d? bestPoint = null;
+            double bestDistance = double.MaxValue;
+
+            using (Line scanLine = CreateScanLine(probePoint, direction))
+            {
+                foreach (ObjectId id in currentSpace)
+                {
+                    Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
+                    if (entity == null || entity.IsErased) continue;
+                    if (entity is Dimension) continue;
+                    Curve curve = entity as Curve;
+                    if (curve == null) continue;
+                    if (!IsHorizontalRayCandidate(
+                        curve,
+                        probePoint.Y,
+                        startPoint.X,
+                        probePoint.X,
+                        direction,
+                        bestDistance))
+                    {
+                        continue;
+                    }
+
+                    Point3dCollection intersections =
+                        TryGetIntersections(curve, scanLine);
+                    if (intersections == null || intersections.Count == 0) continue;
+
+                    foreach (Point3d point in intersections)
+                    {
+                        double projectedFromStart =
+                            (point.X - startPoint.X) * direction;
+                        double projectedFromProbe =
+                            (point.X - probePoint.X) * direction;
+
+                        if (projectedFromStart <= DirectionTolerance) continue;
+                        if (projectedFromProbe < -DirectionTolerance) continue;
+
+                        double rankDistance = Math.Max(0.0, projectedFromProbe);
+                        if (rankDistance >= bestDistance) continue;
+
+                        bestDistance = rankDistance;
                         bestPoint = point;
                     }
                 }
@@ -776,10 +854,21 @@ namespace AUTOCAD_COMMANDS
                     Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
                     if (entity == null || entity.IsErased) continue;
                     if (entity is Dimension) continue;
-                    if (!(entity is Curve)) continue;
+                    Curve curve = entity as Curve;
+                    if (curve == null) continue;
+                    if (!IsVerticalRayCandidate(
+                        curve,
+                        startPoint.X,
+                        startPoint.Y,
+                        startPoint.Y,
+                        direction,
+                        bestDistance))
+                    {
+                        continue;
+                    }
 
                     Point3dCollection intersections =
-                        TryGetIntersections(entity, scanLine);
+                        TryGetIntersections(curve, scanLine);
                     if (intersections == null || intersections.Count == 0) continue;
 
                     foreach (Point3d point in intersections)
@@ -799,12 +888,172 @@ namespace AUTOCAD_COMMANDS
             return bestPoint;
         }
 
-        private Point3dCollection TryGetIntersections(Entity entity, Line scanLine)
+        private Point3d? FindNearestPointOnYAxisFromProbe(
+            BlockTableRecord currentSpace,
+            Transaction tr,
+            Point3d startPoint,
+            Point3d probePoint,
+            double direction)
+        {
+            Point3d? bestPoint = null;
+            double bestDistance = double.MaxValue;
+
+            using (Line scanLine = CreateVerticalScanLine(probePoint, direction))
+            {
+                foreach (ObjectId id in currentSpace)
+                {
+                    Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
+                    if (entity == null || entity.IsErased) continue;
+                    if (entity is Dimension) continue;
+                    Curve curve = entity as Curve;
+                    if (curve == null) continue;
+                    if (!IsVerticalRayCandidate(
+                        curve,
+                        probePoint.X,
+                        startPoint.Y,
+                        probePoint.Y,
+                        direction,
+                        bestDistance))
+                    {
+                        continue;
+                    }
+
+                    Point3dCollection intersections =
+                        TryGetIntersections(curve, scanLine);
+                    if (intersections == null || intersections.Count == 0) continue;
+
+                    foreach (Point3d point in intersections)
+                    {
+                        double projectedFromStart =
+                            (point.Y - startPoint.Y) * direction;
+                        double projectedFromProbe =
+                            (point.Y - probePoint.Y) * direction;
+
+                        if (projectedFromStart <= DirectionTolerance) continue;
+                        if (projectedFromProbe < -DirectionTolerance) continue;
+
+                        double rankDistance = Math.Max(0.0, projectedFromProbe);
+                        if (rankDistance >= bestDistance) continue;
+
+                        bestDistance = rankDistance;
+                        bestPoint = point;
+                    }
+                }
+            }
+
+            return bestPoint;
+        }
+
+        private bool IsHorizontalRayCandidate(
+            Curve curve,
+            double scanY,
+            double startX,
+            double probeX,
+            double direction,
+            double bestDistance)
+        {
+            if (!TryGetCurveExtents(curve, out Extents3d extents))
+            {
+                return true;
+            }
+
+            if (scanY < extents.MinPoint.Y - DirectionTolerance ||
+                scanY > extents.MaxPoint.Y + DirectionTolerance)
+            {
+                return false;
+            }
+
+            if (direction > 0.0)
+            {
+                if (extents.MaxPoint.X <= startX + DirectionTolerance ||
+                    extents.MaxPoint.X < probeX - DirectionTolerance)
+                {
+                    return false;
+                }
+
+                double minRankDistance = extents.MinPoint.X > probeX
+                    ? extents.MinPoint.X - probeX
+                    : 0.0;
+                return minRankDistance < bestDistance;
+            }
+
+            if (extents.MinPoint.X >= startX - DirectionTolerance ||
+                extents.MinPoint.X > probeX + DirectionTolerance)
+            {
+                return false;
+            }
+
+            double minNegativeRankDistance = extents.MaxPoint.X < probeX
+                ? probeX - extents.MaxPoint.X
+                : 0.0;
+            return minNegativeRankDistance < bestDistance;
+        }
+
+        private bool IsVerticalRayCandidate(
+            Curve curve,
+            double scanX,
+            double startY,
+            double probeY,
+            double direction,
+            double bestDistance)
+        {
+            if (!TryGetCurveExtents(curve, out Extents3d extents))
+            {
+                return true;
+            }
+
+            if (scanX < extents.MinPoint.X - DirectionTolerance ||
+                scanX > extents.MaxPoint.X + DirectionTolerance)
+            {
+                return false;
+            }
+
+            if (direction > 0.0)
+            {
+                if (extents.MaxPoint.Y <= startY + DirectionTolerance ||
+                    extents.MaxPoint.Y < probeY - DirectionTolerance)
+                {
+                    return false;
+                }
+
+                double minRankDistance = extents.MinPoint.Y > probeY
+                    ? extents.MinPoint.Y - probeY
+                    : 0.0;
+                return minRankDistance < bestDistance;
+            }
+
+            if (extents.MinPoint.Y >= startY - DirectionTolerance ||
+                extents.MinPoint.Y > probeY + DirectionTolerance)
+            {
+                return false;
+            }
+
+            double minNegativeRankDistance = extents.MaxPoint.Y < probeY
+                ? probeY - extents.MaxPoint.Y
+                : 0.0;
+            return minNegativeRankDistance < bestDistance;
+        }
+
+        private bool TryGetCurveExtents(Curve curve, out Extents3d extents)
+        {
+            try
+            {
+                extents = curve.GeometricExtents;
+                return true;
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception)
+            {
+                extents = default;
+                return false;
+            }
+        }
+
+        private Point3dCollection TryGetIntersections(Curve curve, Line scanLine)
         {
             try
             {
                 Point3dCollection intersections = new Point3dCollection();
-                entity.IntersectWith(
+                curve.IntersectWith(
                     scanLine,
                     Intersect.OnBothOperands,
                     intersections,
