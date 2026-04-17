@@ -4264,12 +4264,19 @@ namespace AUTOCAD_COMMANDS
 
     internal sealed class DungXPaletteControl : WF.UserControl
     {
-        private static readonly Color BackgroundColor = Color.FromArgb(45, 45, 48);
-        private static readonly Color PanelColor = Color.FromArgb(37, 37, 38);
-        private static readonly Color BorderColor = Color.FromArgb(63, 63, 70);
+        private static readonly Color BackgroundColor = Color.FromArgb(12, 12, 12);
+        private static readonly Color PanelColor = Color.FromArgb(18, 18, 18);
+        private static readonly Color BorderColor = Color.FromArgb(42, 42, 42);
         private static readonly Color ForegroundColor = Color.FromArgb(241, 241, 241);
-        private static readonly Color AccentColor = Color.FromArgb(0, 122, 204);
-        private static readonly Color SelectionColor = Color.FromArgb(62, 62, 64);
+        private static readonly Color AccentColor = Color.FromArgb(94, 94, 94);
+        private static readonly Color SelectionColor = Color.FromArgb(28, 28, 28);
+        private static readonly Color CardColor = Color.FromArgb(20, 20, 20);
+        private static readonly Color CardBorderColor = Color.FromArgb(58, 58, 58);
+        private static readonly Color CardShadowColor = Color.FromArgb(8, 8, 8);
+        private static readonly Color HeaderAccentColor = Color.FromArgb(72, 72, 72);
+        private static readonly Color MutedBadgeColor = Color.FromArgb(40, 40, 40);
+        private static readonly Color FavoriteOnColor = Color.FromArgb(255, 204, 64);
+        private static readonly Color FavoriteOffColor = Color.FromArgb(112, 112, 112);
 
         private readonly WF.TextBox _searchBox;
         private readonly WF.TableLayoutPanel _filterPanel;
@@ -4282,7 +4289,6 @@ namespace AUTOCAD_COMMANDS
         private readonly WF.ComboBox _typeFilter;
         private readonly WF.ComboBox _sortModeFilter;
         private readonly WF.DataGridView _commandGrid;
-        private readonly WF.Button _runButton;
         private readonly WF.Button _reloadButton;
         private readonly WF.Button _folderButton;
         private readonly WF.Button _refreshButton;
@@ -4298,9 +4304,18 @@ namespace AUTOCAD_COMMANDS
         private Point _dragStartPoint;
         private int _dragRowIndex = -1;
         private bool _isApplyingColumnWidths;
+        private int _hoveredCommandRowIndex = -1;
+        private int _pressedCommandRowIndex = -1;
 
         public DungXPaletteControl()
         {
+            SetStyle(
+                WF.ControlStyles.AllPaintingInWmPaint |
+                WF.ControlStyles.OptimizedDoubleBuffer |
+                WF.ControlStyles.ResizeRedraw |
+                WF.ControlStyles.UserPaint,
+                true);
+
             Dock = WF.DockStyle.Fill;
             BackColor = BackgroundColor;
             ForeColor = ForegroundColor;
@@ -4310,28 +4325,45 @@ namespace AUTOCAD_COMMANDS
                 FontStyle.Regular,
                 GraphicsUnit.Point);
 
+            PaletteChromePanel chromePanel = new PaletteChromePanel
+            {
+                Dock = WF.DockStyle.Fill,
+                Padding = new WF.Padding(12),
+                Margin = new WF.Padding(0),
+                BackColor = BackgroundColor
+            };
+            Controls.Add(chromePanel);
+
             WF.TableLayoutPanel layout = new WF.TableLayoutPanel
             {
                 Dock = WF.DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 6,
-                Padding = new WF.Padding(8),
-                BackColor = BackgroundColor
+                RowCount = 7,
+                Padding = new WF.Padding(4),
+                BackColor = PanelColor
             };
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
             layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
             layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
             layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
             layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
             layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.Percent, 100f));
             layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
-            Controls.Add(layout);
+            chromePanel.Controls.Add(layout);
+
+            PaletteTitlePanel titlePanel = new PaletteTitlePanel
+            {
+                Dock = WF.DockStyle.Top,
+                Margin = new WF.Padding(0, 0, 0, 6)
+            };
+            layout.Controls.Add(titlePanel, 0, 0);
 
             _filterPanel = new WF.TableLayoutPanel
             {
                 Dock = WF.DockStyle.Top,
                 ColumnCount = 8,
                 AutoSize = true,
-                BackColor = BackgroundColor
+                BackColor = PanelColor
             };
             _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
             _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Absolute, 170f));
@@ -4341,7 +4373,7 @@ namespace AUTOCAD_COMMANDS
             _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Absolute, 140f));
             _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
             _filterPanel.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
-            layout.Controls.Add(_filterPanel, 0, 0);
+            layout.Controls.Add(_filterPanel, 0, 1);
 
             _sourceLabel = CreateLabel("Source");
             _sourceLabel.Margin = new WF.Padding(0, 6, 8, 0);
@@ -4427,12 +4459,11 @@ namespace AUTOCAD_COMMANDS
                 AutoSize = true,
                 FlowDirection = WF.FlowDirection.LeftToRight,
                 WrapContents = false,
-                Margin = new WF.Padding(0, 8, 0, 8),
-                BackColor = BackgroundColor
+                Margin = new WF.Padding(0, 4, 0, 4),
+                BackColor = PanelColor
             };
-            layout.Controls.Add(_buttonPanel, 0, 1);
+            layout.Controls.Add(_buttonPanel, 0, 2);
 
-            _runButton = CreateButton("Run", (_, __) => RunSelected());
             _reloadButton = CreateButton("Reload LISP", (_, __) => ReloadLisps());
             _folderButton = CreateButton("LISP Folder", (_, __) => PickFolder());
             _addSourceButton = CreateButton("Add Source", (_, __) => AddSource());
@@ -4442,7 +4473,6 @@ namespace AUTOCAD_COMMANDS
             _resetUsageButton = CreateButton("Reset Stats", (_, __) => ResetUsageStats());
             _autoShowCheckBox = CreateCheckBox("Auto Open", AutoShowCheckBox_CheckedChanged);
 
-            _buttonPanel.Controls.Add(_runButton);
             _buttonPanel.Controls.Add(_reloadButton);
             _buttonPanel.Controls.Add(_folderButton);
             _buttonPanel.Controls.Add(_addSourceButton);
@@ -4457,43 +4487,49 @@ namespace AUTOCAD_COMMANDS
             _summaryLabel.Padding = new WF.Padding(0, 2, 0, 6);
             _summaryLabel.Margin = new WF.Padding(0, 0, 0, 2);
             _summaryLabel.AutoEllipsis = true;
+            _summaryLabel.ForeColor = Color.FromArgb(196, 196, 196);
             _summaryLabel.Font = new System.Drawing.Font(
                 "Segoe UI",
                 8.25F,
-                FontStyle.Regular,
+                FontStyle.Bold,
                 GraphicsUnit.Point);
-            layout.Controls.Add(_summaryLabel, 0, 2);
+            layout.Controls.Add(_summaryLabel, 0, 3);
 
             _usageSummaryLabel = CreateLabel("Thong ke dung: chua co du lieu");
             _usageSummaryLabel.Dock = WF.DockStyle.Fill;
             _usageSummaryLabel.Padding = new WF.Padding(0, 0, 0, 6);
             _usageSummaryLabel.Margin = new WF.Padding(0, 0, 0, 2);
             _usageSummaryLabel.AutoEllipsis = true;
+            _usageSummaryLabel.ForeColor = Color.FromArgb(156, 156, 156);
             _usageSummaryLabel.Font = new System.Drawing.Font(
                 "Segoe UI",
                 8.25F,
-                FontStyle.Regular,
+                FontStyle.Bold,
                 GraphicsUnit.Point);
-            layout.Controls.Add(_usageSummaryLabel, 0, 3);
+            layout.Controls.Add(_usageSummaryLabel, 0, 4);
 
             _commandGrid = CreateGrid();
             _commandGrid.AllowDrop = true;
             _commandGrid.CellClick += CommandGrid_CellClick;
-            _commandGrid.CellDoubleClick += CommandGrid_CellDoubleClick;
             _commandGrid.KeyDown += CommandGrid_KeyDown;
             _commandGrid.CellEndEdit += CommandGrid_CellEndEdit;
             _commandGrid.MouseDown += CommandGrid_MouseDown;
             _commandGrid.MouseMove += CommandGrid_MouseMove;
+            _commandGrid.MouseUp += CommandGrid_MouseUp;
+            _commandGrid.MouseLeave += CommandGrid_MouseLeave;
             _commandGrid.DragOver += CommandGrid_DragOver;
             _commandGrid.DragDrop += CommandGrid_DragDrop;
             _commandGrid.ColumnWidthChanged += CommandGrid_ColumnWidthChanged;
-            layout.Controls.Add(_commandGrid, 0, 4);
+            _commandGrid.CellPainting += CommandGrid_CellPainting;
+            layout.Controls.Add(_commandGrid, 0, 5);
+            EnableDoubleBuffer(_commandGrid);
             ApplySavedColumnWidths();
 
             _statusLabel = CreateLabel("San sang");
             _statusLabel.Dock = WF.DockStyle.Fill;
             _statusLabel.Padding = new WF.Padding(0, 8, 0, 0);
-            layout.Controls.Add(_statusLabel, 0, 5);
+            _statusLabel.ForeColor = Color.FromArgb(186, 190, 198);
+            layout.Controls.Add(_statusLabel, 0, 6);
 
             _items = new List<PaletteCommandItem>();
             Resize += (_, __) => ApplyResponsiveLayout();
@@ -4641,7 +4677,6 @@ namespace AUTOCAD_COMMANDS
             _buttonPanel.WrapContents = compact;
             _buttonPanel.Visible = !compact;
 
-            _runButton.Text = compact ? "Run" : "Run";
             _reloadButton.Text = compact ? "LISP" : "Reload LISP";
             _folderButton.Text = compact ? "Dir" : "LISP Folder";
             _addSourceButton.Text = compact ? "+Src" : "Add Source";
@@ -4750,17 +4785,27 @@ namespace AUTOCAD_COMMANDS
                 BackgroundColor = PanelColor,
                 BorderStyle = WF.BorderStyle.FixedSingle,
                 GridColor = BorderColor,
+                CellBorderStyle = WF.DataGridViewCellBorderStyle.SingleHorizontal,
                 RowHeadersVisible = false,
                 EnableHeadersVisualStyles = false,
                 ScrollBars = WF.ScrollBars.Both,
-                AutoSizeColumnsMode = WF.DataGridViewAutoSizeColumnsMode.None
+                AutoSizeColumnsMode = WF.DataGridViewAutoSizeColumnsMode.None,
+                RowTemplate = { Height = 30 }
             };
+
+            grid.ColumnHeadersHeight = 30;
+            grid.ColumnHeadersHeightSizeMode = WF.DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
 
             grid.ColumnHeadersBorderStyle = WF.DataGridViewHeaderBorderStyle.Single;
             grid.ColumnHeadersDefaultCellStyle.BackColor = BackgroundColor;
             grid.ColumnHeadersDefaultCellStyle.ForeColor = ForegroundColor;
             grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = BackgroundColor;
             grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = ForegroundColor;
+            grid.ColumnHeadersDefaultCellStyle.Font = new System.Drawing.Font(
+                "Segoe UI",
+                8.75F,
+                FontStyle.Bold,
+                GraphicsUnit.Point);
 
             grid.DefaultCellStyle.BackColor = PanelColor;
             grid.DefaultCellStyle.ForeColor = ForegroundColor;
@@ -4768,7 +4813,7 @@ namespace AUTOCAD_COMMANDS
             grid.DefaultCellStyle.SelectionForeColor = ForegroundColor;
             grid.DefaultCellStyle.Padding = new WF.Padding(4, 2, 4, 2);
 
-            grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(42, 42, 44);
+            grid.AlternatingRowsDefaultCellStyle.BackColor = PanelColor;
             grid.AlternatingRowsDefaultCellStyle.ForeColor = ForegroundColor;
             grid.AlternatingRowsDefaultCellStyle.SelectionBackColor = SelectionColor;
             grid.AlternatingRowsDefaultCellStyle.SelectionForeColor = ForegroundColor;
@@ -4787,7 +4832,7 @@ namespace AUTOCAD_COMMANDS
             {
                 Name = "Command",
                 HeaderText = "Command",
-                Width = 140,
+                Width = 150,
                 ReadOnly = true,
                 SortMode = WF.DataGridViewColumnSortMode.NotSortable
             };
@@ -4795,7 +4840,7 @@ namespace AUTOCAD_COMMANDS
             {
                 Name = "Used",
                 HeaderText = "Used",
-                Width = 58,
+                Width = 54,
                 ReadOnly = true,
                 SortMode = WF.DataGridViewColumnSortMode.NotSortable
             };
@@ -4804,14 +4849,14 @@ namespace AUTOCAD_COMMANDS
             {
                 Name = "Description",
                 HeaderText = "Description",
-                Width = 220,
+                Width = 210,
                 SortMode = WF.DataGridViewColumnSortMode.NotSortable
             };
             WF.DataGridViewTextBoxColumn sourceColumn = new WF.DataGridViewTextBoxColumn
             {
                 Name = "Source",
                 HeaderText = "Source",
-                Width = 120,
+                Width = 110,
                 ReadOnly = true,
                 SortMode = WF.DataGridViewColumnSortMode.NotSortable
             };
@@ -4832,26 +4877,23 @@ namespace AUTOCAD_COMMANDS
                 Text = text,
                 AutoSize = true,
                 ForeColor = ForegroundColor,
-                BackColor = BackgroundColor,
+                BackColor = PanelColor,
                 Anchor = WF.AnchorStyles.Left
             };
         }
 
-        private static WF.Button CreateButton(string text, EventHandler onClick)
+        private static WF.Button CreateButton(string text, EventHandler onClick, bool primary = true)
         {
-            WF.Button button = new WF.Button
+            PaletteToolbarButton button = new PaletteToolbarButton
             {
                 Text = text,
-                AutoSize = true,
-                Margin = new WF.Padding(0, 0, 8, 0),
-                Padding = new WF.Padding(10, 4, 10, 4),
-                BackColor = PanelColor,
-                ForeColor = ForegroundColor,
-                FlatStyle = WF.FlatStyle.Flat
+                IsPrimary = primary,
+                Font = new System.Drawing.Font(
+                    "Segoe UI",
+                    8.5F,
+                    FontStyle.Bold,
+                    GraphicsUnit.Point)
             };
-            button.FlatAppearance.BorderColor = BorderColor;
-            button.FlatAppearance.MouseDownBackColor = SelectionColor;
-            button.FlatAppearance.MouseOverBackColor = AccentColor;
             button.Click += onClick;
             return button;
         }
@@ -4863,7 +4905,7 @@ namespace AUTOCAD_COMMANDS
                 Text = text,
                 AutoSize = true,
                 Margin = new WF.Padding(4, 7, 0, 0),
-                BackColor = BackgroundColor,
+                BackColor = PanelColor,
                 ForeColor = ForegroundColor
             };
             checkBox.CheckedChanged += onCheckedChanged;
@@ -4955,16 +4997,23 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
-            if (!string.Equals(
-                _commandGrid.Columns[e.ColumnIndex].Name,
-                "Favorite",
-                StringComparison.OrdinalIgnoreCase))
+            PaletteCommandItem item = _commandGrid.Rows[e.RowIndex].Tag as PaletteCommandItem;
+            if (item == null)
             {
                 return;
             }
 
-            PaletteCommandItem item = _commandGrid.Rows[e.RowIndex].Tag as PaletteCommandItem;
-            if (item == null)
+            string columnName = _commandGrid.Columns[e.ColumnIndex].Name;
+            if (string.Equals(columnName, "Command", StringComparison.OrdinalIgnoreCase))
+            {
+                RunItem(item);
+                return;
+            }
+
+            if (!string.Equals(
+                columnName,
+                "Favorite",
+                StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
@@ -4979,22 +5028,6 @@ namespace AUTOCAD_COMMANDS
 
         private void CommandGrid_CellDoubleClick(object sender, WF.DataGridViewCellEventArgs e)
         {
-            if (e.RowIndex < 0)
-            {
-                return;
-            }
-
-            if (!string.Equals(
-                _commandGrid.Columns[e.ColumnIndex].Name,
-                "Description",
-                StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(
-                    _commandGrid.Columns[e.ColumnIndex].Name,
-                    "Favorite",
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                RunSelected();
-            }
         }
 
         private void CommandGrid_KeyDown(object sender, WF.KeyEventArgs e)
@@ -5045,10 +5078,20 @@ namespace AUTOCAD_COMMANDS
             _dragStartPoint = e.Location;
             WF.DataGridView.HitTestInfo hit = _commandGrid.HitTest(e.X, e.Y);
             _dragRowIndex = hit.RowIndex;
+            if (e.Button == WF.MouseButtons.Left &&
+                hit.RowIndex >= 0 &&
+                hit.ColumnIndex >= 0 &&
+                string.Equals(_commandGrid.Columns[hit.ColumnIndex].Name, "Command", StringComparison.OrdinalIgnoreCase))
+            {
+                _pressedCommandRowIndex = hit.RowIndex;
+                _commandGrid.InvalidateRow(hit.RowIndex);
+            }
         }
 
         private void CommandGrid_MouseMove(object sender, WF.MouseEventArgs e)
         {
+            UpdateHoveredCommandRow(e.Location);
+
             if (e.Button != WF.MouseButtons.Left)
             {
                 return;
@@ -5083,6 +5126,35 @@ namespace AUTOCAD_COMMANDS
             }
 
             _commandGrid.DoDragDrop(item, WF.DragDropEffects.Move);
+        }
+
+        private void CommandGrid_MouseUp(object sender, WF.MouseEventArgs e)
+        {
+            if (_pressedCommandRowIndex >= 0)
+            {
+                int previousPressed = _pressedCommandRowIndex;
+                _pressedCommandRowIndex = -1;
+                _commandGrid.InvalidateRow(previousPressed);
+            }
+        }
+
+        private void CommandGrid_MouseLeave(object sender, EventArgs e)
+        {
+            if (_hoveredCommandRowIndex >= 0)
+            {
+                int previousHovered = _hoveredCommandRowIndex;
+                _hoveredCommandRowIndex = -1;
+                _commandGrid.InvalidateRow(previousHovered);
+            }
+
+            if (_pressedCommandRowIndex >= 0)
+            {
+                int previousPressed = _pressedCommandRowIndex;
+                _pressedCommandRowIndex = -1;
+                _commandGrid.InvalidateRow(previousPressed);
+            }
+
+            _commandGrid.Cursor = WF.Cursors.Default;
         }
 
         private void CommandGrid_DragOver(object sender, WF.DragEventArgs e)
@@ -5171,6 +5243,38 @@ namespace AUTOCAD_COMMANDS
             SetStatus($"Da cap nhat thu tu: {draggedItem.CommandName}");
         }
 
+        private void UpdateHoveredCommandRow(Point location)
+        {
+            WF.DataGridView.HitTestInfo hit = _commandGrid.HitTest(location.X, location.Y);
+            int hoveredRow = -1;
+            bool isCommandCell = hit.RowIndex >= 0 &&
+                hit.ColumnIndex >= 0 &&
+                string.Equals(_commandGrid.Columns[hit.ColumnIndex].Name, "Command", StringComparison.OrdinalIgnoreCase);
+
+            if (isCommandCell)
+            {
+                hoveredRow = hit.RowIndex;
+            }
+
+            if (_hoveredCommandRowIndex != hoveredRow)
+            {
+                int previousHovered = _hoveredCommandRowIndex;
+                _hoveredCommandRowIndex = hoveredRow;
+
+                if (previousHovered >= 0 && previousHovered < _commandGrid.Rows.Count)
+                {
+                    _commandGrid.InvalidateRow(previousHovered);
+                }
+
+                if (_hoveredCommandRowIndex >= 0 && _hoveredCommandRowIndex < _commandGrid.Rows.Count)
+                {
+                    _commandGrid.InvalidateRow(_hoveredCommandRowIndex);
+                }
+            }
+
+            _commandGrid.Cursor = isCommandCell ? WF.Cursors.Hand : WF.Cursors.Default;
+        }
+
         private void CommandGrid_ColumnWidthChanged(object sender, WF.DataGridViewColumnEventArgs e)
         {
             if (_isApplyingColumnWidths || e?.Column == null || e.Column.Width <= 0)
@@ -5229,6 +5333,646 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
+        private void CommandGrid_CellPainting(object sender, WF.DataGridViewCellPaintingEventArgs e)
+        {
+            if (e.ColumnIndex < 0)
+            {
+                return;
+            }
+
+            string columnName = _commandGrid.Columns[e.ColumnIndex].Name;
+            if (e.RowIndex < 0)
+            {
+                PaintPaletteHeaderCell(e);
+                return;
+            }
+
+            PaletteCommandItem item = _commandGrid.Rows[e.RowIndex].Tag as PaletteCommandItem;
+            if (item == null)
+            {
+                return;
+            }
+
+            if (string.Equals(columnName, "Command", StringComparison.OrdinalIgnoreCase))
+            {
+                PaintCommandButtonCell(e, item);
+                return;
+            }
+
+            if (string.Equals(columnName, "Favorite", StringComparison.OrdinalIgnoreCase))
+            {
+                PaintFavoriteCell(e, item);
+            }
+        }
+
+        private void PaintPaletteHeaderCell(WF.DataGridViewCellPaintingEventArgs e)
+        {
+            e.Handled = true;
+            e.PaintBackground(e.CellBounds, false);
+
+            using (SolidBrush backBrush = new SolidBrush(BackgroundColor))
+            {
+                e.Graphics.FillRectangle(backBrush, e.CellBounds);
+            }
+
+            Rectangle accentRect = new Rectangle(
+                e.CellBounds.X,
+                e.CellBounds.Bottom - 3,
+                e.CellBounds.Width,
+                3);
+            using (SolidBrush accentBrush = new SolidBrush(HeaderAccentColor))
+            {
+                e.Graphics.FillRectangle(accentBrush, accentRect);
+            }
+
+            Rectangle textBounds = Rectangle.Inflate(e.CellBounds, -8, -4);
+            WF.TextRenderer.DrawText(
+                e.Graphics,
+                Convert.ToString(e.FormattedValue) ?? string.Empty,
+                _commandGrid.ColumnHeadersDefaultCellStyle.Font ?? _commandGrid.Font,
+                textBounds,
+                ForegroundColor,
+                WF.TextFormatFlags.Left | WF.TextFormatFlags.VerticalCenter | WF.TextFormatFlags.EndEllipsis);
+        }
+
+        private void PaintCommandButtonCell(WF.DataGridViewCellPaintingEventArgs e, PaletteCommandItem item)
+        {
+            e.Handled = true;
+            PaintRowBackground(e);
+
+            bool selected = e.State.HasFlag(WF.DataGridViewElementStates.Selected);
+            bool hovered = e.RowIndex == _hoveredCommandRowIndex;
+            bool pressed = e.RowIndex == _pressedCommandRowIndex;
+            (Color topColor, Color bottomColor, Color borderColor) = GetCommandButtonColors(
+                item,
+                selected,
+                hovered,
+                pressed);
+
+            Rectangle buttonBounds = Rectangle.Inflate(e.CellBounds, -4, -4);
+            Rectangle contentBounds = buttonBounds;
+            if (pressed)
+            {
+                contentBounds.Offset(0, 1);
+            }
+
+            if (!pressed)
+            {
+                Rectangle shadowBounds = buttonBounds;
+                shadowBounds.Offset(0, 1);
+                using (GraphicsPath shadowPath = CreatePaletteRoundedRectangle(shadowBounds, 4))
+                using (SolidBrush shadowBrush = new SolidBrush(Color.FromArgb(90, 0, 0, 0)))
+                {
+                    e.Graphics.FillPath(shadowBrush, shadowPath);
+                }
+            }
+
+            using (GraphicsPath buttonPath = CreatePaletteRoundedRectangle(contentBounds, 4))
+            using (LinearGradientBrush fillBrush = new LinearGradientBrush(
+                contentBounds,
+                topColor,
+                bottomColor,
+                LinearGradientMode.Vertical))
+            using (Pen borderPen = new Pen(borderColor))
+            using (Pen innerBorderPen = new Pen(Color.FromArgb(56, 255, 255, 255)))
+            {
+                e.Graphics.FillPath(fillBrush, buttonPath);
+
+                Rectangle glossBounds = new Rectangle(
+                    contentBounds.X + 1,
+                    contentBounds.Y + 1,
+                    Math.Max(1, contentBounds.Width - 2),
+                    Math.Max(5, (contentBounds.Height / 2) - 1));
+                GraphicsState state = e.Graphics.Save();
+                e.Graphics.SetClip(buttonPath);
+                using (LinearGradientBrush glossBrush = new LinearGradientBrush(
+                    glossBounds,
+                    Color.FromArgb(hovered ? 44 : 34, 255, 255, 255),
+                    Color.FromArgb(0, 255, 255, 255),
+                    LinearGradientMode.Vertical))
+                {
+                    e.Graphics.FillRectangle(glossBrush, glossBounds);
+                }
+                e.Graphics.Restore(state);
+
+                e.Graphics.DrawPath(borderPen, buttonPath);
+                e.Graphics.DrawPath(innerBorderPen, buttonPath);
+            }
+
+            if (hovered && !pressed)
+            {
+                using (GraphicsPath hoverPath = CreatePaletteRoundedRectangle(contentBounds, 4))
+                using (Pen hoverPen = new Pen(Color.FromArgb(112, 150, 196)))
+                {
+                    e.Graphics.DrawPath(hoverPen, hoverPath);
+                }
+            }
+
+            Rectangle textBounds = Rectangle.Inflate(contentBounds, -8, -1);
+            using (System.Drawing.Font buttonFont = new System.Drawing.Font(
+                "Segoe UI",
+                8.75F,
+                FontStyle.Bold,
+                GraphicsUnit.Point))
+            {
+                WF.TextRenderer.DrawText(
+                    e.Graphics,
+                    item.CommandName,
+                    buttonFont,
+                    textBounds,
+                    ForegroundColor,
+                    WF.TextFormatFlags.Left | WF.TextFormatFlags.VerticalCenter | WF.TextFormatFlags.EndEllipsis);
+            }
+        }
+
+        private void PaintUsageBadgeCell(WF.DataGridViewCellPaintingEventArgs e, PaletteCommandItem item)
+        {
+            e.Handled = true;
+            PaintRowBackground(e);
+
+            bool selected = e.State.HasFlag(WF.DataGridViewElementStates.Selected);
+            bool hasUsage = item.UsageCount > 0;
+
+            Rectangle badgeBounds = new Rectangle(
+                e.CellBounds.X + 10,
+                e.CellBounds.Y + 8,
+                Math.Max(24, e.CellBounds.Width - 20),
+                Math.Max(18, e.CellBounds.Height - 16));
+
+            Color badgeTop = hasUsage
+                ? (selected ? Color.FromArgb(112, 126, 148) : Color.FromArgb(86, 98, 118))
+                : (selected ? Color.FromArgb(124, 128, 138) : MutedBadgeColor);
+            Color badgeBottom = hasUsage
+                ? (selected ? Color.FromArgb(88, 100, 118) : Color.FromArgb(66, 74, 90))
+                : (selected ? Color.FromArgb(96, 100, 108) : Color.FromArgb(60, 64, 72));
+
+            using (LinearGradientBrush badgeBrush = new LinearGradientBrush(
+                badgeBounds,
+                badgeTop,
+                badgeBottom,
+                LinearGradientMode.Vertical))
+            using (Pen borderPen = new Pen(Color.FromArgb(92, 92, 92)))
+            {
+                e.Graphics.FillRectangle(badgeBrush, badgeBounds);
+                e.Graphics.DrawRectangle(borderPen, badgeBounds);
+            }
+
+            using (System.Drawing.Font badgeFont = new System.Drawing.Font(
+                "Segoe UI",
+                8.5F,
+                FontStyle.Bold,
+                GraphicsUnit.Point))
+            {
+                WF.TextRenderer.DrawText(
+                    e.Graphics,
+                    item.UsageCount.ToString(CultureInfo.InvariantCulture),
+                    badgeFont,
+                    badgeBounds,
+                    ForegroundColor,
+                    WF.TextFormatFlags.HorizontalCenter | WF.TextFormatFlags.VerticalCenter | WF.TextFormatFlags.NoPadding);
+            }
+        }
+
+        private void PaintFavoriteCell(WF.DataGridViewCellPaintingEventArgs e, PaletteCommandItem item)
+        {
+            e.Handled = true;
+            PaintRowBackground(e);
+
+            string starText = item.IsFavorite ? "★" : "☆";
+            Color starColor = item.IsFavorite ? FavoriteOnColor : FavoriteOffColor;
+            using (System.Drawing.Font starFont = new System.Drawing.Font(
+                "Segoe UI Symbol",
+                item.IsFavorite ? 12F : 11F,
+                item.IsFavorite ? FontStyle.Bold : FontStyle.Regular,
+                GraphicsUnit.Point))
+            {
+                WF.TextRenderer.DrawText(
+                    e.Graphics,
+                    starText,
+                    starFont,
+                    e.CellBounds,
+                    starColor,
+                    WF.TextFormatFlags.HorizontalCenter | WF.TextFormatFlags.VerticalCenter | WF.TextFormatFlags.NoPadding);
+            }
+        }
+
+        private void PaintRowBackground(WF.DataGridViewCellPaintingEventArgs e)
+        {
+            Color backColor = e.State.HasFlag(WF.DataGridViewElementStates.Selected)
+                ? SelectionColor
+                : PanelColor;
+
+            using (SolidBrush backBrush = new SolidBrush(backColor))
+            using (Pen separatorPen = new Pen(BorderColor))
+            {
+                e.Graphics.FillRectangle(backBrush, e.CellBounds);
+                e.Graphics.DrawLine(
+                    separatorPen,
+                    e.CellBounds.Left,
+                    e.CellBounds.Bottom - 1,
+                    e.CellBounds.Right,
+                    e.CellBounds.Bottom - 1);
+            }
+        }
+
+        private void PaintCommandGlyph(Graphics graphics, Rectangle bounds, PaletteCommandItem item, bool selected)
+        {
+            Color chipTop = selected ? Color.FromArgb(255, 255, 255) : Color.FromArgb(240, 244, 250);
+            Color chipBottom = selected ? Color.FromArgb(215, 223, 235) : Color.FromArgb(206, 214, 228);
+            Color stroke = selected ? Color.FromArgb(34, 42, 58) : Color.FromArgb(48, 56, 74);
+
+            using (GraphicsPath chipPath = CreatePaletteRoundedRectangle(bounds, 5))
+            using (LinearGradientBrush chipBrush = new LinearGradientBrush(
+                bounds,
+                chipTop,
+                chipBottom,
+                LinearGradientMode.Vertical))
+            using (Pen borderPen = new Pen(Color.FromArgb(160, 172, 192)))
+            using (Pen iconPen = new Pen(stroke, 1.6f))
+            using (SolidBrush iconBrush = new SolidBrush(stroke))
+            {
+                iconPen.StartCap = LineCap.Round;
+                iconPen.EndCap = LineCap.Round;
+                iconPen.LineJoin = LineJoin.Round;
+
+                graphics.FillPath(chipBrush, chipPath);
+                graphics.DrawPath(borderPen, chipPath);
+
+                Rectangle iconBounds = Rectangle.Inflate(bounds, -3, -3);
+                switch (GetCommandGlyphKind(item))
+                {
+                    case "dim":
+                        DrawDimGlyph(graphics, iconPen, iconBrush, iconBounds);
+                        break;
+                    case "stretch":
+                        DrawStretchGlyph(graphics, iconPen, iconBrush, iconBounds);
+                        break;
+                    case "text":
+                        DrawTextGlyph(graphics, iconPen, iconBrush, iconBounds);
+                        break;
+                    case "block":
+                        DrawBlockGlyph(graphics, iconPen, iconBrush, iconBounds);
+                        break;
+                    case "ui":
+                        DrawUiGlyph(graphics, iconPen, iconBrush, iconBounds);
+                        break;
+                    case "reload":
+                        DrawRefreshGlyph(graphics, iconPen, iconBrush, iconBounds);
+                        break;
+                    default:
+                        DrawCommandGlyph(graphics, iconPen, iconBrush, iconBounds);
+                        break;
+                }
+            }
+        }
+
+        private static string GetCommandGlyphKind(PaletteCommandItem item)
+        {
+            string commandName = item?.CommandName?.ToUpperInvariant() ?? string.Empty;
+            if (commandName.Contains("DIM") || commandName.StartsWith("DAA") || commandName.StartsWith("DDD") || commandName.StartsWith("CDD"))
+            {
+                return "dim";
+            }
+
+            if (commandName.Contains("STRETCH") || commandName.StartsWith("SS"))
+            {
+                return "stretch";
+            }
+
+            if (commandName.Contains("TEXT") || commandName.StartsWith("TT"))
+            {
+                return "text";
+            }
+
+            if (commandName.Contains("BLOCK") || commandName.StartsWith("BBB") || commandName.StartsWith("CCC"))
+            {
+                return "block";
+            }
+
+            if (commandName.Contains("PALETTE") || commandName.Contains("RIBBON"))
+            {
+                return "ui";
+            }
+
+            if (commandName.Contains("RELOAD") || item?.SourceKind == PaletteSourceKind.ActionMacro)
+            {
+                return "reload";
+            }
+
+            return "generic";
+        }
+
+        private static System.Drawing.Bitmap CreatePaletteToolbarIcon(string buttonText, Color iconColor)
+        {
+            System.Drawing.Bitmap bitmap = new System.Drawing.Bitmap(18, 18, PixelFormat.Format32bppArgb);
+            using (Graphics graphics = Graphics.FromImage(bitmap))
+            using (Pen pen = new Pen(iconColor, 1.8f))
+            using (SolidBrush brush = new SolidBrush(iconColor))
+            {
+                graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                pen.StartCap = LineCap.Round;
+                pen.EndCap = LineCap.Round;
+                pen.LineJoin = LineJoin.Round;
+
+                Rectangle bounds = new Rectangle(1, 1, 16, 16);
+                string key = GetToolbarGlyphKind(buttonText);
+                switch (key)
+                {
+                    case "run":
+                        DrawRunGlyph(graphics, pen, brush, bounds);
+                        break;
+                    case "folder":
+                        DrawFolderGlyph(graphics, pen, brush, bounds);
+                        break;
+                    case "add":
+                        DrawAddGlyph(graphics, pen, brush, bounds);
+                        break;
+                    case "remove":
+                        DrawRemoveGlyph(graphics, pen, brush, bounds);
+                        break;
+                    case "refresh":
+                        DrawRefreshGlyph(graphics, pen, brush, bounds);
+                        break;
+                    case "reset":
+                        DrawResetGlyph(graphics, pen, brush, bounds);
+                        break;
+                    default:
+                        DrawUiGlyph(graphics, pen, brush, bounds);
+                        break;
+                }
+            }
+
+            return bitmap;
+        }
+
+        private static string GetToolbarGlyphKind(string buttonText)
+        {
+            string text = (buttonText ?? string.Empty).ToUpperInvariant();
+            if (text.Contains("RUN"))
+            {
+                return "run";
+            }
+
+            if (text.Contains("FOLDER"))
+            {
+                return "folder";
+            }
+
+            if (text.Contains("ADD"))
+            {
+                return "add";
+            }
+
+            if (text.Contains("REMOVE"))
+            {
+                return "remove";
+            }
+
+            if (text.Contains("RESET"))
+            {
+                return "reset";
+            }
+
+            if (text.Contains("REFRESH") || text.Contains("RELOAD"))
+            {
+                return "refresh";
+            }
+
+            return "ui";
+        }
+
+        private static void DrawDimGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
+        {
+            int midY = bounds.Top + bounds.Height / 2;
+            int left = bounds.Left + 2;
+            int right = bounds.Right - 2;
+            graphics.DrawLine(pen, left, bounds.Top + 2, left, bounds.Bottom - 2);
+            graphics.DrawLine(pen, right, bounds.Top + 2, right, bounds.Bottom - 2);
+            graphics.DrawLine(pen, left + 1, midY, right - 1, midY);
+            graphics.FillPolygon(brush, new[]
+            {
+                new Point(left + 1, midY),
+                new Point(left + 5, midY - 3),
+                new Point(left + 5, midY + 3)
+            });
+            graphics.FillPolygon(brush, new[]
+            {
+                new Point(right - 1, midY),
+                new Point(right - 5, midY - 3),
+                new Point(right - 5, midY + 3)
+            });
+        }
+
+        private static void DrawStretchGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
+        {
+            Rectangle rect = new Rectangle(bounds.Left + 1, bounds.Top + 4, bounds.Width - 7, bounds.Height - 8);
+            graphics.DrawRectangle(pen, rect);
+            int arrowX = rect.Right + 1;
+            int arrowY = bounds.Top + bounds.Height / 2;
+            graphics.DrawLine(pen, rect.Right - 1, arrowY, arrowX + 2, arrowY);
+            graphics.FillPolygon(brush, new[]
+            {
+                new Point(arrowX + 2, arrowY),
+                new Point(arrowX - 1, arrowY - 3),
+                new Point(arrowX - 1, arrowY + 3)
+            });
+        }
+
+        private static void DrawTextGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
+        {
+            int top = bounds.Top + 2;
+            int centerX = bounds.Left + bounds.Width / 2;
+            graphics.DrawLine(pen, bounds.Left + 2, top, bounds.Right - 2, top);
+            graphics.DrawLine(pen, centerX, top, centerX, bounds.Bottom - 2);
+            graphics.DrawLine(pen, bounds.Left + 4, bounds.Bottom - 3, bounds.Right - 4, bounds.Bottom - 3);
+        }
+
+        private static void DrawBlockGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
+        {
+            Rectangle back = new Rectangle(bounds.Left + 2, bounds.Top + 2, bounds.Width - 7, bounds.Height - 7);
+            Rectangle front = new Rectangle(bounds.Left + 5, bounds.Top + 5, bounds.Width - 7, bounds.Height - 7);
+            graphics.DrawRectangle(pen, back);
+            graphics.DrawRectangle(pen, front);
+            graphics.FillRectangle(brush, front.Left + 3, front.Top + 3, 3, 3);
+        }
+
+        private static void DrawUiGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
+        {
+            Rectangle panel = new Rectangle(bounds.Left + 1, bounds.Top + 2, bounds.Width - 2, bounds.Height - 4);
+            graphics.DrawRectangle(pen, panel);
+            graphics.DrawLine(pen, panel.Left + 4, panel.Top + 1, panel.Left + 4, panel.Bottom - 1);
+            graphics.FillRectangle(brush, panel.Left + 6, panel.Top + 3, panel.Width - 9, 2);
+            graphics.FillRectangle(brush, panel.Left + 6, panel.Top + 7, panel.Width - 12, 2);
+            graphics.FillRectangle(brush, panel.Left + 6, panel.Top + 11, panel.Width - 10, 2);
+        }
+
+        private static void DrawCommandGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
+        {
+            int midY = bounds.Top + bounds.Height / 2;
+            graphics.DrawLine(pen, bounds.Left + 3, midY, bounds.Left + 7, midY);
+            graphics.DrawLine(pen, bounds.Left + 3, midY, bounds.Left + 6, midY - 3);
+            graphics.DrawLine(pen, bounds.Left + 3, midY, bounds.Left + 6, midY + 3);
+            graphics.DrawLine(pen, bounds.Left + 9, bounds.Bottom - 4, bounds.Right - 3, bounds.Bottom - 4);
+        }
+
+        private static void DrawRefreshGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
+        {
+            Rectangle arc = new Rectangle(bounds.Left + 3, bounds.Top + 3, bounds.Width - 7, bounds.Height - 7);
+            graphics.DrawArc(pen, arc, 30, 260);
+            Point tip = new Point(bounds.Right - 2, bounds.Top + 6);
+            graphics.FillPolygon(brush, new[]
+            {
+                tip,
+                new Point(tip.X - 5, tip.Y - 1),
+                new Point(tip.X - 2, tip.Y + 4)
+            });
+        }
+
+        private static void DrawRunGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
+        {
+            graphics.FillPolygon(brush, new[]
+            {
+                new Point(bounds.Left + 4, bounds.Top + 3),
+                new Point(bounds.Right - 3, bounds.Top + bounds.Height / 2),
+                new Point(bounds.Left + 4, bounds.Bottom - 3)
+            });
+        }
+
+        private static void DrawFolderGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
+        {
+            GraphicsPath path = new GraphicsPath();
+            path.AddLines(new[]
+            {
+                new Point(bounds.Left + 2, bounds.Top + 6),
+                new Point(bounds.Left + 5, bounds.Top + 3),
+                new Point(bounds.Left + 9, bounds.Top + 3),
+                new Point(bounds.Left + 11, bounds.Top + 5),
+                new Point(bounds.Right - 2, bounds.Top + 5),
+                new Point(bounds.Right - 3, bounds.Bottom - 3),
+                new Point(bounds.Left + 2, bounds.Bottom - 3),
+                new Point(bounds.Left + 2, bounds.Top + 6)
+            });
+            graphics.DrawPath(pen, path);
+            path.Dispose();
+        }
+
+        private static void DrawAddGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
+        {
+            DrawFolderGlyph(graphics, pen, brush, bounds);
+            graphics.DrawLine(
+                pen,
+                bounds.Left + bounds.Width / 2,
+                bounds.Top + 6,
+                bounds.Left + bounds.Width / 2,
+                bounds.Bottom - 4);
+            graphics.DrawLine(
+                pen,
+                bounds.Left + 4,
+                bounds.Top + bounds.Height / 2,
+                bounds.Right - 4,
+                bounds.Top + bounds.Height / 2);
+        }
+
+        private static void DrawRemoveGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
+        {
+            graphics.DrawEllipse(pen, bounds.Left + 2, bounds.Top + 2, bounds.Width - 5, bounds.Height - 5);
+            graphics.DrawLine(
+                pen,
+                bounds.Left + 4,
+                bounds.Top + bounds.Height / 2,
+                bounds.Right - 4,
+                bounds.Top + bounds.Height / 2);
+        }
+
+        private static void DrawResetGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
+        {
+            DrawRefreshGlyph(graphics, pen, brush, bounds);
+            graphics.DrawLine(pen, bounds.Left + 5, bounds.Bottom - 4, bounds.Right - 5, bounds.Bottom - 4);
+        }
+
+        private static (Color topColor, Color bottomColor, Color borderColor) GetCommandButtonColors(
+            PaletteCommandItem item,
+            bool selected,
+            bool hovered,
+            bool pressed)
+        {
+            if (pressed)
+            {
+                return (
+                    Color.FromArgb(24, 26, 30),
+                    Color.FromArgb(12, 12, 14),
+                    Color.FromArgb(86, 90, 96));
+            }
+
+            if (hovered)
+            {
+                return (
+                    Color.FromArgb(46, 50, 58),
+                    Color.FromArgb(22, 24, 28),
+                    Color.FromArgb(116, 126, 142));
+            }
+
+            if (selected)
+            {
+                return (
+                    Color.FromArgb(38, 40, 46),
+                    Color.FromArgb(18, 18, 20),
+                    Color.FromArgb(96, 102, 114));
+            }
+
+            return (
+                Color.FromArgb(32, 34, 38),
+                Color.FromArgb(16, 16, 18),
+                Color.FromArgb(72, 74, 78));
+        }
+
+        private static GraphicsPath CreatePaletteRoundedRectangle(Rectangle bounds, int radius)
+        {
+            int diameter = radius * 2;
+            GraphicsPath path = new GraphicsPath();
+
+            if (diameter > bounds.Width)
+            {
+                diameter = bounds.Width;
+            }
+
+            if (diameter > bounds.Height)
+            {
+                diameter = bounds.Height;
+            }
+
+            Rectangle arc = new Rectangle(bounds.Location, new Size(diameter, diameter));
+            path.AddArc(arc, 180, 90);
+            arc.X = bounds.Right - diameter;
+            path.AddArc(arc, 270, 90);
+            arc.Y = bounds.Bottom - diameter;
+            path.AddArc(arc, 0, 90);
+            arc.X = bounds.Left;
+            path.AddArc(arc, 90, 90);
+            path.CloseFigure();
+
+            return path;
+        }
+
+        private static void EnableDoubleBuffer(WF.Control control)
+        {
+            if (control == null)
+            {
+                return;
+            }
+
+            try
+            {
+                PropertyInfo property = typeof(WF.Control).GetProperty(
+                    "DoubleBuffered",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                property?.SetValue(control, true, null);
+            }
+            catch
+            {
+            }
+        }
+
         private List<PaletteCommandItem> GetFilteredItems()
         {
             string search = (_searchBox.Text ?? string.Empty).Trim();
@@ -5262,6 +6006,17 @@ namespace AUTOCAD_COMMANDS
         private void RunSelected()
         {
             PaletteCommandItem item = GetSelectedItem();
+            if (item == null)
+            {
+                SetStatus("Chua chon command.");
+                return;
+            }
+
+            RunItem(item);
+        }
+
+        private void RunItem(PaletteCommandItem item)
+        {
             if (item == null)
             {
                 SetStatus("Chua chon command.");
@@ -6490,6 +7245,519 @@ namespace AUTOCAD_COMMANDS
                     ? textBox.Text
                     : string.Empty;
             }
+        }
+    }
+
+    internal sealed class PaletteChromePanel : WF.Panel
+    {
+        private static readonly Color OuterFrameColor = Color.FromArgb(14, 14, 14);
+        private static readonly Color SurfaceTopColor = Color.FromArgb(38, 38, 40);
+        private static readonly Color SurfaceBottomColor = Color.FromArgb(18, 18, 20);
+        private static readonly Color BorderColor = Color.FromArgb(68, 68, 72);
+        public PaletteChromePanel()
+        {
+            SetStyle(
+                WF.ControlStyles.AllPaintingInWmPaint |
+                WF.ControlStyles.OptimizedDoubleBuffer |
+                WF.ControlStyles.ResizeRedraw |
+                WF.ControlStyles.UserPaint,
+                true);
+
+            DoubleBuffered = true;
+        }
+
+        protected override void OnPaintBackground(WF.PaintEventArgs e)
+        {
+            e.Graphics.Clear(Parent?.BackColor ?? Color.FromArgb(12, 12, 12));
+        }
+
+        protected override void OnPaint(WF.PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+            Rectangle shadowBounds = new Rectangle(2, 3, Math.Max(1, Width - 6), Math.Max(1, Height - 7));
+            using (GraphicsPath shadowPath = CreateRoundedPath(shadowBounds, 12))
+            using (SolidBrush shadowBrush = new SolidBrush(Color.FromArgb(95, 0, 0, 0)))
+            {
+                e.Graphics.FillPath(shadowBrush, shadowPath);
+            }
+
+            Rectangle surfaceBounds = new Rectangle(0, 0, Math.Max(1, Width - 5), Math.Max(1, Height - 5));
+            using (GraphicsPath surfacePath = CreateRoundedPath(surfaceBounds, 12))
+            using (LinearGradientBrush surfaceBrush = new LinearGradientBrush(
+                surfaceBounds,
+                SurfaceTopColor,
+                SurfaceBottomColor,
+                LinearGradientMode.Vertical))
+            using (Pen borderPen = new Pen(BorderColor))
+            using (Pen innerPen = new Pen(Color.FromArgb(46, 255, 255, 255)))
+            using (Pen outerPen = new Pen(OuterFrameColor))
+            {
+                e.Graphics.FillPath(surfaceBrush, surfacePath);
+                e.Graphics.DrawPath(outerPen, surfacePath);
+                e.Graphics.DrawPath(borderPen, surfacePath);
+
+                Rectangle innerBounds = Rectangle.Inflate(surfaceBounds, -1, -1);
+                using (GraphicsPath innerPath = CreateRoundedPath(innerBounds, 10))
+                {
+                    e.Graphics.DrawPath(innerPen, innerPath);
+                }
+            }
+
+            Rectangle highlightBounds = new Rectangle(2, 2, Math.Max(1, Width - 9), Math.Max(6, (Height / 5)));
+            using (GraphicsPath highlightPath = CreateRoundedPath(highlightBounds, 10))
+            using (LinearGradientBrush highlightBrush = new LinearGradientBrush(
+                highlightBounds,
+                Color.FromArgb(48, 255, 255, 255),
+                Color.FromArgb(0, 255, 255, 255),
+                LinearGradientMode.Vertical))
+            {
+                GraphicsState state = e.Graphics.Save();
+                Rectangle clipBounds = new Rectangle(1, 1, Math.Max(1, Width - 6), Math.Max(1, Height - 6));
+                using (GraphicsPath clipPath = CreateRoundedPath(clipBounds, 12))
+                {
+                    e.Graphics.SetClip(clipPath);
+                    e.Graphics.FillPath(highlightBrush, highlightPath);
+                }
+
+                e.Graphics.Restore(state);
+            }
+
+            Rectangle accentBounds = new Rectangle(12, Math.Max(10, Height - 16), Math.Max(10, Width - 28), 2);
+            using (LinearGradientBrush accentBrush = new LinearGradientBrush(
+                accentBounds,
+                Color.FromArgb(0, 82, 152, 218),
+                Color.FromArgb(180, 82, 152, 218),
+                LinearGradientMode.Horizontal))
+            {
+                e.Graphics.FillRectangle(accentBrush, accentBounds);
+            }
+        }
+
+        private static GraphicsPath CreateRoundedPath(Rectangle bounds, int radius)
+        {
+            int diameter = Math.Min(radius * 2, Math.Min(bounds.Width, bounds.Height));
+            GraphicsPath path = new GraphicsPath();
+            if (diameter <= 0)
+            {
+                path.AddRectangle(bounds);
+                return path;
+            }
+
+            Rectangle arc = new Rectangle(bounds.Location, new Size(diameter, diameter));
+            path.AddArc(arc, 180, 90);
+            arc.X = bounds.Right - diameter;
+            path.AddArc(arc, 270, 90);
+            arc.Y = bounds.Bottom - diameter;
+            path.AddArc(arc, 0, 90);
+            arc.X = bounds.Left;
+            path.AddArc(arc, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+    }
+
+    internal sealed class PaletteTitlePanel : WF.Panel
+    {
+        private static readonly Color TitleTopColor = Color.FromArgb(42, 42, 46);
+        private static readonly Color TitleBottomColor = Color.FromArgb(24, 24, 28);
+        private static readonly Color TitleBorderColor = Color.FromArgb(84, 84, 90);
+        private static readonly Color TitleTextColor = Color.FromArgb(236, 236, 238);
+        private static readonly Color TitleSubtleColor = Color.FromArgb(164, 164, 170);
+        private static readonly Color LogoBlue = Color.FromArgb(64, 164, 255);
+
+        public PaletteTitlePanel()
+        {
+            SetStyle(
+                WF.ControlStyles.AllPaintingInWmPaint |
+                WF.ControlStyles.OptimizedDoubleBuffer |
+                WF.ControlStyles.ResizeRedraw |
+                WF.ControlStyles.UserPaint,
+                true);
+
+            DoubleBuffered = true;
+            Height = 40;
+            MinimumSize = new Size(0, 40);
+            Margin = new WF.Padding(0, 0, 0, 6);
+        }
+
+        protected override void OnPaintBackground(WF.PaintEventArgs pevent)
+        {
+            pevent.Graphics.Clear(Parent?.BackColor ?? Color.FromArgb(18, 18, 18));
+        }
+
+        protected override void OnPaint(WF.PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+            Rectangle bounds = new Rectangle(0, 0, Math.Max(1, Width - 2), Math.Max(1, Height - 2));
+            using (GraphicsPath path = CreateRoundedPath(bounds, 8))
+            using (LinearGradientBrush fillBrush = new LinearGradientBrush(
+                bounds,
+                TitleTopColor,
+                TitleBottomColor,
+                LinearGradientMode.Vertical))
+            using (Pen borderPen = new Pen(TitleBorderColor))
+            using (Pen innerPen = new Pen(Color.FromArgb(42, 255, 255, 255)))
+            {
+                e.Graphics.FillPath(fillBrush, path);
+                e.Graphics.DrawPath(borderPen, path);
+
+                Rectangle innerBounds = Rectangle.Inflate(bounds, -1, -1);
+                using (GraphicsPath innerPath = CreateRoundedPath(innerBounds, 7))
+                {
+                    e.Graphics.DrawPath(innerPen, innerPath);
+                }
+            }
+
+            Rectangle glossBounds = new Rectangle(1, 1, Math.Max(1, Width - 4), Math.Max(8, Height / 2));
+            using (GraphicsPath clipPath = CreateRoundedPath(bounds, 8))
+            using (LinearGradientBrush glossBrush = new LinearGradientBrush(
+                glossBounds,
+                Color.FromArgb(36, 255, 255, 255),
+                Color.FromArgb(0, 255, 255, 255),
+                LinearGradientMode.Vertical))
+            {
+                GraphicsState state = e.Graphics.Save();
+                e.Graphics.SetClip(clipPath);
+                e.Graphics.FillRectangle(glossBrush, glossBounds);
+                e.Graphics.Restore(state);
+            }
+
+            Rectangle logoBounds = new Rectangle(10, 8, 20, 20);
+            DrawLogo(e.Graphics, logoBounds);
+
+            Rectangle titleBounds = new Rectangle(36, 6, Math.Max(60, Width - 110), 24);
+            using (System.Drawing.Font titleFont = new System.Drawing.Font(
+                "Segoe UI",
+                11.25F,
+                FontStyle.Bold,
+                GraphicsUnit.Point))
+            using (System.Drawing.Font subFont = new System.Drawing.Font(
+                "Segoe UI",
+                7.75F,
+                FontStyle.Bold,
+                GraphicsUnit.Point))
+            {
+                WF.TextRenderer.DrawText(
+                    e.Graphics,
+                    "DUNGX PROJECT",
+                    titleFont,
+                    titleBounds,
+                    TitleTextColor,
+                    WF.TextFormatFlags.Left | WF.TextFormatFlags.VerticalCenter | WF.TextFormatFlags.EndEllipsis);
+
+                Rectangle subBounds = new Rectangle(36, 24, Math.Max(60, Width - 110), 12);
+                WF.TextRenderer.DrawText(
+                    e.Graphics,
+                    "Custom Command Manager",
+                    subFont,
+                    subBounds,
+                    TitleSubtleColor,
+                    WF.TextFormatFlags.Left | WF.TextFormatFlags.VerticalCenter | WF.TextFormatFlags.EndEllipsis);
+            }
+
+            DrawHeaderGlyphs(e.Graphics, Width - 52, 10);
+        }
+
+        private static void DrawLogo(Graphics graphics, Rectangle bounds)
+        {
+            using (SolidBrush blueBrush = new SolidBrush(LogoBlue))
+            using (SolidBrush darkBrush = new SolidBrush(Color.FromArgb(34, 98, 176)))
+            using (SolidBrush lightBrush = new SolidBrush(Color.FromArgb(120, 198, 255)))
+            using (Pen outlinePen = new Pen(Color.FromArgb(180, 10, 24, 42)))
+            {
+                Point[] top = {
+                    new Point(bounds.Left + 6, bounds.Top),
+                    new Point(bounds.Left + 14, bounds.Top + 4),
+                    new Point(bounds.Left + 8, bounds.Top + 8),
+                    new Point(bounds.Left, bounds.Top + 4)
+                };
+                Point[] left = {
+                    new Point(bounds.Left, bounds.Top + 4),
+                    new Point(bounds.Left + 8, bounds.Top + 8),
+                    new Point(bounds.Left + 8, bounds.Top + 16),
+                    new Point(bounds.Left, bounds.Top + 12)
+                };
+                Point[] right = {
+                    new Point(bounds.Left + 8, bounds.Top + 8),
+                    new Point(bounds.Left + 14, bounds.Top + 4),
+                    new Point(bounds.Left + 14, bounds.Top + 12),
+                    new Point(bounds.Left + 8, bounds.Top + 16)
+                };
+
+                graphics.FillPolygon(lightBrush, top);
+                graphics.FillPolygon(blueBrush, left);
+                graphics.FillPolygon(darkBrush, right);
+                graphics.DrawPolygon(outlinePen, top);
+                graphics.DrawPolygon(outlinePen, left);
+                graphics.DrawPolygon(outlinePen, right);
+            }
+        }
+
+        private static void DrawHeaderGlyphs(Graphics graphics, int x, int y)
+        {
+            using (Pen linePen = new Pen(Color.FromArgb(198, 198, 202), 1.6f))
+            {
+                linePen.StartCap = LineCap.Round;
+                linePen.EndCap = LineCap.Round;
+
+                graphics.DrawLine(linePen, x, y + 2, x + 10, y + 2);
+                graphics.DrawLine(linePen, x, y + 6, x + 10, y + 6);
+                graphics.DrawLine(linePen, x + 20, y, x + 28, y + 8);
+                graphics.DrawLine(linePen, x + 28, y, x + 20, y + 8);
+            }
+        }
+
+        private static GraphicsPath CreateRoundedPath(Rectangle bounds, int radius)
+        {
+            int diameter = Math.Min(radius * 2, Math.Min(bounds.Width, bounds.Height));
+            GraphicsPath path = new GraphicsPath();
+            if (diameter <= 0)
+            {
+                path.AddRectangle(bounds);
+                return path;
+            }
+
+            Rectangle arc = new Rectangle(bounds.Location, new Size(diameter, diameter));
+            path.AddArc(arc, 180, 90);
+            arc.X = bounds.Right - diameter;
+            path.AddArc(arc, 270, 90);
+            arc.Y = bounds.Bottom - diameter;
+            path.AddArc(arc, 0, 90);
+            arc.X = bounds.Left;
+            path.AddArc(arc, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+    }
+
+    internal sealed class PaletteToolbarButton : WF.Button
+    {
+        private static readonly Color ForeColorNormal = Color.FromArgb(242, 242, 244);
+        private static readonly Color DefaultTopColor = Color.FromArgb(50, 52, 58);
+        private static readonly Color DefaultBottomColor = Color.FromArgb(22, 24, 28);
+        private static readonly Color DefaultBorderColor = Color.FromArgb(84, 86, 92);
+        private static readonly Color PrimaryTopColor = Color.FromArgb(88, 144, 212);
+        private static readonly Color PrimaryBottomColor = Color.FromArgb(28, 72, 124);
+        private static readonly Color PrimaryBorderColor = Color.FromArgb(102, 164, 232);
+        private bool _hovered;
+        private bool _pressed;
+
+        public PaletteToolbarButton()
+        {
+            SetStyle(
+                WF.ControlStyles.AllPaintingInWmPaint |
+                WF.ControlStyles.OptimizedDoubleBuffer |
+                WF.ControlStyles.ResizeRedraw |
+                WF.ControlStyles.UserPaint,
+                true);
+
+            DoubleBuffered = true;
+            AutoSize = true;
+            AutoSizeMode = WF.AutoSizeMode.GrowAndShrink;
+            Margin = new WF.Padding(0, 0, 8, 0);
+            Padding = new WF.Padding(14, 5, 14, 5);
+            MinimumSize = new Size(76, 30);
+            Cursor = WF.Cursors.Hand;
+            FlatStyle = WF.FlatStyle.Flat;
+            FlatAppearance.BorderSize = 0;
+            ForeColor = ForeColorNormal;
+            BackColor = Color.Transparent;
+            UseVisualStyleBackColor = false;
+        }
+
+        public bool IsPrimary { get; set; }
+
+        protected override void OnMouseEnter(EventArgs e)
+        {
+            base.OnMouseEnter(e);
+            _hovered = true;
+            Invalidate();
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            _hovered = false;
+            _pressed = false;
+            Invalidate();
+        }
+
+        protected override void OnMouseDown(WF.MouseEventArgs mevent)
+        {
+            base.OnMouseDown(mevent);
+            if (mevent.Button == WF.MouseButtons.Left)
+            {
+                _pressed = true;
+                Invalidate();
+            }
+        }
+
+        protected override void OnMouseUp(WF.MouseEventArgs mevent)
+        {
+            base.OnMouseUp(mevent);
+            _pressed = false;
+            Invalidate();
+        }
+
+        protected override void OnPaintBackground(WF.PaintEventArgs pevent)
+        {
+            pevent.Graphics.Clear(Parent?.BackColor ?? Color.FromArgb(18, 18, 18));
+        }
+
+        protected override void OnPaint(WF.PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+            Rectangle shadowBounds = new Rectangle(1, 2, Math.Max(1, Width - 3), Math.Max(1, Height - 4));
+            if (!_pressed)
+            {
+                using (GraphicsPath shadowPath = CreateRoundedPath(shadowBounds, 6))
+                using (SolidBrush shadowBrush = new SolidBrush(Color.FromArgb(85, 0, 0, 0)))
+                {
+                    e.Graphics.FillPath(shadowBrush, shadowPath);
+                }
+            }
+
+            Rectangle buttonBounds = new Rectangle(0, 0, Math.Max(1, Width - 2), Math.Max(1, Height - 3));
+            if (_pressed)
+            {
+                buttonBounds.Offset(0, 1);
+            }
+
+            (Color topColor, Color bottomColor, Color borderColor) = GetColors();
+            using (GraphicsPath buttonPath = CreateRoundedPath(buttonBounds, 6))
+            using (LinearGradientBrush fillBrush = new LinearGradientBrush(
+                buttonBounds,
+                topColor,
+                bottomColor,
+                LinearGradientMode.Vertical))
+            using (Pen borderPen = new Pen(borderColor))
+            using (Pen innerPen = new Pen(Color.FromArgb(60, 255, 255, 255)))
+            {
+                e.Graphics.FillPath(fillBrush, buttonPath);
+
+                Rectangle glossBounds = new Rectangle(
+                    buttonBounds.X + 1,
+                    buttonBounds.Y + 1,
+                    Math.Max(1, buttonBounds.Width - 2),
+                    Math.Max(8, (buttonBounds.Height / 2) - 1));
+                GraphicsState state = e.Graphics.Save();
+                e.Graphics.SetClip(buttonPath);
+                using (LinearGradientBrush glossBrush = new LinearGradientBrush(
+                    glossBounds,
+                    Color.FromArgb(IsPrimary ? 64 : 46, 255, 255, 255),
+                    Color.FromArgb(0, 255, 255, 255),
+                    LinearGradientMode.Vertical))
+                {
+                    e.Graphics.FillRectangle(glossBrush, glossBounds);
+                }
+
+                e.Graphics.Restore(state);
+                e.Graphics.DrawPath(borderPen, buttonPath);
+                e.Graphics.DrawPath(innerPen, buttonPath);
+            }
+
+            if (_hovered && !_pressed)
+            {
+                using (GraphicsPath hoverPath = CreateRoundedPath(buttonBounds, 6))
+                using (Pen hoverPen = new Pen(IsPrimary
+                    ? Color.FromArgb(176, 214, 255)
+                    : Color.FromArgb(132, 146, 168)))
+                {
+                    e.Graphics.DrawPath(hoverPen, hoverPath);
+                }
+            }
+
+            Rectangle textBounds = Rectangle.Inflate(buttonBounds, -12, -2);
+            if (_pressed)
+            {
+                textBounds.Offset(0, 1);
+            }
+
+            WF.TextRenderer.DrawText(
+                e.Graphics,
+                Text,
+                Font,
+                textBounds,
+                Enabled ? ForeColorNormal : Color.FromArgb(132, 132, 136),
+                WF.TextFormatFlags.HorizontalCenter |
+                WF.TextFormatFlags.VerticalCenter |
+                WF.TextFormatFlags.EndEllipsis |
+                WF.TextFormatFlags.NoPadding);
+        }
+
+        private (Color topColor, Color bottomColor, Color borderColor) GetColors()
+        {
+            if (!Enabled)
+            {
+                return (
+                    Color.FromArgb(34, 34, 36),
+                    Color.FromArgb(20, 20, 22),
+                    Color.FromArgb(64, 64, 68));
+            }
+
+            if (IsPrimary)
+            {
+                if (_pressed)
+                {
+                    return (
+                        Color.FromArgb(52, 102, 166),
+                        Color.FromArgb(20, 58, 104),
+                        Color.FromArgb(126, 186, 248));
+                }
+
+                if (_hovered)
+                {
+                    return (
+                        Color.FromArgb(112, 168, 232),
+                        Color.FromArgb(36, 86, 142),
+                        Color.FromArgb(146, 208, 255));
+                }
+
+                return (PrimaryTopColor, PrimaryBottomColor, PrimaryBorderColor);
+            }
+
+            if (_pressed)
+            {
+                return (
+                    Color.FromArgb(36, 38, 42),
+                    Color.FromArgb(18, 18, 20),
+                    Color.FromArgb(94, 96, 104));
+            }
+
+            if (_hovered)
+            {
+                return (
+                    Color.FromArgb(66, 70, 78),
+                    Color.FromArgb(28, 30, 34),
+                    Color.FromArgb(118, 124, 136));
+            }
+
+            return (DefaultTopColor, DefaultBottomColor, DefaultBorderColor);
+        }
+
+        private static GraphicsPath CreateRoundedPath(Rectangle bounds, int radius)
+        {
+            int diameter = Math.Min(radius * 2, Math.Min(bounds.Width, bounds.Height));
+            GraphicsPath path = new GraphicsPath();
+            if (diameter <= 0)
+            {
+                path.AddRectangle(bounds);
+                return path;
+            }
+
+            Rectangle arc = new Rectangle(bounds.Location, new Size(diameter, diameter));
+            path.AddArc(arc, 180, 90);
+            arc.X = bounds.Right - diameter;
+            path.AddArc(arc, 270, 90);
+            arc.Y = bounds.Bottom - diameter;
+            path.AddArc(arc, 0, 90);
+            arc.X = bounds.Left;
+            path.AddArc(arc, 90, 90);
+            path.CloseFigure();
+            return path;
         }
     }
 
