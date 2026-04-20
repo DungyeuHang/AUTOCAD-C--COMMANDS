@@ -545,6 +545,90 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
+        [CommandMethod("BD_CHANGE_POSITION_DIM", CommandFlags.UsePickSet)]
+        public void ChangeDimensionPlacementPoint()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            if (doc == null)
+            {
+                return;
+            }
+
+            Database db = doc.Database;
+            Editor ed = doc.Editor;
+
+            ObjectId[] dimensionIds = null;
+            ObjectId[] pickFirstIds = TryConsumePickFirst(ed);
+            if (pickFirstIds != null && pickFirstIds.Length > 0)
+            {
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    dimensionIds = FilterDimensionIds(pickFirstIds, tr);
+                    tr.Commit();
+                }
+
+                if (dimensionIds == null || dimensionIds.Length == 0)
+                {
+                    ed.WriteMessage("\nPickFirst không có DIM hợp lệ, hãy quét chọn DIM.");
+                }
+            }
+
+            if (dimensionIds == null || dimensionIds.Length == 0)
+            {
+                SelectionSet selection = PromptForDimensionSelection(ed);
+                if (selection == null)
+                {
+                    return;
+                }
+
+                dimensionIds = selection.GetObjectIds();
+            }
+
+            PromptPointOptions pointOptions =
+                new PromptPointOptions("\nChọn vị trí đặt mới cho DIM: ");
+            PromptPointResult pointResult = ed.GetPoint(pointOptions);
+            if (pointResult.Status != PromptStatus.OK)
+            {
+                return;
+            }
+
+            int changedCount = 0;
+            int unsupportedCount = 0;
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                foreach (ObjectId objectId in dimensionIds)
+                {
+                    if (objectId.IsNull)
+                    {
+                        continue;
+                    }
+
+                    Dimension dimension = tr.GetObject(objectId, OpenMode.ForWrite, false) as Dimension;
+                    if (dimension == null)
+                    {
+                        continue;
+                    }
+
+                    if (TrySetDimensionPlacementPoint(dimension, pointResult.Value))
+                    {
+                        changedCount++;
+                    }
+                    else
+                    {
+                        unsupportedCount++;
+                    }
+                }
+
+                tr.Commit();
+            }
+
+            ed.WriteMessage(
+                unsupportedCount > 0
+                    ? $"\nBD_CHANGE_POSITION_DIM: đã đổi {changedCount} DIM, bỏ qua {unsupportedCount} DIM không hỗ trợ điểm đặt."
+                    : $"\nBD_CHANGE_POSITION_DIM: đã đổi vị trí đặt cho {changedCount} DIM.");
+        }
+
         // ======================================================
         // HÀM TẠO DIM
         // ======================================================
@@ -661,6 +745,51 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
+        private SelectionSet PromptForDimensionSelection(Editor ed)
+        {
+            SelectionFilter filter = new SelectionFilter(
+                new[]
+                {
+                    new TypedValue((int)DxfCode.Start, "DIMENSION")
+                });
+
+            object previousSelectionOffscreen = null;
+
+            try
+            {
+                previousSelectionOffscreen = Application.GetSystemVariable("SELECTIONOFFSCREEN");
+                Application.SetSystemVariable("SELECTIONOFFSCREEN", 2);
+
+                while (true)
+                {
+                    PromptSelectionOptions options = new PromptSelectionOptions
+                    {
+                        MessageForAdding = "\nQuét chọn DIM cần đổi điểm đặt: "
+                    };
+
+                    PromptSelectionResult result = ed.GetSelection(options, filter);
+                    if (result.Status == PromptStatus.OK && result.Value != null && result.Value.Count > 0)
+                    {
+                        return result.Value;
+                    }
+
+                    if (result.Status == PromptStatus.Cancel)
+                    {
+                        return null;
+                    }
+
+                    ed.WriteMessage("\nChưa chọn được DIM hợp lệ, hãy chọn lại.");
+                }
+            }
+            finally
+            {
+                if (previousSelectionOffscreen != null)
+                {
+                    Application.SetSystemVariable("SELECTIONOFFSCREEN", previousSelectionOffscreen);
+                }
+            }
+        }
+
         private static ObjectId[] TryConsumePickFirst(Editor ed)
         {
             PromptSelectionResult impliedResult = ed.SelectImplied();
@@ -677,6 +806,111 @@ namespace AUTOCAD_COMMANDS
 
             ed.SetImpliedSelection(Array.Empty<ObjectId>());
             return objectIds;
+        }
+
+        private static ObjectId[] FilterDimensionIds(IEnumerable<ObjectId> objectIds, Transaction tr)
+        {
+            List<ObjectId> dimensionIds = new List<ObjectId>();
+            foreach (ObjectId objectId in objectIds ?? Enumerable.Empty<ObjectId>())
+            {
+                if (objectId.IsNull)
+                {
+                    continue;
+                }
+
+                if (tr.GetObject(objectId, OpenMode.ForRead, false) is Dimension)
+                {
+                    dimensionIds.Add(objectId);
+                }
+            }
+
+            return dimensionIds.ToArray();
+        }
+
+        private static bool TrySetDimensionPlacementPoint(Dimension dimension, Point3d point)
+        {
+            if (dimension == null)
+            {
+                return false;
+            }
+
+            string[] placementProperties =
+            {
+                "DimLinePoint",
+                "ArcPoint",
+                "LeaderEndPoint",
+                "TextPosition"
+            };
+
+            Type dimensionType = dimension.GetType();
+            foreach (string propertyName in placementProperties)
+            {
+                PropertyInfo property = dimensionType.GetProperty(
+                    propertyName,
+                    BindingFlags.Instance | BindingFlags.Public);
+
+                if (property == null ||
+                    !property.CanWrite ||
+                    property.PropertyType != typeof(Point3d))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (string.Equals(propertyName, "TextPosition", StringComparison.OrdinalIgnoreCase))
+                    {
+                        TrySetUsingDefaultTextPosition(dimension, false);
+                    }
+
+                    property.SetValue(dimension, point, null);
+                    TryRecomputeDimensionBlock(dimension);
+                    return true;
+                }
+                catch
+                {
+                }
+            }
+
+            return false;
+        }
+
+        private static void TrySetUsingDefaultTextPosition(Dimension dimension, bool value)
+        {
+            try
+            {
+                PropertyInfo property = dimension.GetType().GetProperty(
+                    "UsingDefaultTextPosition",
+                    BindingFlags.Instance | BindingFlags.Public);
+
+                if (property != null &&
+                    property.CanWrite &&
+                    property.PropertyType == typeof(bool))
+                {
+                    property.SetValue(dimension, value, null);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static void TryRecomputeDimensionBlock(Dimension dimension)
+        {
+            try
+            {
+                MethodInfo method = dimension.GetType().GetMethod(
+                    "RecomputeDimensionBlock",
+                    BindingFlags.Instance | BindingFlags.Public,
+                    null,
+                    new[] { typeof(bool) },
+                    null);
+
+                method?.Invoke(dimension, new object[] { true });
+            }
+            catch
+            {
+            }
         }
 
         private Extents3d? TryGetSelectionExtentsSafe(IEnumerable<ObjectId> objectIds, Transaction tr)
@@ -3480,7 +3714,7 @@ namespace AUTOCAD_COMMANDS
     {
         private const string TabId = "DUNGX_RIBBON_TAB";
         private static readonly string[] DimensionCommands =
-            { "DAA_Dim_auto", "SDXY", "CDD2_CHIADIM" };
+            { "DAA_Dim_auto", "DDD_Dim_4_direction", "SDXY", "BD_CHANGE_POSITION_DIM", "CDD2_CHIADIM" };
 
         private static readonly string[] StretchCommands =
             { "SS", "SSD_SMART_STRETCH_BY_DIM", "SSD2_SMART_STRETCH_BY_DIM2" };
@@ -3932,6 +4166,15 @@ namespace AUTOCAD_COMMANDS
                     "CD",
                     Color.FromArgb(63, 45, 86),
                     Color.FromArgb(176, 112, 255)),
+                ["BD_CHANGE_POSITION_DIM"] = new RibbonCommandStyle(
+                    "Move Dim Placement",
+                    "Move\nDim Pos",
+                    "Dim Pos",
+                    "BD",
+                    "Move the placement point of selected dimensions to a clicked point.",
+                    "BD",
+                    Color.FromArgb(48, 62, 82),
+                    Color.FromArgb(116, 172, 255)),
                 ["SS"] = new RibbonCommandStyle(
                     "Smart Stretch",
                     "Smart\nStretch",
