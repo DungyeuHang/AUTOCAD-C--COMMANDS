@@ -1616,120 +1616,142 @@ namespace AUTOCAD_COMMANDS
 
             Editor ed = doc.Editor;
             Database db = doc.Database;
+            object previousOsMode = null;
+            object previousSnapMode = null;
 
-            PromptEntityOptions entityOptions =
-                new PromptEntityOptions("\nChọn polyline: ");
-            entityOptions.SetRejectMessage("\nChỉ hỗ trợ lightweight Polyline.");
-            entityOptions.AddAllowedClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline), true);
-
-            PromptEntityResult entityResult = ed.GetEntity(entityOptions);
-            if (entityResult.Status != PromptStatus.OK)
+            try
             {
-                return;
-            }
+                previousOsMode = Application.GetSystemVariable("OSMODE");
+                previousSnapMode = Application.GetSystemVariable("SNAPMODE");
+                Application.SetSystemVariable("OSMODE", 0);
+                Application.SetSystemVariable("SNAPMODE", 0);
 
-            PromptStringOptions prefixOptions =
-                new PromptStringOptions("\nNhập tiền tố điểm (vd: bl_fr): ")
-                {
-                    AllowSpaces = false
-                };
-            PromptResult prefixResult = ed.GetString(prefixOptions);
-            if (prefixResult.Status != PromptStatus.OK)
-            {
-                return;
-            }
+                PromptEntityOptions entityOptions =
+                    new PromptEntityOptions("\nChọn polyline: ");
+                entityOptions.SetRejectMessage("\nChỉ hỗ trợ lightweight Polyline.");
+                entityOptions.AddAllowedClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline), true);
 
-            string prefix = (prefixResult.StringResult ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(prefix))
-            {
-                ed.WriteMessage("\nAPOINT: prefix không được rỗng.");
-                return;
-            }
-
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                Autodesk.AutoCAD.DatabaseServices.Polyline polyline =
-                    tr.GetObject(entityResult.ObjectId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
-                if (polyline == null)
-                {
-                    ed.WriteMessage("\nAPOINT: không đọc được polyline.");
-                    return;
-                }
-
-                int vertexCount = polyline.NumberOfVertices;
-                if (vertexCount == 0)
-                {
-                    ed.WriteMessage("\nAPOINT: polyline không có vertex.");
-                    return;
-                }
-
-                List<Point3d> points = GetPolylineVertices(polyline);
-                ObjectId layerId = EnsureLayer(db, tr, PhantomLayerName);
-                BlockTableRecord currentSpace =
-                    tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
-                if (currentSpace == null)
+                PromptEntityResult entityResult = ed.GetEntity(entityOptions);
+                if (entityResult.Status != PromptStatus.OK)
                 {
                     return;
                 }
 
-                List<string> definitionLines = new List<string>();
-                Point3d? previousPoint = null;
-
-                for (int i = 0; i < points.Count; i++)
-                {
-                    Point3d point = points[i];
-                    int count = i + 1;
-
-                    Circle marker = new Circle(point, Vector3d.ZAxis, MarkerRadius)
+                PromptStringOptions prefixOptions =
+                    new PromptStringOptions("\nNhập tiền tố điểm (vd: bl_fr): ")
                     {
-                        LayerId = layerId
+                        AllowSpaces = false
                     };
-                    currentSpace.AppendEntity(marker);
-                    tr.AddNewlyCreatedDBObject(marker, true);
+                PromptResult prefixResult = ed.GetString(prefixOptions);
+                if (prefixResult.Status != PromptStatus.OK)
+                {
+                    return;
+                }
 
-                    string definitionLine;
-                    if (!previousPoint.HasValue)
+                string prefix = (prefixResult.StringResult ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(prefix))
+                {
+                    ed.WriteMessage("\nAPOINT: prefix không được rỗng.");
+                    return;
+                }
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    Autodesk.AutoCAD.DatabaseServices.Polyline polyline =
+                        tr.GetObject(entityResult.ObjectId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                    if (polyline == null)
                     {
-                        definitionLine =
-                            $"{prefix}_p{count} = APoint({FormatNumber(point.X)}, {FormatNumber(point.Y)})";
+                        ed.WriteMessage("\nAPOINT: không đọc được polyline.");
+                        return;
                     }
-                    else
+
+                    int vertexCount = polyline.NumberOfVertices;
+                    if (vertexCount == 0)
                     {
-                        double dx = point.X - previousPoint.Value.X;
-                        double dy = point.Y - previousPoint.Value.Y;
-                        definitionLine =
-                            $"{prefix}_p{count} = APoint({prefix}_p{count - 1}.x{FormatOffset(dx)}, {prefix}_p{count - 1}.y{FormatOffset(dy)})";
+                        ed.WriteMessage("\nAPOINT: polyline không có vertex.");
+                        return;
                     }
 
-                    definitionLines.Add(definitionLine);
+                    List<Point3d> points = GetPolylineVertices(polyline);
+                    ObjectId layerId = EnsureLayer(db, tr, PhantomLayerName);
+                    BlockTableRecord currentSpace =
+                        tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
+                    if (currentSpace == null)
+                    {
+                        return;
+                    }
 
-                    double labelYOffset = count % 2 == 1 ? 0.1 : -0.1;
-                    Point3d labelPoint = new Point3d(point.X, point.Y + labelYOffset, point.Z);
+                    List<string> definitionLines = new List<string>();
+                    Point3d? previousPoint = null;
+
+                    for (int i = 0; i < points.Count; i++)
+                    {
+                        Point3d point = points[i];
+                        int count = i + 1;
+
+                        Circle marker = new Circle(point, Vector3d.ZAxis, MarkerRadius)
+                        {
+                            LayerId = layerId
+                        };
+                        currentSpace.AppendEntity(marker);
+                        tr.AddNewlyCreatedDBObject(marker, true);
+
+                        string definitionLine;
+                        if (!previousPoint.HasValue)
+                        {
+                            definitionLine =
+                                $"{prefix}_p{count} = APoint({FormatNumber(point.X)}, {FormatNumber(point.Y)})";
+                        }
+                        else
+                        {
+                            double dx = point.X - previousPoint.Value.X;
+                            double dy = point.Y - previousPoint.Value.Y;
+                            definitionLine =
+                                $"{prefix}_p{count} = APoint({prefix}_p{count - 1}.x{FormatOffset(dx)}, {prefix}_p{count - 1}.y{FormatOffset(dy)})";
+                        }
+
+                        definitionLines.Add(definitionLine);
+
+                        double labelYOffset = count % 2 == 1 ? 0.1 : -0.1;
+                        Point3d labelPoint = new Point3d(point.X, point.Y + labelYOffset, point.Z);
+                        AddMText(
+                            currentSpace,
+                            tr,
+                            layerId,
+                            labelPoint,
+                            PointLabelWidth,
+                            definitionLine);
+
+                        previousPoint = point;
+                    }
+
+                    string smartShapeText = BuildSmartShapeText(polyline, points, prefix);
+                    string summaryText = string.Join("\n", definitionLines.Concat(new[] { smartShapeText }));
+                    Point3d firstPoint = points[0];
+                    Point3d summaryPoint = new Point3d(firstPoint.X, firstPoint.Y - 3.0, firstPoint.Z);
                     AddMText(
                         currentSpace,
                         tr,
                         layerId,
-                        labelPoint,
-                        PointLabelWidth,
-                        definitionLine);
+                        summaryPoint,
+                        SummaryTextWidth,
+                        summaryText);
 
-                    previousPoint = point;
+                    tr.Commit();
+                    ed.WriteMessage($"\nAPOINT: đã tạo {points.Count} điểm và text tổng hợp.");
+                }
+            }
+            finally
+            {
+                if (previousOsMode != null)
+                {
+                    Application.SetSystemVariable("OSMODE", previousOsMode);
                 }
 
-                string smartShapeText = BuildSmartShapeText(polyline, points, prefix);
-                string summaryText = string.Join("\n", definitionLines.Concat(new[] { smartShapeText }));
-                Point3d firstPoint = points[0];
-                Point3d summaryPoint = new Point3d(firstPoint.X, firstPoint.Y - 2.0, firstPoint.Z);
-                AddMText(
-                    currentSpace,
-                    tr,
-                    layerId,
-                    summaryPoint,
-                    SummaryTextWidth,
-                    summaryText);
-
-                tr.Commit();
-                ed.WriteMessage($"\nAPOINT: đã tạo {points.Count} điểm và text tổng hợp.");
+                if (previousSnapMode != null)
+                {
+                    Application.SetSystemVariable("SNAPMODE", previousSnapMode);
+                }
             }
         }
 
@@ -1752,7 +1774,7 @@ namespace AUTOCAD_COMMANDS
             IReadOnlyList<Point3d> points,
             string prefix)
         {
-            StringBuilder arcsInfo = new StringBuilder();
+            List<string> arcsInfoItems = new List<string>();
             for (int i = 0; i < points.Count - 1; i++)
             {
                 double bulge = polyline.GetBulgeAt(i);
@@ -1779,15 +1801,13 @@ namespace AUTOCAD_COMMANDS
                     endPointIndex = i + 1;
                 }
 
-                arcsInfo.AppendLine(
-                    $"({startPointIndex},{endPointIndex}): ({FormatRadius(radius)}, True),");
+                arcsInfoItems.Add(
+                    $"({startPointIndex},{endPointIndex}): ({FormatRadius(radius)}, True)");
             }
 
             string closeText = polyline.Closed ? "True" : "False";
-            return
-                $"create_smart_shape(\"{prefix}_p\", 1, {points.Count}, arcs_info={{\n" +
-                arcsInfo +
-                $"}},close ={closeText})";
+            string arcsInfo = string.Join(", ", arcsInfoItems);
+            return $"create_smart_shape(\"{prefix}_p\", 1, {points.Count}, arcs_info={{{arcsInfo}}}, close={closeText})";
         }
 
         private static void AddMText(
@@ -1816,6 +1836,8 @@ namespace AUTOCAD_COMMANDS
             return (text ?? string.Empty)
                 .Replace("\r\n", "\n")
                 .Replace("\r", "\n")
+                .Replace("{", "\\{")
+                .Replace("}", "\\}")
                 .Replace("\n", "\\P");
         }
 
