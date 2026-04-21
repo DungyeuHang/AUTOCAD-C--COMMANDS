@@ -23,6 +23,12 @@ using Imaging = System.Windows.Media.Imaging;
 
 namespace AUTOCAD_COMMANDS
 {
+    // ======================================================
+    // CDD2_CHIADIM
+    // Mục đích: chia một DIM thẳng/ngang/dọc thành nhiều đoạn nhỏ.
+    // Cách dùng: chọn DIM gốc, click các điểm chia nằm trên trục DIM, Enter để kết thúc.
+    // Lưu ý khi sửa: lệnh này chỉ xử lý RotatedDimension, không áp dụng cho mọi loại DIM.
+    // ======================================================
     public class ChiaDimCommands
     {
         [CommandMethod("CDD2_CHIADIM")]
@@ -142,11 +148,20 @@ namespace AUTOCAD_COMMANDS
 
     // ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> END OF CDD <<<<<<<<<<<<<<<<<<<<<<<<<<< ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-    // START OF SAA
+    // ======================================================
+    // NHÓM DIM TỰ ĐỘNG
+    // DAA: dim từ mốc gốc tới 4 đối tượng bao do người dùng chọn.
+    // DDD: dim từ đối tượng/nhóm đối tượng tới 4 phía gần nhất, có bộ lọc đối tượng đích.
+    // BD : đổi vị trí đặt DIM, tức điểm cuối cùng khi đặt DIM bằng lệnh AutoCAD.
+    // ======================================================
     public class AutoDimCommand
     {
         private const double AutoDimTolerance = 1e-6;
 
+        // DAA_Dim_auto:
+        // - Chọn mốc gốc là Object hoặc Point.
+        // - Sau đó chọn các đường bao đích.
+        // - Lệnh tự tìm trái/phải/trên/dưới gần nhất trong selection đích rồi tạo DIM.
         [CommandMethod("DAA_Dim_auto")]
         public void AutoDim()
         {
@@ -341,6 +356,10 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
+        // DDD_Dim_4_direction:
+        // - Có hỗ trợ PickFirst để chọn sẵn đối tượng gốc trước khi gọi lệnh.
+        // - Tự quét 4 hướng quanh extents của đối tượng gốc.
+        // - Có bộ lọc target theo loại Line/Polyline/Block + Layer, lưu lại cho lần sau.
         [CommandMethod("DDD_Dim_4_direction", CommandFlags.UsePickSet)]
         public void AutoDimFourDirections()
         {
@@ -545,7 +564,11 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
-        [CommandMethod("BD_CHANGE_POSITION_DIM", CommandFlags.UsePickSet)]
+        // BD:
+        // - Đổi điểm đặt DIM line/text placement của nhiều DIM về cùng một điểm click.
+        // - Dùng reflection để hỗ trợ nhiều subtype Dimension khác nhau.
+        // - Với DIM thường, property quan trọng nhất là DimLinePoint.
+        [CommandMethod("BD", CommandFlags.UsePickSet)]
         public void ChangeDimensionPlacementPoint()
         {
             Document doc = Application.DocumentManager.MdiActiveDocument;
@@ -747,6 +770,8 @@ namespace AUTOCAD_COMMANDS
 
         private SelectionSet PromptForDimensionSelection(Editor ed)
         {
+            // Chỉ cho phép quét DIMENSION để tránh người dùng click nhầm sang line/text/block.
+            // Bật SELECTIONOFFSCREEN tạm thời để vùng quét ngoài màn hình vẫn bắt DIM ổn hơn.
             SelectionFilter filter = new SelectionFilter(
                 new[]
                 {
@@ -829,6 +854,11 @@ namespace AUTOCAD_COMMANDS
 
         private static bool TrySetDimensionPlacementPoint(Dimension dimension, Point3d point)
         {
+            // Mỗi loại Dimension của AutoCAD có thể đặt tên property khác nhau.
+            // Thứ tự ưu tiên ở đây:
+            // - DimLinePoint: đúng điểm đặt của dim thẳng/aligned/rotated.
+            // - ArcPoint/LeaderEndPoint: cho một số dim đặc biệt.
+            // - TextPosition: fallback cuối cùng nếu dim chỉ cho đổi vị trí text.
             if (dimension == null)
             {
                 return false;
@@ -1032,6 +1062,10 @@ namespace AUTOCAD_COMMANDS
             DddTargetFilter savedFilter,
             out DddTargetFilter targetFilter)
         {
+            // Filter đích của DDD:
+            // - Enter/Space: dùng lại filter đã lưu.
+            // - Pick: click đối tượng mẫu để lấy loại + layer.
+            // - None: bỏ filter, chạy tự do như bản đầu.
             while (true)
             {
                 string defaultLabel = savedFilter?.ToDisplayText() ?? "None";
@@ -1277,7 +1311,11 @@ namespace AUTOCAD_COMMANDS
 
 
 
-
+    // ======================================================
+    // SDXY - SMART DIM THEO TRỤC X/Y
+    // Mục đích: click điểm đầu, click điểm hướng, tự dim tới đối tượng gần điểm hướng nhất.
+    // Ghi chú: SmartDimX/SmartDimY cũ vẫn còn trong class nhưng command chính đang dùng là SDXY.
+    // ======================================================
     public class SmartDimXCommand
     {
         private const string DimLayerName = "_mss.kichthuoc";
@@ -1419,6 +1457,10 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
+        // SDXY:
+        // - Tự chọn trục X/Y theo hướng click.
+        // - Điểm click thứ 2 vừa xác định hướng, vừa là điểm dò target.
+        // - Nhờ vậy có thể dim vượt qua các đối tượng trung gian gần điểm đầu.
         [CommandMethod("SDXY")]
         public void SmartDimXY()
         {
@@ -1527,6 +1569,8 @@ namespace AUTOCAD_COMMANDS
             out double direction,
             out bool useXAxis)
         {
+            // Nếu forceXAxis có giá trị thì chỉ chấp nhận hướng theo đúng trục đó.
+            // Nếu forceXAxis = null thì chọn trục có độ lệch lớn hơn giữa X và Y.
             while (true)
             {
                 PromptPointOptions dirOpt = new PromptPointOptions(message)
@@ -1635,6 +1679,8 @@ namespace AUTOCAD_COMMANDS
             Point3d probePoint,
             double direction)
         {
+            // Quét target theo trục X bắt đầu từ probePoint.
+            // bestDistance được tính theo khoảng cách từ probePoint để bắt đối tượng gần điểm click 2 nhất.
             Point3d? bestPoint = null;
             double bestDistance = double.MaxValue;
 
@@ -1741,6 +1787,8 @@ namespace AUTOCAD_COMMANDS
             Point3d probePoint,
             double direction)
         {
+            // Quét target theo trục Y bắt đầu từ probePoint.
+            // Vẫn kiểm tra projectedFromStart để đảm bảo DIM đi đúng hướng từ điểm đầu.
             Point3d? bestPoint = null;
             double bestDistance = double.MaxValue;
 
@@ -1798,6 +1846,8 @@ namespace AUTOCAD_COMMANDS
             double direction,
             double bestDistance)
         {
+            // Lọc nhanh bằng GeometricExtents trước khi gọi IntersectWith.
+            // Đây là phần giúp SDXY nhanh hơn khi bản vẽ có nhiều object.
             if (!TryGetCurveExtents(curve, out Extents3d extents))
             {
                 return true;
@@ -1896,6 +1946,8 @@ namespace AUTOCAD_COMMANDS
 
         private Point3dCollection TryGetIntersections(Curve curve, Line scanLine)
         {
+            // IntersectWith có thể lỗi với vài entity đặc biệt.
+            // Bắt lỗi ở đây để lệnh bỏ qua object đó thay vì văng command.
             try
             {
                 Point3dCollection intersections = new Point3dCollection();
@@ -1956,11 +2008,21 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // ======================================================
+    // TT_TEXT_CHANGE_5
+    // Mục đích: lấy nội dung text gốc và thay nội dung cho các text height = 5 trong vùng chọn.
+    // Lưu ý: chỉ đổi nội dung, không đổi layer/style/height/rotation.
+    // Có hỗ trợ PickFirst để dùng FILTER trước rồi gọi lệnh.
+    // ======================================================
     public class TextSyncCommands
     {
         private const double TargetTextHeight = 5.0;
         private const double TextHeightTolerance = 1e-6;
 
+        // Flow:
+        // 1. Chọn text gốc.
+        // 2. Quét vùng text đích hoặc dùng PickFirst.
+        // 3. Lọc DBText/MText có height = 5 rồi thay nội dung.
         [CommandMethod("TT_TEXT_CHANGE_5", CommandFlags.UsePickSet)]
         public void SyncTextHeightFiveContent()
         {
@@ -2142,6 +2204,8 @@ namespace AUTOCAD_COMMANDS
 
         private static TextSyncPayload GetTextSyncPayload(Entity entity)
         {
+            // DBText dùng TextString, MText dùng Contents.
+            // Payload giữ cả plain text và MText content để hạn chế mất format MText.
             if (entity is DBText dbText)
             {
                 return new TextSyncPayload(dbText.TextString, dbText.TextString);
@@ -2157,6 +2221,8 @@ namespace AUTOCAD_COMMANDS
 
         private static bool TryGetTextHeight(Entity entity, out double textHeight)
         {
+            // Chỉ xử lý text chọn trực tiếp.
+            // Text nằm trong block không được bóc ra ở lệnh này.
             if (entity is DBText dbText)
             {
                 textHeight = dbText.Height;
@@ -2192,11 +2258,23 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // ======================================================
+    // CCC / BBB - COPY VÀO TÂM VÙNG
+    // CCC: chọn object/nhóm object nguồn, click nhiều vùng kín, copy nguồn vào tâm từng vùng.
+    // BBB: chọn block definition từ bảng block, click nhiều vùng kín, insert block vào tâm từng vùng.
+    // Lưu ý quan trọng:
+    // - Khi tính tâm nguồn của CCC, có lọc bỏ Dimension/Text/Attribute khỏi extents.
+    // - Khi copy vẫn copy nguyên selection, không xóa text/dim khỏi kết quả.
+    // ======================================================
     public class SmartCopyToCenterCommands
     {
         private const double BoundarySearchDistance = 1000000.0;
         private const double BoundaryTolerance = 1e-6;
 
+        // CCC_SMART_COPY_TO_CENTER:
+        // - Hỗ trợ PickFirst để chọn nguồn trước.
+        // - Click nhiều vùng đích liên tiếp, Enter để kết thúc.
+        // - Tâm vùng ưu tiên nhánh quét nhanh 4 hướng, fallback TraceBoundary khi cần.
         [CommandMethod("CCC_SMART_COPY_TO_CENTER", CommandFlags.UsePickSet)]
         public void SmartCopyToCenter()
         {
@@ -2315,6 +2393,10 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
+        // BBB_BLOCK_TO_CENTER:
+        // - Không cần có sẵn block reference trong bản vẽ.
+        // - Mở form chọn block definition hiện có trong drawing.
+        // - Insert block vào tâm từng vùng người dùng click.
         [CommandMethod("BBB_BLOCK_TO_CENTER")]
         public void BlockToCenter()
         {
@@ -2593,6 +2675,9 @@ namespace AUTOCAD_COMMANDS
             string commandLabel,
             out Point3d targetCenter)
         {
+            // Lõi tìm tâm vùng cho CCC/BBB.
+            // Nhánh fast dùng 4 tia gần nhất để tránh TraceBoundary quá nặng ở bản vẽ phức tạp.
+            // Nếu nhánh fast không đủ dữ liệu thì fallback TraceBoundary của AutoCAD.
             targetCenter = Point3d.Origin;
 
             if (TryEstimateBoundaryCenterFast(
@@ -2651,6 +2736,10 @@ namespace AUTOCAD_COMMANDS
             Point3d seedPoint,
             out Point3d targetCenter)
         {
+            // Cách nhanh để lấy tâm vùng:
+            // - Bắn 4 tia trái/phải/trên/dưới từ điểm click.
+            // - Chỉ xét object đang hiển thị, bỏ layer Off/Frozen.
+            // - Lấy 4 biên gần nhất rồi tính tâm từ chúng.
             targetCenter = Point3d.Origin;
 
             BlockTableRecord currentSpace =
@@ -3161,6 +3250,9 @@ namespace AUTOCAD_COMMANDS
             bool ignoreDimensions = false,
             bool ignoreTextEntities = false)
         {
+            // Dùng để lấy tâm nguồn CCC.
+            // ignoreDimensions/ignoreTextEntities chỉ ảnh hưởng việc tính tâm,
+            // không ảnh hưởng danh sách object được copy.
             Extents3d? extents = null;
 
             foreach (ObjectId objectId in objectIds)
@@ -3206,6 +3298,9 @@ namespace AUTOCAD_COMMANDS
             out Extents3d extents,
             HashSet<ObjectId> visitedBlockDefinitions = null)
         {
+            // Tính extents có lọc cho từng entity.
+            // Với block: nếu block không chứa Text/Dim/Attribute thì dùng GeometricExtents nhanh.
+            // Nếu có các object cần loại khỏi tâm thì duyệt sâu vào block definition.
             extents = default;
 
             if (entity == null)
@@ -3491,6 +3586,10 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // ======================================================
+    // UI CHỌN BLOCK CHO BBB
+    // Form nhỏ để lọc/chọn block definition trong bản vẽ hiện tại.
+    // ======================================================
     internal sealed class BlockDefinitionChoice
     {
         public BlockDefinitionChoice(ObjectId id, string name)
@@ -3665,6 +3764,11 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // ======================================================
+    // ENTRY POINT CỦA PLUGIN
+    // Initialize/Terminate được AutoCAD gọi khi NETLOAD hoặc bundle autoload.
+    // Đây cũng là nơi khởi tạo tracker DXPALETTE và Ribbon.
+    // ======================================================
     public class DungXPaletteEntry : IExtensionApplication
     {
         [CommandMethod("DXPALETTE")]
@@ -3710,15 +3814,23 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // ======================================================
+    // RIBBON DUNGX
+    // Tạo tab/panel/nút ribbon từ danh sách command trong project.
+    // Nếu đổi tên CommandMethod thủ công, nhớ cập nhật các mảng command dưới đây nếu muốn Ribbon chạy đúng.
+    // ======================================================
     internal static class DungXRibbonHost
     {
         private const string TabId = "DUNGX_RIBBON_TAB";
+        // Các command hiện lên panel Dimension.
         private static readonly string[] DimensionCommands =
             { "DAA_Dim_auto", "DDD_Dim_4_direction", "SDXY", "BD_CHANGE_POSITION_DIM", "CDD2_CHIADIM" };
 
+        // Các command hiện lên panel Stretch.
         private static readonly string[] StretchCommands =
             { "SS", "SSD_SMART_STRETCH_BY_DIM", "SSD2_SMART_STRETCH_BY_DIM2" };
 
+        // Các command tiện ích workspace/palette/ribbon.
         private static readonly string[] ToolCommands =
             { "DXPALETTE", "DXPALETTERELOAD", "DXPALETTESETFOLDER", "DXRIBBONRELOAD" };
 
@@ -4351,6 +4463,11 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // ======================================================
+    // DXPALETTE HOST
+    // Quản lý vòng đời PaletteSet: tạo palette, reload data, auto-open khi mở AutoCAD.
+    // Phần UI thật nằm trong DungXPaletteControl bên dưới.
+    // ======================================================
     internal static class DungXPaletteHost
     {
         private static readonly Guid PaletteGuid =
@@ -4505,6 +4622,15 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // ======================================================
+    // DXPALETTE UI
+    // Bảng command chính:
+    // - Filter theo Source/Type/Search.
+    // - Favorite, sort Custom/A-Z/Used.
+    // - Đếm số lần dùng command.
+    // - Lưu width cột, layout, favorite, usage.
+    // Lưu ý khi sửa UI: cố gắng chỉ sửa render/event UI, tránh đụng store nếu không cần.
+    // ======================================================
     internal sealed class DungXPaletteControl : WF.UserControl
     {
         private static readonly Color BackgroundColor = Color.FromArgb(12, 12, 12);
@@ -4946,6 +5072,8 @@ namespace AUTOCAD_COMMANDS
 
         private void BindGrid(string preferredCommandName = null)
         {
+            // Rebind toàn bộ grid khi filter/sort/layout thay đổi.
+            // Với usage count sau khi command chạy, code ưu tiên cập nhật nhẹ để tránh palette bị lag.
             preferredCommandName = preferredCommandName ?? GetSelectedCommandName();
             List<PaletteCommandItem> filteredItems = GetFilteredItems();
             UpdateSummary(filteredItems);
@@ -5235,6 +5363,8 @@ namespace AUTOCAD_COMMANDS
 
         private void CommandGrid_CellClick(object sender, WF.DataGridViewCellEventArgs e)
         {
+            // Click 1 lần vào cột Command là chạy lệnh.
+            // Click vào cột Favorite chỉ bật/tắt sao, không chạy lệnh.
             if (e.RowIndex < 0 || e.ColumnIndex < 0)
             {
                 return;
@@ -6474,10 +6604,21 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // ======================================================
+    // SS / SSD / SSD2 - SMART STRETCH
+    // SS  : nhập L thủ công rồi stretch theo hướng click.
+    // SSD : lấy L = |DIM1 - DIM2|.
+    // SSD2: lấy L = |DIM1 - DIM2| / 2 và chạy 2 lượt stretch.
+    // Lưu ý: phần stretch cuối gọi STRETCH gốc của AutoCAD để giữ hành vi gần chuẩn nhất.
+    // ======================================================
     public class SmartStretchCommands
     {
         private const double ComparisonTolerance = 1e-6;
 
+        // SS:
+        // - Hỏi L trước.
+        // - Quét một hoặc nhiều crossing window.
+        // - Chọn điểm đầu + điểm hướng để quyết định SX+/SX-/SY+/SY-.
         [CommandMethod("SS")]
         public void SmartStretch()
         {
@@ -6498,6 +6639,10 @@ namespace AUTOCAD_COMMANDS
             RunSmartStretchWithLength(ed, db, length, "SS");
         }
 
+        // SSD_SMART_STRETCH_BY_DIM:
+        // - Chọn 2 DIM.
+        // - L = trị tuyệt đối chênh lệch measurement của 2 DIM.
+        // - Sau đó chạy cùng core stretch với SS.
         [CommandMethod("SSD_SMART_STRETCH_BY_DIM")]
         public void SmartStretchByDim()
         {
@@ -6522,6 +6667,10 @@ namespace AUTOCAD_COMMANDS
             RunSmartStretchWithLength(ed, db, length, "SSD_SMART_STRETCH_BY_DIM");
         }
 
+        // SSD2_SMART_STRETCH_BY_DIM2:
+        // - Chọn 2 DIM.
+        // - L = |DIM1 - DIM2| / 2.
+        // - Chạy 2 pass để xử lý các đối tượng đối xứng.
         [CommandMethod("SSD2_SMART_STRETCH_BY_DIM2")]
         public void SmartStretchByHalfDimDifference()
         {
@@ -6567,6 +6716,9 @@ namespace AUTOCAD_COMMANDS
             double length,
             string commandLabel)
         {
+            // Core dùng chung cho SS/SSD/SSD2.
+            // Tắt OSMODE tạm thời để điểm click không bị OSNAP kéo lệch.
+            // Khi kết thúc/cancel luôn khôi phục OSMODE cũ.
             object previousOsMode = null;
 
             try
@@ -6752,6 +6904,8 @@ namespace AUTOCAD_COMMANDS
 
         private static SmartStretchSelectionInput GetSmartStretchSelectionInput(Editor ed)
         {
+            // Cho phép quét nhiều crossing window.
+            // Mỗi window được lưu để lúc gọi STRETCH gốc truyền đúng vùng crossing.
             ed.WriteMessage(
                 "\nWindow: quet nhieu vung neu can, nhan Space/Enter o buoc chon goc dau de ket thuc chon.");
 
@@ -6844,6 +6998,8 @@ namespace AUTOCAD_COMMANDS
             Point3d basePoint,
             Point3d secondPoint)
         {
+            // Gọi STRETCH gốc bằng các crossing window đã lưu.
+            // Zoom tạm vào vùng stretch để giảm lỗi AutoCAD bỏ sót object ngoài màn hình.
             ViewTableRecord originalView = null;
 
             try
@@ -6926,6 +7082,8 @@ namespace AUTOCAD_COMMANDS
             out SmartStretchDirection direction,
             out Point3d secondPoint)
         {
+            // Jig preview: rê chuột để xem hướng stretch trước khi click.
+            // Preview là mô phỏng, kết quả cuối vẫn do STRETCH gốc xử lý.
             using (SmartStretchPreviewJig jig =
                 new SmartStretchPreviewJig(ed, selectionInput, startPoint, length))
             {
@@ -7491,6 +7649,8 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // Khung ngoài của DXPALETTE: vẽ nền tối, viền, bóng và accent line.
+    // Chỉ phục vụ giao diện, không chứa logic command.
     internal sealed class PaletteChromePanel : WF.Panel
     {
         private static readonly Color OuterFrameColor = Color.FromArgb(14, 14, 14);
@@ -7600,6 +7760,8 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // Header "DUNGX PROJECT" ở đầu DXPALETTE.
+    // Nếu muốn đổi logo/tên thương hiệu thì sửa control này.
     internal sealed class PaletteTitlePanel : WF.Panel
     {
         private static readonly Color TitleTopColor = Color.FromArgb(42, 42, 46);
@@ -7775,6 +7937,8 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // Nút toolbar custom kiểu glossy.
+    // Dùng cho Reload LISP, Add Source, Reset Stats...
     internal sealed class PaletteToolbarButton : WF.Button
     {
         private static readonly Color ForeColorNormal = Color.FromArgb(242, 242, 244);
@@ -8070,6 +8234,11 @@ namespace AUTOCAD_COMMANDS
         public PaletteSourceKind SourceKind { get; }
     }
 
+    // ======================================================
+    // PALETTE COMMAND USAGE TRACKER
+    // Đếm số lần dùng command trong DXPALETTE.
+    // Theo dõi cả command .NET/DLL và một số command LISP thông qua event AutoCAD.
+    // ======================================================
     internal static class PaletteCommandUsageTracker
     {
         private static readonly HashSet<string> KnownCommands =
@@ -8307,6 +8476,10 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // ======================================================
+    // LISP RESOLVER
+    // Quản lý thư mục LISP và tìm các file LISP cần load/chạy từ DXPALETTE.
+    // ======================================================
     internal static class DungXLispResolver
     {
         private static readonly string[] RequiredLispFiles =
@@ -8454,6 +8627,7 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // Lưu mô tả command người dùng nhập trong DXPALETTE.
     internal static class PaletteDescriptionStore
     {
         private static readonly string DescriptionFilePath =
@@ -8509,6 +8683,7 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // Lưu số lần dùng command để giữ thống kê qua các lần mở AutoCAD.
     internal static class PaletteUsageStore
     {
         private static readonly string UsageFilePath =
@@ -8597,6 +8772,7 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // Lưu giá trị L gần nhất của SS để Enter lần sau dùng lại nhanh.
     internal static class SmartStretchSettingsStore
     {
         private static readonly string LengthFilePath =
@@ -8645,6 +8821,7 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // Lưu trạng thái Auto Open của DXPALETTE.
     internal static class PaletteStartupStore
     {
         private static readonly string AutoShowFilePath =
@@ -8678,6 +8855,7 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // Lưu danh sách source ngoài do người dùng thêm vào DXPALETTE.
     internal static class PaletteSourceStore
     {
         private static readonly string SourceFilePath =
@@ -8816,6 +8994,7 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // Lưu các command/alias thủ công do người dùng tự thêm.
     internal static class PaletteManualCommandStore
     {
         private static readonly string ManualFilePath =
@@ -8878,6 +9057,7 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // Lưu layout DXPALETTE: favorite, thứ tự custom, sort mode, width cột.
     internal static class PaletteLayoutStore
     {
         private static readonly string LayoutFilePath =
@@ -9078,6 +9258,7 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // Quét Action Macro của AutoCAD để đưa vào DXPALETTE.
     internal static class ActionMacroCatalog
     {
         public static IEnumerable<PaletteCommandItem> BuildItems(
@@ -9122,6 +9303,7 @@ namespace AUTOCAD_COMMANDS
         }
     }
 
+    // Tập hợp command từ nhiều nguồn: DLL hiện tại, LISP, VLX, Action Macro, manual alias.
     internal static class PaletteCommandCatalog
     {
         private static readonly Regex LispCommandRegex =

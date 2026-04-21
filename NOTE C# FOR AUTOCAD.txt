@@ -1,0 +1,2 @@
+//TO BUILD DLL:
+dotnet build ".\AUTOCAD COMMANDS.sln" -c Debug /p:PostBuildEvent= /p:BaseIntermediateOutputPath="obj\debug_local\" /p:IntermediateOutputPath="obj\debug_local\" /p:OutputPath="bin\Debug\"
