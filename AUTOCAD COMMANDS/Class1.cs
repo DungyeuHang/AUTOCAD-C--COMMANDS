@@ -157,6 +157,7 @@ namespace AUTOCAD_COMMANDS
     public class AutoDimCommand
     {
         private const double AutoDimTolerance = 1e-6;
+        private const double DddMismatchTolerance = 1e-4;
 
         // DAA_Dim_auto:
         // - Chọn mốc gốc là Object hoặc Point.
@@ -561,6 +562,20 @@ namespace AUTOCAD_COMMANDS
 
                 tr.Commit();
                 ed.WriteMessage($"\nDDD_Dim_4_direction: đã tạo {createdCount} dim.");
+
+                string mismatchWarning = BuildDddMismatchWarning(
+                    leftExtents.HasValue ? (double?)leftDistance : null,
+                    rightExtents.HasValue ? (double?)rightDistance : null,
+                    topExtents.HasValue ? (double?)topDistance : null,
+                    bottomExtents.HasValue ? (double?)bottomDistance : null);
+                if (!string.IsNullOrWhiteSpace(mismatchWarning))
+                {
+                    WF.MessageBox.Show(
+                        mismatchWarning,
+                        "DDD_Dim_4_direction",
+                        WF.MessageBoxButtons.OK,
+                        WF.MessageBoxIcon.Warning);
+                }
             }
         }
 
@@ -646,6 +661,8 @@ namespace AUTOCAD_COMMANDS
                 tr.Commit();
             }
 
+            ed.Regen();
+
             ed.WriteMessage(
                 unsupportedCount > 0
                     ? $"\nBD_CHANGE_POSITION_DIM: đã đổi {changedCount} DIM, bỏ qua {unsupportedCount} DIM không hỗ trợ điểm đặt."
@@ -700,6 +717,43 @@ namespace AUTOCAD_COMMANDS
 
             ms.AppendEntity(dim);
             tr.AddNewlyCreatedDBObject(dim, true);
+        }
+
+        private static string BuildDddMismatchWarning(
+            double? leftDistance,
+            double? rightDistance,
+            double? topDistance,
+            double? bottomDistance)
+        {
+            List<string> lines = new List<string>();
+
+            if (leftDistance.HasValue &&
+                rightDistance.HasValue &&
+                Math.Abs(leftDistance.Value - rightDistance.Value) > DddMismatchTolerance)
+            {
+                lines.Add(
+                    $"Dim ngang không bằng nhau: Trái = {FormatDddDistance(leftDistance.Value)}, Phải = {FormatDddDistance(rightDistance.Value)}");
+            }
+
+            if (topDistance.HasValue &&
+                bottomDistance.HasValue &&
+                Math.Abs(topDistance.Value - bottomDistance.Value) > DddMismatchTolerance)
+            {
+                lines.Add(
+                    $"Dim dọc không bằng nhau: Trên = {FormatDddDistance(topDistance.Value)}, Dưới = {FormatDddDistance(bottomDistance.Value)}");
+            }
+
+            if (lines.Count == 0)
+            {
+                return null;
+            }
+
+            return "Kết quả DDD có dim đối xứng không bằng nhau.\n\n" + string.Join("\n", lines);
+        }
+
+        private static string FormatDddDistance(double value)
+        {
+            return value.ToString("0.###", CultureInfo.InvariantCulture);
         }
 
         // ======================================================
@@ -863,6 +917,11 @@ namespace AUTOCAD_COMMANDS
             {
                 return false;
             }
+
+            // Có những DIM đã bị kéo text thủ công trước đó.
+            // Nếu không trả text về vị trí default trước khi đổi DimLinePoint,
+            // có thể nhìn như DIM không nhúc nhích dù setter vẫn chạy.
+            TrySetUsingDefaultTextPosition(dimension, true);
 
             string[] placementProperties =
             {
