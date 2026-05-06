@@ -1376,9 +1376,10 @@ namespace AUTOCAD_COMMANDS
     // Cách làm:
     // - Chọn 1 lightweight Polyline.
     // - Hỏi có set Closed hay bỏ qua, có lưu lựa chọn lần cuối.
+    // - Hỏi cách xác định điểm đầu: tự động hoặc người dùng pick, có lưu lựa chọn lần cuối.
     // - Ép chiều vertex về ngược chiều kim đồng hồ nếu polyline kín.
-    // - Đổi điểm đầu về vertex có X nhỏ nhất, nếu trùng X thì lấy Y nhỏ nhất.
-    // Lưu ý: với polyline hở, không xoay vòng vertex vì sẽ làm đổi hình.
+    // - Đổi điểm đầu theo quy tắc tự động hoặc theo vertex người dùng chọn.
+    // Lưu ý: với polyline hở, chỉ cho đổi điểm đầu giữa 2 đầu mút để tránh đổi hình.
     // ======================================================
     public class ChangePolylineCommand
     {
@@ -1431,6 +1432,46 @@ namespace AUTOCAD_COMMANDS
 
             CaaPolylineSettingsStore.SaveCloseMode(closeMode);
 
+            CaaStartMode savedStartMode = CaaPolylineSettingsStore.LoadStartMode();
+            PromptKeywordOptions startModeOptions =
+                new PromptKeywordOptions(
+                    $"\nChọn cách xác định điểm đầu [Auto/Pick] <{savedStartMode}>: ");
+            startModeOptions.AllowNone = true;
+            startModeOptions.Keywords.Add("Auto");
+            startModeOptions.Keywords.Add("Pick");
+            startModeOptions.Keywords.Default = savedStartMode.ToString();
+
+            PromptResult startModeResult = ed.GetKeywords(startModeOptions);
+            if (startModeResult.Status == PromptStatus.Cancel)
+            {
+                return;
+            }
+
+            CaaStartMode startMode = savedStartMode;
+            if (startModeResult.Status == PromptStatus.OK &&
+                Enum.TryParse(startModeResult.StringResult, true, out CaaStartMode parsedStartMode))
+            {
+                startMode = parsedStartMode;
+            }
+
+            CaaPolylineSettingsStore.SaveStartMode(startMode);
+
+            Point2d? pickedStartPoint = null;
+            if (startMode == CaaStartMode.Pick)
+            {
+                PromptPointOptions startPointOptions =
+                    new PromptPointOptions(
+                        "\nChọn điểm đầu mong muốn của polyline (pline hở: chọn gần đầu mút): ");
+                PromptPointResult startPointResult = ed.GetPoint(startPointOptions);
+                if (startPointResult.Status != PromptStatus.OK)
+                {
+                    return;
+                }
+
+                pickedStartPoint =
+                    new Point2d(startPointResult.Value.X, startPointResult.Value.Y);
+            }
+
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
                 Autodesk.AutoCAD.DatabaseServices.Polyline polyline =
@@ -1452,7 +1493,6 @@ namespace AUTOCAD_COMMANDS
                     polyline.Closed = true;
                 }
 
-                bool canRotateStart = polyline.Closed && polyline.NumberOfVertices >= 3;
                 bool reversed = false;
                 bool startChanged = false;
 
@@ -1467,25 +1507,32 @@ namespace AUTOCAD_COMMANDS
                 }
                 else if (!polyline.Closed)
                 {
-                    // Với polyline hở, chỉ đảo chiều nếu vertex nhỏ nhất đang là điểm cuối.
+                    int requestedStartIndex = startMode == CaaStartMode.Pick && pickedStartPoint.HasValue
+                        ? FindClosestVertex(polyline, pickedStartPoint.Value)
+                        : FindPreferredStartVertex(polyline);
+
+                    // Với polyline hở, chỉ được đổi giữa 2 đầu mút.
                     // Không xoay vertex giữa lên đầu vì như vậy sẽ làm đổi path.
-                    int bestIndex = FindPreferredStartVertex(polyline);
-                    if (bestIndex == polyline.NumberOfVertices - 1)
+                    if (requestedStartIndex == polyline.NumberOfVertices - 1)
                     {
                         polyline.ReverseCurve();
                         reversed = true;
                         startChanged = true;
                     }
-                    else if (bestIndex != 0)
+                    else if (requestedStartIndex != 0)
                     {
                         ed.WriteMessage(
-                            "\nCAA_change_pline: polyline đang hở nên không đổi điểm đầu về vertex giữa để tránh đổi hình. Chọn Close nếu muốn chuẩn hóa đầy đủ.");
+                            startMode == CaaStartMode.Pick
+                                ? "\nCAA_change_pline: polyline đang hở nên chỉ nhận điểm đầu ở 1 trong 2 đầu mút để tránh đổi hình. Chọn Close nếu muốn đổi sang vertex giữa."
+                                : "\nCAA_change_pline: polyline đang hở nên không đổi điểm đầu về vertex giữa để tránh đổi hình. Chọn Close nếu muốn chuẩn hóa đầy đủ.");
                     }
                 }
 
-                if (canRotateStart)
+                if (polyline.Closed && polyline.NumberOfVertices >= 3)
                 {
-                    int startIndex = FindPreferredStartVertex(polyline);
+                    int startIndex = startMode == CaaStartMode.Pick && pickedStartPoint.HasValue
+                        ? FindClosestVertex(polyline, pickedStartPoint.Value)
+                        : FindPreferredStartVertex(polyline);
                     if (startIndex > 0)
                     {
                         RotateClosedPolylineStart(polyline, startIndex);
@@ -1517,6 +1564,29 @@ namespace AUTOCAD_COMMANDS
                 {
                     bestIndex = i;
                     bestPoint = point;
+                }
+            }
+
+            return bestIndex;
+        }
+
+        private static int FindClosestVertex(
+            Autodesk.AutoCAD.DatabaseServices.Polyline polyline,
+            Point2d targetPoint)
+        {
+            int bestIndex = 0;
+            double bestDistanceSquared = double.MaxValue;
+
+            for (int i = 0; i < polyline.NumberOfVertices; i++)
+            {
+                Point2d point = polyline.GetPoint2dAt(i);
+                double dx = point.X - targetPoint.X;
+                double dy = point.Y - targetPoint.Y;
+                double distanceSquared = dx * dx + dy * dy;
+                if (distanceSquared < bestDistanceSquared)
+                {
+                    bestIndex = i;
+                    bestDistanceSquared = distanceSquared;
                 }
             }
 
@@ -1603,23 +1673,34 @@ namespace AUTOCAD_COMMANDS
             Skip
         }
 
+        private enum CaaStartMode
+        {
+            Auto,
+            Pick
+        }
+
         private static class CaaPolylineSettingsStore
         {
-            private static readonly string FilePath =
+            private static readonly string CloseModeFilePath =
                 Path.Combine(
                     Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
                     "caa_change_pline_settings.txt");
+
+            private static readonly string StartModeFilePath =
+                Path.Combine(
+                    Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
+                    "caa_change_pline_start_mode.txt");
 
             public static CaaCloseMode LoadCloseMode()
             {
                 try
                 {
-                    if (!File.Exists(FilePath))
+                    if (!File.Exists(CloseModeFilePath))
                     {
                         return CaaCloseMode.Close;
                     }
 
-                    string raw = File.ReadAllText(FilePath, Encoding.UTF8).Trim();
+                    string raw = File.ReadAllText(CloseModeFilePath, Encoding.UTF8).Trim();
                     return Enum.TryParse(raw, true, out CaaCloseMode mode)
                         ? mode
                         : CaaCloseMode.Close;
@@ -1634,7 +1715,38 @@ namespace AUTOCAD_COMMANDS
             {
                 try
                 {
-                    File.WriteAllText(FilePath, mode.ToString(), Encoding.UTF8);
+                    File.WriteAllText(CloseModeFilePath, mode.ToString(), Encoding.UTF8);
+                }
+                catch
+                {
+                }
+            }
+
+            public static CaaStartMode LoadStartMode()
+            {
+                try
+                {
+                    if (!File.Exists(StartModeFilePath))
+                    {
+                        return CaaStartMode.Auto;
+                    }
+
+                    string raw = File.ReadAllText(StartModeFilePath, Encoding.UTF8).Trim();
+                    return Enum.TryParse(raw, true, out CaaStartMode mode)
+                        ? mode
+                        : CaaStartMode.Auto;
+                }
+                catch
+                {
+                    return CaaStartMode.Auto;
+                }
+            }
+
+            public static void SaveStartMode(CaaStartMode mode)
+            {
+                try
+                {
+                    File.WriteAllText(StartModeFilePath, mode.ToString(), Encoding.UTF8);
                 }
                 catch
                 {
