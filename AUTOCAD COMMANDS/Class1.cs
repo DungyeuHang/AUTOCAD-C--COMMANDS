@@ -7607,7 +7607,7 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
-            RunSmartStretchWithLength(ed, db, length, "SS");
+            RunSmartStretchLoopWithLength(ed, db, length, "SS");
         }
 
         // SSD_SMART_STRETCH_BY_DIM:
@@ -7635,7 +7635,7 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
-            RunSmartStretchWithLength(ed, db, length, "SSD_SMART_STRETCH_BY_DIM");
+            RunSmartStretchLoopWithLength(ed, db, length, "SSD_SMART_STRETCH_BY_DIM");
         }
 
         // SSD2_SMART_STRETCH_BY_DIM2:
@@ -7663,31 +7663,24 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
-            for (int pass = 1; pass <= 2; pass++)
-            {
-                ed.WriteMessage(
-                    $"\nSSD2_SMART_STRETCH_BY_DIM2: thực hiện stretch lần {pass}/2 với L = {length.ToString("0.###", CultureInfo.InvariantCulture)}.");
-
-                bool completed = RunSmartStretchWithLength(
-                    ed,
-                    db,
-                    length,
-                    $"SSD2_SMART_STRETCH_BY_DIM2 [{pass}/2]");
-
-                if (!completed)
-                {
-                    return;
-                }
-            }
+            RunSmartStretchLoopWithLength(
+                ed,
+                db,
+                length,
+                "SSD2_SMART_STRETCH_BY_DIM2",
+                passCount: 2);
         }
 
-        private static bool RunSmartStretchWithLength(
+        private static void RunSmartStretchLoopWithLength(
             Editor ed,
             Database db,
             double length,
-            string commandLabel)
+            string commandLabel,
+            int passCount = 1)
         {
             // Core dùng chung cho SS/SSD/SSD2.
+            // Sau mỗi lượt stretch sẽ quay lại chọn tiếp.
+            // Chỉ dừng khi người dùng nhấn Space/Enter hoặc Esc.
             // Tắt OSMODE tạm thời để điểm click không bị OSNAP kéo lệch.
             // Khi kết thúc/cancel luôn khôi phục OSMODE cũ.
             object previousOsMode = null;
@@ -7699,46 +7692,38 @@ namespace AUTOCAD_COMMANDS
 
                 SmartStretchSettingsStore.SaveLength(length);
 
-                SmartStretchSelectionInput selectionInput = GetSmartStretchSelectionInput(ed);
-                if (selectionInput == null)
+                while (true)
                 {
-                    return false;
+                    for (int pass = 1; pass <= passCount; pass++)
+                    {
+                        while (true)
+                        {
+                            if (passCount > 1)
+                            {
+                                ed.WriteMessage(
+                                    $"\n{commandLabel}: thực hiện stretch lần {pass}/{passCount} với L = {length.ToString("0.###", CultureInfo.InvariantCulture)}.");
+                            }
+
+                            SmartStretchLoopResult result = RunSingleSmartStretchWithLength(
+                                ed,
+                                db,
+                                length,
+                                passCount > 1
+                                    ? $"{commandLabel} [{pass}/{passCount}]"
+                                    : commandLabel);
+
+                            if (result == SmartStretchLoopResult.Completed)
+                            {
+                                break;
+                            }
+
+                            if (result == SmartStretchLoopResult.StopRequested)
+                            {
+                                return;
+                            }
+                        }
+                    }
                 }
-
-                ShowSmartStretchSelection(ed, selectionInput.SelectedObjectIds);
-
-                PromptPointResult startResult = ed.GetPoint("\nChọn điểm đầu: ");
-                if (startResult.Status != PromptStatus.OK)
-                {
-                    ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
-                    return false;
-                }
-
-                PromptResult directionResult = GetDirectionWithPreview(
-                    ed,
-                    selectionInput,
-                    startResult.Value,
-                    length,
-                    out SmartStretchDirection direction,
-                    out Point3d secondPoint);
-                if (directionResult.Status != PromptStatus.OK)
-                {
-                    ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
-                    return false;
-                }
-                if (direction == SmartStretchDirection.None)
-                {
-                    ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
-                    ed.WriteMessage("\nKhông xác định được hướng stretch.");
-                    return false;
-                }
-
-                ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
-                ExecuteNativeStretch(ed, selectionInput, startResult.Value, secondPoint);
-
-                ed.WriteMessage(
-                    $"\n{commandLabel}: đã gọi STRETCH gốc theo {GetDirectionLabel(direction)} với L = {length.ToString("0.###", CultureInfo.InvariantCulture)}.");
-                return true;
             }
             finally
             {
@@ -7747,6 +7732,78 @@ namespace AUTOCAD_COMMANDS
                     Application.SetSystemVariable("OSMODE", previousOsMode);
                 }
             }
+        }
+
+        private static SmartStretchLoopResult RunSingleSmartStretchWithLength(
+            Editor ed,
+            Database db,
+            double length,
+            string commandLabel)
+        {
+            SmartStretchSelectionInput selectionInput =
+                GetSmartStretchSelectionInput(ed, out bool stopRequested);
+            if (stopRequested)
+            {
+                return SmartStretchLoopResult.StopRequested;
+            }
+
+            if (selectionInput == null)
+            {
+                return SmartStretchLoopResult.Retry;
+            }
+
+            ShowSmartStretchSelection(ed, selectionInput.SelectedObjectIds);
+
+            PromptPointOptions startPointOptions =
+                new PromptPointOptions("\nChọn điểm đầu hoặc Space/Enter để kết thúc: ");
+            startPointOptions.AllowNone = true;
+
+            PromptPointResult startResult = ed.GetPoint(startPointOptions);
+            if (startResult.Status == PromptStatus.None ||
+                startResult.Status == PromptStatus.Cancel)
+            {
+                ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
+                return SmartStretchLoopResult.StopRequested;
+            }
+
+            if (startResult.Status != PromptStatus.OK)
+            {
+                ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
+                return SmartStretchLoopResult.Retry;
+            }
+
+            PromptResult directionResult = GetDirectionWithPreview(
+                ed,
+                selectionInput,
+                startResult.Value,
+                length,
+                out SmartStretchDirection direction,
+                out Point3d secondPoint);
+            if (directionResult.Status == PromptStatus.Cancel)
+            {
+                ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
+                return SmartStretchLoopResult.StopRequested;
+            }
+
+            if (directionResult.Status != PromptStatus.OK)
+            {
+                ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
+                return SmartStretchLoopResult.Retry;
+            }
+
+            if (direction == SmartStretchDirection.None)
+            {
+                ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
+                ed.WriteMessage("\nKhông xác định được hướng stretch. Hãy làm lại.");
+                return SmartStretchLoopResult.Retry;
+            }
+
+            ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
+            ExecuteNativeStretch(ed, selectionInput, startResult.Value, secondPoint);
+
+            ed.WriteMessage(
+                $"\n{commandLabel}: đã gọi STRETCH gốc theo {GetDirectionLabel(direction)} với L = {length.ToString("0.###", CultureInfo.InvariantCulture)}.");
+            return SmartStretchLoopResult.Completed;
         }
 
         private static bool TryPromptStretchLength(Editor ed, out double length)
@@ -7873,12 +7930,16 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
-        private static SmartStretchSelectionInput GetSmartStretchSelectionInput(Editor ed)
+        private static SmartStretchSelectionInput GetSmartStretchSelectionInput(
+            Editor ed,
+            out bool stopRequested)
         {
             // Cho phép quét nhiều crossing window.
             // Mỗi window được lưu để lúc gọi STRETCH gốc truyền đúng vùng crossing.
+            // Space/Enter ở ngay window đầu tiên sẽ thoát hẳn command loop.
+            stopRequested = false;
             ed.WriteMessage(
-                "\nWindow: quet nhieu vung neu can, nhan Space/Enter o buoc chon goc dau de ket thuc chon.");
+                "\nWindow: quet nhieu vung neu can. Nhan Space/Enter o goc dau khi chua quet window nao de thoat, hoac sau khi da quet it nhat 1 window de sang buoc stretch.");
 
             List<SmartStretchWindowSelection> windows = new List<SmartStretchWindowSelection>();
             HashSet<ObjectId> selectedIds = new HashSet<ObjectId>();
@@ -7894,14 +7955,28 @@ namespace AUTOCAD_COMMANDS
                     PromptPointOptions firstCornerOptions =
                         new PromptPointOptions(
                             windows.Count == 0
-                                ? "\nChọn góc đầu crossing window: "
-                                : "\nChọn góc đầu crossing window tiếp theo hoặc Space để xong: ");
-                    firstCornerOptions.AllowNone = windows.Count > 0;
+                                ? "\nChọn góc đầu crossing window hoặc Space/Enter để thoát: "
+                                : "\nChọn góc đầu crossing window tiếp theo hoặc Space/Enter để stretch: ");
+                    firstCornerOptions.AllowNone = true;
 
                     PromptPointResult firstCornerResult = ed.GetPoint(firstCornerOptions);
                     if (firstCornerResult.Status == PromptStatus.None)
                     {
+                        if (windows.Count == 0)
+                        {
+                            stopRequested = true;
+                            ClearSmartStretchSelection(selectedIds.ToArray());
+                            return null;
+                        }
+
                         break;
+                    }
+
+                    if (firstCornerResult.Status == PromptStatus.Cancel)
+                    {
+                        ClearSmartStretchSelection(selectedIds.ToArray());
+                        stopRequested = true;
+                        return null;
                     }
 
                     if (firstCornerResult.Status != PromptStatus.OK)
@@ -7915,6 +7990,13 @@ namespace AUTOCAD_COMMANDS
                             "\nChọn góc đối diện crossing window: ",
                             firstCornerResult.Value);
                     PromptPointResult secondCornerResult = ed.GetCorner(secondCornerOptions);
+                    if (secondCornerResult.Status == PromptStatus.Cancel)
+                    {
+                        ClearSmartStretchSelection(selectedIds.ToArray());
+                        stopRequested = true;
+                        return null;
+                    }
+
                     if (secondCornerResult.Status != PromptStatus.OK)
                     {
                         ClearSmartStretchSelection(selectedIds.ToArray());
@@ -7961,6 +8043,13 @@ namespace AUTOCAD_COMMANDS
             return SmartStretchSelectionInput.CreateSelection(
                 windows,
                 selectedIds);
+        }
+
+        private enum SmartStretchLoopResult
+        {
+            Completed,
+            StopRequested,
+            Retry
         }
 
         private static void ExecuteNativeStretch(
