@@ -2291,7 +2291,10 @@ namespace AUTOCAD_COMMANDS
     {
         private const string DimLayerName = "_mss.kichthuoc";
         private const double DirectionTolerance = 1e-6;
+        private const double PreviewPointTolerance = 1e-4;
         private const double SearchDistance = 1000000.0;
+        private static readonly RXClass CurveRxClass = RXObject.GetClass(typeof(Curve));
+        private static readonly RXClass DimensionRxClass = RXObject.GetClass(typeof(Dimension));
 
         public void SmartDimX()
         {
@@ -2308,7 +2311,7 @@ namespace AUTOCAD_COMMANDS
                 startRes.Value,
                 "\nChọn điểm để xác định hướng X (+/-): ",
                 true,
-                out PromptPointResult dirRes,
+                out Point3d dirPoint,
                 out double direction))
             {
                 return;
@@ -2322,7 +2325,7 @@ namespace AUTOCAD_COMMANDS
                 if (currentSpace == null) return;
 
                 Point3d? targetPoint =
-                    FindNearestPointOnXAxis(currentSpace, tr, startRes.Value, direction);
+                    FindNearestPointOnXAxis(ed, currentSpace, tr, startRes.Value, direction);
 
                 if (!targetPoint.HasValue)
                 {
@@ -2333,8 +2336,8 @@ namespace AUTOCAD_COMMANDS
 
                 Point3d endPoint = new Point3d(
                     targetPoint.Value.X,
-                    startRes.Value.Y,
-                    startRes.Value.Z);
+                    dirPoint.Y,
+                    dirPoint.Z);
 
                 if (startRes.Value.DistanceTo(endPoint) < DirectionTolerance)
                 {
@@ -2349,7 +2352,7 @@ namespace AUTOCAD_COMMANDS
                 {
                     XLine1Point = startRes.Value,
                     XLine2Point = endPoint,
-                    DimLinePoint = dirRes.Value,
+                    DimLinePoint = dirPoint,
                     Rotation = 0.0,
                     DimensionStyle = db.Dimstyle,
                     LayerId = dimLayerId
@@ -2376,7 +2379,7 @@ namespace AUTOCAD_COMMANDS
                 startRes.Value,
                 "\nChọn điểm để xác định hướng Y (+/-): ",
                 false,
-                out PromptPointResult dirRes,
+                out Point3d dirPoint,
                 out double direction))
             {
                 return;
@@ -2390,7 +2393,7 @@ namespace AUTOCAD_COMMANDS
                 if (currentSpace == null) return;
 
                 Point3d? targetPoint =
-                    FindNearestPointOnYAxis(currentSpace, tr, startRes.Value, direction);
+                    FindNearestPointOnYAxis(ed, currentSpace, tr, startRes.Value, direction);
 
                 if (!targetPoint.HasValue)
                 {
@@ -2400,9 +2403,9 @@ namespace AUTOCAD_COMMANDS
                 }
 
                 Point3d endPoint = new Point3d(
-                    startRes.Value.X,
+                    dirPoint.X,
                     targetPoint.Value.Y,
-                    startRes.Value.Z);
+                    dirPoint.Z);
 
                 if (startRes.Value.DistanceTo(endPoint) < DirectionTolerance)
                 {
@@ -2416,7 +2419,7 @@ namespace AUTOCAD_COMMANDS
                 {
                     XLine1Point = startRes.Value,
                     XLine2Point = endPoint,
-                    DimLinePoint = dirRes.Value,
+                    DimLinePoint = dirPoint,
                     Rotation = Math.PI / 2.0,
                     DimensionStyle = db.Dimstyle,
                     LayerId = dimLayerId
@@ -2449,7 +2452,7 @@ namespace AUTOCAD_COMMANDS
                 startRes.Value,
                 "\nChọn điểm để xác định hướng dim X/Y: ",
                 null,
-                out PromptPointResult dirRes,
+                out Point3d dirPoint,
                 out double direction,
                 out bool useXAxis))
             {
@@ -2465,16 +2468,18 @@ namespace AUTOCAD_COMMANDS
 
                 Point3d? targetPoint = useXAxis
                     ? FindNearestPointOnXAxisFromProbe(
+                        ed,
                         currentSpace,
                         tr,
                         startRes.Value,
-                        dirRes.Value,
+                        dirPoint,
                         direction)
                     : FindNearestPointOnYAxisFromProbe(
+                        ed,
                         currentSpace,
                         tr,
                         startRes.Value,
-                        dirRes.Value,
+                        dirPoint,
                         direction);
 
                 if (!targetPoint.HasValue)
@@ -2487,8 +2492,8 @@ namespace AUTOCAD_COMMANDS
                 }
 
                 Point3d endPoint = useXAxis
-                    ? new Point3d(targetPoint.Value.X, startRes.Value.Y, startRes.Value.Z)
-                    : new Point3d(startRes.Value.X, targetPoint.Value.Y, startRes.Value.Z);
+                    ? new Point3d(targetPoint.Value.X, dirPoint.Y, dirPoint.Z)
+                    : new Point3d(dirPoint.X, targetPoint.Value.Y, dirPoint.Z);
 
                 if (startRes.Value.DistanceTo(endPoint) < DirectionTolerance)
                 {
@@ -2553,7 +2558,7 @@ namespace AUTOCAD_COMMANDS
             Point3d startPoint,
             string message,
             bool? forceXAxis,
-            out PromptPointResult pointResult,
+            out Point3d pointResult,
             out double direction)
         {
             return TryPromptAxisDirection(
@@ -2571,7 +2576,7 @@ namespace AUTOCAD_COMMANDS
             Point3d startPoint,
             string message,
             bool? forceXAxis,
-            out PromptPointResult pointResult,
+            out Point3d pointResult,
             out double direction,
             out bool useXAxis)
         {
@@ -2579,22 +2584,26 @@ namespace AUTOCAD_COMMANDS
             // Nếu forceXAxis = null thì chọn trục có độ lệch lớn hơn giữa X và Y.
             while (true)
             {
-                PromptPointOptions dirOpt = new PromptPointOptions(message)
-                {
-                    BasePoint = startPoint,
-                    UseBasePoint = true
-                };
+                PromptStatus promptStatus;
 
-                pointResult = ed.GetPoint(dirOpt);
-                if (pointResult.Status != PromptStatus.OK)
+                using (AxisDirectionPreviewJig jig =
+                    new AxisDirectionPreviewJig(startPoint, message, forceXAxis))
                 {
+                    PromptResult dragResult = ed.Drag(jig);
+                    promptStatus = dragResult.Status;
+                    pointResult = jig.CurrentPoint;
+                }
+
+                if (promptStatus != PromptStatus.OK)
+                {
+                    pointResult = startPoint;
                     direction = 0.0;
                     useXAxis = forceXAxis ?? true;
                     return false;
                 }
 
-                double deltaX = pointResult.Value.X - startPoint.X;
-                double deltaY = pointResult.Value.Y - startPoint.Y;
+                double deltaX = pointResult.X - startPoint.X;
+                double deltaY = pointResult.Y - startPoint.Y;
 
                 if (forceXAxis.HasValue)
                 {
@@ -2629,6 +2638,7 @@ namespace AUTOCAD_COMMANDS
         }
 
         private Point3d? FindNearestPointOnXAxis(
+            Editor ed,
             BlockTableRecord currentSpace,
             Transaction tr,
             Point3d startPoint,
@@ -2639,11 +2649,15 @@ namespace AUTOCAD_COMMANDS
 
             using (Line scanLine = CreateScanLine(startPoint, direction))
             {
-                foreach (ObjectId id in currentSpace)
+                foreach (ObjectId id in GetScanCandidateIds(
+                    ed,
+                    currentSpace,
+                    startPoint,
+                    true,
+                    direction))
                 {
                     Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
                     if (entity == null || entity.IsErased) continue;
-                    if (entity is Dimension) continue;
                     Curve curve = entity as Curve;
                     if (curve == null) continue;
                     if (!IsHorizontalRayCandidate(
@@ -2679,6 +2693,7 @@ namespace AUTOCAD_COMMANDS
         }
 
         private Point3d? FindNearestPointOnXAxisFromProbe(
+            Editor ed,
             BlockTableRecord currentSpace,
             Transaction tr,
             Point3d startPoint,
@@ -2692,11 +2707,15 @@ namespace AUTOCAD_COMMANDS
 
             using (Line scanLine = CreateScanLine(probePoint, direction))
             {
-                foreach (ObjectId id in currentSpace)
+                foreach (ObjectId id in GetScanCandidateIds(
+                    ed,
+                    currentSpace,
+                    probePoint,
+                    true,
+                    direction))
                 {
                     Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
                     if (entity == null || entity.IsErased) continue;
-                    if (entity is Dimension) continue;
                     Curve curve = entity as Curve;
                     if (curve == null) continue;
                     if (!IsHorizontalRayCandidate(
@@ -2737,6 +2756,7 @@ namespace AUTOCAD_COMMANDS
         }
 
         private Point3d? FindNearestPointOnYAxis(
+            Editor ed,
             BlockTableRecord currentSpace,
             Transaction tr,
             Point3d startPoint,
@@ -2747,11 +2767,15 @@ namespace AUTOCAD_COMMANDS
 
             using (Line scanLine = CreateVerticalScanLine(startPoint, direction))
             {
-                foreach (ObjectId id in currentSpace)
+                foreach (ObjectId id in GetScanCandidateIds(
+                    ed,
+                    currentSpace,
+                    startPoint,
+                    false,
+                    direction))
                 {
                     Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
                     if (entity == null || entity.IsErased) continue;
-                    if (entity is Dimension) continue;
                     Curve curve = entity as Curve;
                     if (curve == null) continue;
                     if (!IsVerticalRayCandidate(
@@ -2787,6 +2811,7 @@ namespace AUTOCAD_COMMANDS
         }
 
         private Point3d? FindNearestPointOnYAxisFromProbe(
+            Editor ed,
             BlockTableRecord currentSpace,
             Transaction tr,
             Point3d startPoint,
@@ -2800,11 +2825,15 @@ namespace AUTOCAD_COMMANDS
 
             using (Line scanLine = CreateVerticalScanLine(probePoint, direction))
             {
-                foreach (ObjectId id in currentSpace)
+                foreach (ObjectId id in GetScanCandidateIds(
+                    ed,
+                    currentSpace,
+                    probePoint,
+                    false,
+                    direction))
                 {
                     Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
                     if (entity == null || entity.IsErased) continue;
-                    if (entity is Dimension) continue;
                     Curve curve = entity as Curve;
                     if (curve == null) continue;
                     if (!IsVerticalRayCandidate(
@@ -2936,6 +2965,105 @@ namespace AUTOCAD_COMMANDS
             return minNegativeRankDistance < bestDistance;
         }
 
+        private IEnumerable<ObjectId> GetScanCandidateIds(
+            Editor ed,
+            BlockTableRecord currentSpace,
+            Point3d scanStartPoint,
+            bool useXAxis,
+            double direction)
+        {
+            ObjectId[] selectionIds = TrySelectFenceCandidates(
+                ed,
+                scanStartPoint,
+                useXAxis,
+                direction);
+            if (selectionIds != null)
+            {
+                return selectionIds;
+            }
+
+            return EnumerateCurveIds(currentSpace);
+        }
+
+        private ObjectId[] TrySelectFenceCandidates(
+            Editor ed,
+            Point3d scanStartPoint,
+            bool useXAxis,
+            double direction)
+        {
+            if (ed == null)
+            {
+                return null;
+            }
+
+            Point3d fenceEnd = useXAxis
+                ? new Point3d(
+                    scanStartPoint.X + SearchDistance * direction,
+                    scanStartPoint.Y,
+                    scanStartPoint.Z)
+                : new Point3d(
+                    scanStartPoint.X,
+                    scanStartPoint.Y + SearchDistance * direction,
+                    scanStartPoint.Z);
+
+            try
+            {
+                using (Point3dCollection fencePoints = new Point3dCollection())
+                {
+                    fencePoints.Add(scanStartPoint);
+                    fencePoints.Add(fenceEnd);
+
+                    PromptSelectionResult result = ed.SelectFence(fencePoints);
+                    if (result.Status == PromptStatus.OK && result.Value != null)
+                    {
+                        return result.Value
+                            .GetObjectIds()
+                            .Where(IsCurveCandidateId)
+                            .ToArray();
+                    }
+
+                    if (result.Status == PromptStatus.None)
+                    {
+                        return Array.Empty<ObjectId>();
+                    }
+                }
+            }
+            catch
+            {
+                // Nếu engine selection không trả được kết quả ổn định trong một số
+                // bản vẽ đặc biệt thì fallback về cách duyệt cũ.
+            }
+
+            return null;
+        }
+
+        private IEnumerable<ObjectId> EnumerateCurveIds(BlockTableRecord currentSpace)
+        {
+            foreach (ObjectId id in currentSpace)
+            {
+                if (IsCurveCandidateId(id))
+                {
+                    yield return id;
+                }
+            }
+        }
+
+        private bool IsCurveCandidateId(ObjectId id)
+        {
+            RXClass objectClass = id.ObjectClass;
+            if (objectClass == null)
+            {
+                return false;
+            }
+
+            if (DimensionRxClass != null && objectClass.IsDerivedFrom(DimensionRxClass))
+            {
+                return false;
+            }
+
+            return CurveRxClass == null || objectClass.IsDerivedFrom(CurveRxClass);
+        }
+
         private bool TryGetCurveExtents(Curve curve, out Extents3d extents)
         {
             try
@@ -2989,6 +3117,87 @@ namespace AUTOCAD_COMMANDS
                 startPoint.Z);
 
             return new Line(startPoint, endPoint);
+        }
+
+        private sealed class AxisDirectionPreviewJig : DrawJig, IDisposable
+        {
+            private readonly Point3d _startPoint;
+            private readonly string _message;
+            private readonly bool? _forceXAxis;
+            private Point3d _currentPoint;
+
+            public AxisDirectionPreviewJig(
+                Point3d startPoint,
+                string message,
+                bool? forceXAxis)
+            {
+                _startPoint = startPoint;
+                _message = message;
+                _forceXAxis = forceXAxis;
+                _currentPoint = startPoint;
+            }
+
+            public Point3d CurrentPoint => _currentPoint;
+
+            protected override SamplerStatus Sampler(JigPrompts prompts)
+            {
+                JigPromptPointOptions pointOptions =
+                    new JigPromptPointOptions(_message);
+                // Không dùng BasePoint để điểm thứ 2 của SDXY / SmartDimX / SmartDimY
+                // không bị ORTHOMODE ép theo ngang/dọc.
+                pointOptions.UserInputControls =
+                    UserInputControls.Accept3dCoordinates |
+                    UserInputControls.NoZDirectionOrtho;
+
+                PromptPointResult pointResult = prompts.AcquirePoint(pointOptions);
+                if (pointResult.Status == PromptStatus.Cancel)
+                {
+                    return SamplerStatus.Cancel;
+                }
+
+                if (pointResult.Status != PromptStatus.OK)
+                {
+                    return SamplerStatus.NoChange;
+                }
+
+                if (_currentPoint.DistanceTo(pointResult.Value) <= PreviewPointTolerance)
+                {
+                    return SamplerStatus.NoChange;
+                }
+
+                _currentPoint = pointResult.Value;
+                return SamplerStatus.OK;
+            }
+
+            protected override bool WorldDraw(WorldDraw draw)
+            {
+                Point3d previewPoint = GetPreviewPoint();
+                if (_startPoint.DistanceTo(previewPoint) <= DirectionTolerance)
+                {
+                    return true;
+                }
+
+                draw.Geometry.WorldLine(_startPoint, previewPoint);
+                return true;
+            }
+
+            private Point3d GetPreviewPoint()
+            {
+                double deltaX = _currentPoint.X - _startPoint.X;
+                double deltaY = _currentPoint.Y - _startPoint.Y;
+
+                bool useXAxis = _forceXAxis ?? (Math.Abs(deltaX) >= Math.Abs(deltaY));
+                if (useXAxis)
+                {
+                    return new Point3d(_currentPoint.X, _startPoint.Y, _startPoint.Z);
+                }
+
+                return new Point3d(_startPoint.X, _currentPoint.Y, _startPoint.Z);
+            }
+
+            public void Dispose()
+            {
+            }
         }
 
         private sealed class SmartDimPlacementJig : DrawJig, IDisposable
@@ -3052,7 +3261,7 @@ namespace AUTOCAD_COMMANDS
                     return SamplerStatus.NoChange;
                 }
 
-                if (_currentPoint.DistanceTo(pointResult.Value) <= DirectionTolerance)
+                if (_currentPoint.DistanceTo(pointResult.Value) <= PreviewPointTolerance)
                 {
                     return SamplerStatus.NoChange;
                 }
