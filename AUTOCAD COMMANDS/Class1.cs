@@ -3036,8 +3036,10 @@ namespace AUTOCAD_COMMANDS
             {
                 JigPromptPointOptions pointOptions =
                     new JigPromptPointOptions("\nChọn điểm đặt dim: ");
-                pointOptions.BasePoint = _defaultPoint;
-                pointOptions.UseBasePoint = true;
+                // Không dùng BasePoint ở bước này để preview DIM không bị
+                // ORTHOMODE của AutoCAD ép theo ngang/dọc.
+                pointOptions.UserInputControls =
+                    UserInputControls.Accept3dCoordinates;
 
                 PromptPointResult pointResult = prompts.AcquirePoint(pointOptions);
                 if (pointResult.Status == PromptStatus.Cancel)
