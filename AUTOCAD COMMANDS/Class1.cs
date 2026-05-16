@@ -2496,13 +2496,13 @@ namespace AUTOCAD_COMMANDS
                     return;
                 }
 
-                PromptPointOptions dimPointOptions =
-                    new PromptPointOptions("\nChọn điểm đặt dim: ");
-                dimPointOptions.UseBasePoint = true;
-                dimPointOptions.BasePoint = endPoint;
-
-                PromptPointResult dimPointRes = ed.GetPoint(dimPointOptions);
-                if (dimPointRes.Status != PromptStatus.OK)
+                if (!TryPromptDimPlacementPoint(
+                    ed,
+                    db,
+                    startRes.Value,
+                    endPoint,
+                    useXAxis,
+                    out Point3d dimPlacementPoint))
                 {
                     return;
                 }
@@ -2513,7 +2513,7 @@ namespace AUTOCAD_COMMANDS
                 {
                     XLine1Point = startRes.Value,
                     XLine2Point = endPoint,
-                    DimLinePoint = dimPointRes.Value,
+                    DimLinePoint = dimPlacementPoint,
                     Rotation = useXAxis ? 0.0 : Math.PI / 2.0,
                     DimensionStyle = db.Dimstyle,
                     LayerId = dimLayerId
@@ -2523,6 +2523,29 @@ namespace AUTOCAD_COMMANDS
                 tr.AddNewlyCreatedDBObject(dim, true);
                 tr.Commit();
             }
+        }
+
+        private bool TryPromptDimPlacementPoint(
+            Editor ed,
+            Database db,
+            Point3d startPoint,
+            Point3d endPoint,
+            bool useXAxis,
+            out Point3d dimPlacementPoint)
+        {
+            using (SmartDimPlacementJig jig =
+                new SmartDimPlacementJig(db, startPoint, endPoint, useXAxis))
+            {
+                PromptResult dragResult = ed.Drag(jig);
+                if (dragResult.Status == PromptStatus.OK)
+                {
+                    dimPlacementPoint = jig.DimLinePoint;
+                    return true;
+                }
+            }
+
+            dimPlacementPoint = Point3d.Origin;
+            return false;
         }
 
         private bool TryPromptAxisDirection(
@@ -2966,6 +2989,86 @@ namespace AUTOCAD_COMMANDS
                 startPoint.Z);
 
             return new Line(startPoint, endPoint);
+        }
+
+        private sealed class SmartDimPlacementJig : DrawJig, IDisposable
+        {
+            private readonly RotatedDimension _previewDimension;
+            private readonly Point3d _defaultPoint;
+            private Point3d _currentPoint;
+
+            public SmartDimPlacementJig(
+                Database db,
+                Point3d startPoint,
+                Point3d endPoint,
+                bool useXAxis)
+            {
+                double previewOffset = Math.Max(
+                    db.Dimtxt + db.Dimgap + db.Dimexe,
+                    10.0);
+
+                _defaultPoint = useXAxis
+                    ? new Point3d(
+                        (startPoint.X + endPoint.X) * 0.5,
+                        startPoint.Y + previewOffset,
+                        startPoint.Z)
+                    : new Point3d(
+                        startPoint.X + previewOffset,
+                        (startPoint.Y + endPoint.Y) * 0.5,
+                        startPoint.Z);
+
+                _currentPoint = _defaultPoint;
+
+                _previewDimension = new RotatedDimension
+                {
+                    XLine1Point = startPoint,
+                    XLine2Point = endPoint,
+                    DimLinePoint = _currentPoint,
+                    Rotation = useXAxis ? 0.0 : Math.PI / 2.0,
+                    DimensionStyle = db.Dimstyle
+                };
+                _previewDimension.SetDatabaseDefaults(db);
+            }
+
+            public Point3d DimLinePoint => _currentPoint;
+
+            protected override SamplerStatus Sampler(JigPrompts prompts)
+            {
+                JigPromptPointOptions pointOptions =
+                    new JigPromptPointOptions("\nChọn điểm đặt dim: ");
+                pointOptions.BasePoint = _defaultPoint;
+                pointOptions.UseBasePoint = true;
+
+                PromptPointResult pointResult = prompts.AcquirePoint(pointOptions);
+                if (pointResult.Status == PromptStatus.Cancel)
+                {
+                    return SamplerStatus.Cancel;
+                }
+
+                if (pointResult.Status != PromptStatus.OK)
+                {
+                    return SamplerStatus.NoChange;
+                }
+
+                if (_currentPoint.DistanceTo(pointResult.Value) <= DirectionTolerance)
+                {
+                    return SamplerStatus.NoChange;
+                }
+
+                _currentPoint = pointResult.Value;
+                _previewDimension.DimLinePoint = _currentPoint;
+                return SamplerStatus.OK;
+            }
+
+            protected override bool WorldDraw(WorldDraw draw)
+            {
+                return _previewDimension.WorldDraw(draw);
+            }
+
+            public void Dispose()
+            {
+                _previewDimension?.Dispose();
+            }
         }
 
         private ObjectId EnsureDimLayer(Database db, Transaction tr)
