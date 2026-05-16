@@ -2430,7 +2430,8 @@ namespace AUTOCAD_COMMANDS
 
         // SDXY:
         // - Tự chọn trục X/Y theo hướng click.
-        // - Điểm click thứ 2 vừa xác định hướng, vừa là điểm dò target.
+        // - Điểm click thứ 2 chỉ dùng để xác định hướng và dò target.
+        // - Sau khi tìm được điểm cuối, người dùng tự chọn điểm đặt DIM.
         // - Nhờ vậy có thể dim vượt qua các đối tượng trung gian gần điểm đầu.
         [CommandMethod("SDXY")]
         public void SmartDimXY()
@@ -2495,13 +2496,24 @@ namespace AUTOCAD_COMMANDS
                     return;
                 }
 
+                PromptPointOptions dimPointOptions =
+                    new PromptPointOptions("\nChọn điểm đặt dim: ");
+                dimPointOptions.UseBasePoint = true;
+                dimPointOptions.BasePoint = endPoint;
+
+                PromptPointResult dimPointRes = ed.GetPoint(dimPointOptions);
+                if (dimPointRes.Status != PromptStatus.OK)
+                {
+                    return;
+                }
+
                 ObjectId dimLayerId = EnsureDimLayer(db, tr);
 
                 RotatedDimension dim = new RotatedDimension
                 {
                     XLine1Point = startRes.Value,
                     XLine2Point = endPoint,
-                    DimLinePoint = dirRes.Value,
+                    DimLinePoint = dimPointRes.Value,
                     Rotation = useXAxis ? 0.0 : Math.PI / 2.0,
                     DimensionStyle = db.Dimstyle,
                     LayerId = dimLayerId
