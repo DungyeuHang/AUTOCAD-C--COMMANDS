@@ -2542,7 +2542,7 @@ namespace AUTOCAD_COMMANDS
                 new SmartDimPlacementJig(db, startPoint, endPoint, useXAxis))
             {
                 PromptResult dragResult = ed.Drag(jig);
-                if (dragResult.Status == PromptStatus.OK)
+                if (dragResult.Status == PromptStatus.OK || jig.AcceptedByShortcut)
                 {
                     dimPlacementPoint = jig.DimLinePoint;
                     return true;
@@ -3205,6 +3205,7 @@ namespace AUTOCAD_COMMANDS
             private readonly RotatedDimension _previewDimension;
             private readonly Point3d _defaultPoint;
             private Point3d _currentPoint;
+            private bool _acceptedByShortcut;
 
             public SmartDimPlacementJig(
                 Database db,
@@ -3241,6 +3242,8 @@ namespace AUTOCAD_COMMANDS
 
             public Point3d DimLinePoint => _currentPoint;
 
+            public bool AcceptedByShortcut => _acceptedByShortcut;
+
             protected override SamplerStatus Sampler(JigPrompts prompts)
             {
                 JigPromptPointOptions pointOptions =
@@ -3248,9 +3251,18 @@ namespace AUTOCAD_COMMANDS
                 // Không dùng BasePoint ở bước này để preview DIM không bị
                 // ORTHOMODE của AutoCAD ép theo ngang/dọc.
                 pointOptions.UserInputControls =
-                    UserInputControls.Accept3dCoordinates;
+                    UserInputControls.Accept3dCoordinates |
+                    UserInputControls.NullResponseAccepted;
 
                 PromptPointResult pointResult = prompts.AcquirePoint(pointOptions);
+                if (pointResult.Status == PromptStatus.None)
+                {
+                    // Space/Enter: chốt luôn tại điểm preview hiện tại.
+                    // Nếu người dùng chưa rê chuột thì _currentPoint vẫn là điểm auto cũ.
+                    _acceptedByShortcut = true;
+                    return SamplerStatus.Cancel;
+                }
+
                 if (pointResult.Status == PromptStatus.Cancel)
                 {
                     return SamplerStatus.Cancel;
