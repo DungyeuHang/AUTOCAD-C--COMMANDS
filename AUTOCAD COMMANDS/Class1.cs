@@ -5137,7 +5137,7 @@ namespace AUTOCAD_COMMANDS
 
         // Các command hiện lên panel Stretch.
         private static readonly string[] StretchCommands =
-            { "SS", "SSD_SMART_STRETCH_BY_DIM", "SSD2_SMART_STRETCH_BY_DIM2" };
+            { "SS", "SSD", "SSD2_SMART_STRETCH_BY_DIM2" };
 
         // Các command tiện ích workspace/palette/ribbon.
         private static readonly string[] ToolCommands =
@@ -5605,7 +5605,7 @@ namespace AUTOCAD_COMMANDS
                     "SS",
                     Color.FromArgb(90, 48, 32),
                     Color.FromArgb(255, 144, 64)),
-                ["SSD_SMART_STRETCH_BY_DIM"] = new RibbonCommandStyle(
+                ["SSD"] = new RibbonCommandStyle(
                     "Stretch By Dim",
                     "Stretch\nBy Dim",
                     "By Dim",
@@ -7948,11 +7948,11 @@ namespace AUTOCAD_COMMANDS
             RunSmartStretchLoopWithLength(ed, db, length, "SS");
         }
 
-        // SSD_SMART_STRETCH_BY_DIM:
+        // SSD:
         // - Chọn 2 DIM.
         // - L = trị tuyệt đối chênh lệch measurement của 2 DIM.
         // - Sau đó chạy cùng core stretch với SS.
-        [CommandMethod("SSD_SMART_STRETCH_BY_DIM")]
+        [CommandMethod("SSD")]
         public void SmartStretchByDim()
         {
             Document doc = Application.DocumentManager.MdiActiveDocument;
@@ -7973,7 +7973,7 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
-            RunSmartStretchLoopWithLength(ed, db, length, "SSD_SMART_STRETCH_BY_DIM");
+            RunSmartStretchLoopWithLength(ed, db, length, "SSD");
         }
 
         // SSD2_SMART_STRETCH_BY_DIM2:
