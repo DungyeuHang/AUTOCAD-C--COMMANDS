@@ -497,6 +497,7 @@ namespace AUTOCAD_COMMANDS
 
                 ObjectId dimLayerId = EnsureAutoDimLayer(db, tr);
                 int createdCount = 0;
+                double verticalDimPlacementX = sourceCenter.X - 200.0;
 
                 if (leftExtents.HasValue && leftDistance > AutoDimTolerance)
                 {
@@ -536,7 +537,7 @@ namespace AUTOCAD_COMMANDS
                         Math.PI / 2.0,
                         new Point3d(sourceCenter.X, sourceExtents.Value.MaxPoint.Y, 0.0),
                         new Point3d(sourceCenter.X, topExtents.Value.MinPoint.Y, 0.0),
-                        new Point3d(sourceCenter.X, sourceCenter.Y, 0.0));
+                        new Point3d(verticalDimPlacementX, sourceCenter.Y, 0.0));
                     createdCount++;
                 }
 
@@ -550,7 +551,7 @@ namespace AUTOCAD_COMMANDS
                         Math.PI / 2.0,
                         new Point3d(sourceCenter.X, bottomExtents.Value.MaxPoint.Y, 0.0),
                         new Point3d(sourceCenter.X, sourceExtents.Value.MinPoint.Y, 0.0),
-                        new Point3d(sourceCenter.X, sourceCenter.Y, 0.0));
+                        new Point3d(verticalDimPlacementX, sourceCenter.Y, 0.0));
                     createdCount++;
                 }
 
