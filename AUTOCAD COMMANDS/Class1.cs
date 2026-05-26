@@ -15,6 +15,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using WF = System.Windows.Forms;
@@ -1377,9 +1378,10 @@ namespace AUTOCAD_COMMANDS
     // Cách làm:
     // - Chọn 1 lightweight Polyline.
     // - Hỏi có set Closed hay bỏ qua, có lưu lựa chọn lần cuối.
-    // - Hỏi cách xác định điểm đầu: tự động hoặc người dùng pick, có lưu lựa chọn lần cuối.
-    // - Ép chiều vertex về ngược chiều kim đồng hồ nếu polyline kín.
-    // - Đổi điểm đầu theo quy tắc tự động hoặc theo vertex người dùng chọn.
+    // - Hỏi hướng polyline CW/CCW, có lưu lựa chọn lần cuối.
+    // - Luôn yêu cầu người dùng pick điểm đầu mong muốn.
+    // - Ép chiều vertex theo hướng người dùng chọn nếu polyline kín.
+    // - Đổi điểm đầu theo vertex người dùng chọn.
     // Lưu ý: với polyline hở, chỉ cho đổi điểm đầu giữa 2 đầu mút để tránh đổi hình.
     // ======================================================
     public class ChangePolylineCommand
@@ -1433,45 +1435,41 @@ namespace AUTOCAD_COMMANDS
 
             CaaPolylineSettingsStore.SaveCloseMode(closeMode);
 
-            CaaStartMode savedStartMode = CaaPolylineSettingsStore.LoadStartMode();
-            PromptKeywordOptions startModeOptions =
+            CaaDirectionMode savedDirectionMode = CaaPolylineSettingsStore.LoadDirectionMode();
+            PromptKeywordOptions directionOptions =
                 new PromptKeywordOptions(
-                    $"\nChọn cách xác định điểm đầu [Auto/Pick] <{savedStartMode}>: ");
-            startModeOptions.AllowNone = true;
-            startModeOptions.Keywords.Add("Auto");
-            startModeOptions.Keywords.Add("Pick");
-            startModeOptions.Keywords.Default = savedStartMode.ToString();
+                    $"\nChọn hướng polyline [CCW/CW] <{savedDirectionMode}>: ");
+            directionOptions.AllowNone = true;
+            directionOptions.Keywords.Add("CCW");
+            directionOptions.Keywords.Add("CW");
+            directionOptions.Keywords.Default = savedDirectionMode.ToString();
 
-            PromptResult startModeResult = ed.GetKeywords(startModeOptions);
-            if (startModeResult.Status == PromptStatus.Cancel)
+            PromptResult directionResult = ed.GetKeywords(directionOptions);
+            if (directionResult.Status == PromptStatus.Cancel)
             {
                 return;
             }
 
-            CaaStartMode startMode = savedStartMode;
-            if (startModeResult.Status == PromptStatus.OK &&
-                Enum.TryParse(startModeResult.StringResult, true, out CaaStartMode parsedStartMode))
+            CaaDirectionMode directionMode = savedDirectionMode;
+            if (directionResult.Status == PromptStatus.OK &&
+                Enum.TryParse(directionResult.StringResult, true, out CaaDirectionMode parsedDirectionMode))
             {
-                startMode = parsedStartMode;
+                directionMode = parsedDirectionMode;
             }
 
-            CaaPolylineSettingsStore.SaveStartMode(startMode);
+            CaaPolylineSettingsStore.SaveDirectionMode(directionMode);
 
-            Point2d? pickedStartPoint = null;
-            if (startMode == CaaStartMode.Pick)
+            PromptPointOptions startPointOptions =
+                new PromptPointOptions(
+                    "\nChọn điểm đầu mong muốn của polyline (pline hở: chọn gần đầu mút): ");
+            PromptPointResult startPointResult = ed.GetPoint(startPointOptions);
+            if (startPointResult.Status != PromptStatus.OK)
             {
-                PromptPointOptions startPointOptions =
-                    new PromptPointOptions(
-                        "\nChọn điểm đầu mong muốn của polyline (pline hở: chọn gần đầu mút): ");
-                PromptPointResult startPointResult = ed.GetPoint(startPointOptions);
-                if (startPointResult.Status != PromptStatus.OK)
-                {
-                    return;
-                }
-
-                pickedStartPoint =
-                    new Point2d(startPointResult.Value.X, startPointResult.Value.Y);
+                return;
             }
+
+            Point2d pickedStartPoint =
+                new Point2d(startPointResult.Value.X, startPointResult.Value.Y);
 
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
@@ -1500,7 +1498,9 @@ namespace AUTOCAD_COMMANDS
                 if (polyline.Closed && polyline.NumberOfVertices >= 3)
                 {
                     double signedArea = GetPolylineSignedArea(polyline);
-                    if (signedArea < -CoordinateTolerance)
+                    bool isCounterClockwise = signedArea >= -CoordinateTolerance;
+                    bool shouldBeCounterClockwise = directionMode == CaaDirectionMode.CCW;
+                    if (isCounterClockwise != shouldBeCounterClockwise)
                     {
                         polyline.ReverseCurve();
                         reversed = true;
@@ -1508,9 +1508,7 @@ namespace AUTOCAD_COMMANDS
                 }
                 else if (!polyline.Closed)
                 {
-                    int requestedStartIndex = startMode == CaaStartMode.Pick && pickedStartPoint.HasValue
-                        ? FindClosestVertex(polyline, pickedStartPoint.Value)
-                        : FindPreferredStartVertex(polyline);
+                    int requestedStartIndex = FindClosestVertex(polyline, pickedStartPoint);
 
                     // Với polyline hở, chỉ được đổi giữa 2 đầu mút.
                     // Không xoay vertex giữa lên đầu vì như vậy sẽ làm đổi path.
@@ -1523,17 +1521,13 @@ namespace AUTOCAD_COMMANDS
                     else if (requestedStartIndex != 0)
                     {
                         ed.WriteMessage(
-                            startMode == CaaStartMode.Pick
-                                ? "\nCAA_change_pline: polyline đang hở nên chỉ nhận điểm đầu ở 1 trong 2 đầu mút để tránh đổi hình. Chọn Close nếu muốn đổi sang vertex giữa."
-                                : "\nCAA_change_pline: polyline đang hở nên không đổi điểm đầu về vertex giữa để tránh đổi hình. Chọn Close nếu muốn chuẩn hóa đầy đủ.");
+                            "\nCAA_change_pline: polyline đang hở nên chỉ nhận điểm đầu ở 1 trong 2 đầu mút để tránh đổi hình. Chọn Close nếu muốn đổi sang vertex giữa.");
                     }
                 }
 
                 if (polyline.Closed && polyline.NumberOfVertices >= 3)
                 {
-                    int startIndex = startMode == CaaStartMode.Pick && pickedStartPoint.HasValue
-                        ? FindClosestVertex(polyline, pickedStartPoint.Value)
-                        : FindPreferredStartVertex(polyline);
+                    int startIndex = FindClosestVertex(polyline, pickedStartPoint);
                     if (startIndex > 0)
                     {
                         RotateClosedPolylineStart(polyline, startIndex);
@@ -1546,29 +1540,6 @@ namespace AUTOCAD_COMMANDS
                 ed.WriteMessage(
                     $"\nCAA_change_pline: xong. Closed={(polyline.Closed ? "Yes" : "No")}, Reverse={(reversed ? "Yes" : "No")}, đổi điểm đầu={(startChanged ? "Yes" : "No")}.");
             }
-        }
-
-        private static int FindPreferredStartVertex(Autodesk.AutoCAD.DatabaseServices.Polyline polyline)
-        {
-            int bestIndex = 0;
-            Point2d bestPoint = polyline.GetPoint2dAt(0);
-
-            for (int i = 1; i < polyline.NumberOfVertices; i++)
-            {
-                Point2d point = polyline.GetPoint2dAt(i);
-                bool smallerX = point.X < bestPoint.X - CoordinateTolerance;
-                bool sameXSmallerY =
-                    Math.Abs(point.X - bestPoint.X) <= CoordinateTolerance &&
-                    point.Y < bestPoint.Y - CoordinateTolerance;
-
-                if (smallerX || sameXSmallerY)
-                {
-                    bestIndex = i;
-                    bestPoint = point;
-                }
-            }
-
-            return bestIndex;
         }
 
         private static int FindClosestVertex(
@@ -1674,10 +1645,10 @@ namespace AUTOCAD_COMMANDS
             Skip
         }
 
-        private enum CaaStartMode
+        private enum CaaDirectionMode
         {
-            Auto,
-            Pick
+            CCW,
+            CW
         }
 
         private static class CaaPolylineSettingsStore
@@ -1687,10 +1658,10 @@ namespace AUTOCAD_COMMANDS
                     Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
                     "caa_change_pline_settings.txt");
 
-            private static readonly string StartModeFilePath =
+            private static readonly string DirectionModeFilePath =
                 Path.Combine(
                     Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
-                    "caa_change_pline_start_mode.txt");
+                    "caa_change_pline_direction_mode.txt");
 
             public static CaaCloseMode LoadCloseMode()
             {
@@ -1723,31 +1694,31 @@ namespace AUTOCAD_COMMANDS
                 }
             }
 
-            public static CaaStartMode LoadStartMode()
+            public static CaaDirectionMode LoadDirectionMode()
             {
                 try
                 {
-                    if (!File.Exists(StartModeFilePath))
+                    if (!File.Exists(DirectionModeFilePath))
                     {
-                        return CaaStartMode.Auto;
+                        return CaaDirectionMode.CCW;
                     }
 
-                    string raw = File.ReadAllText(StartModeFilePath, Encoding.UTF8).Trim();
-                    return Enum.TryParse(raw, true, out CaaStartMode mode)
+                    string raw = File.ReadAllText(DirectionModeFilePath, Encoding.UTF8).Trim();
+                    return Enum.TryParse(raw, true, out CaaDirectionMode mode)
                         ? mode
-                        : CaaStartMode.Auto;
+                        : CaaDirectionMode.CCW;
                 }
                 catch
                 {
-                    return CaaStartMode.Auto;
+                    return CaaDirectionMode.CCW;
                 }
             }
 
-            public static void SaveStartMode(CaaStartMode mode)
+            public static void SaveDirectionMode(CaaDirectionMode mode)
             {
                 try
                 {
-                    File.WriteAllText(StartModeFilePath, mode.ToString(), Encoding.UTF8);
+                    File.WriteAllText(DirectionModeFilePath, mode.ToString(), Encoding.UTF8);
                 }
                 catch
                 {
@@ -8318,10 +8289,12 @@ namespace AUTOCAD_COMMANDS
             // Space/Enter ở ngay window đầu tiên sẽ thoát hẳn command loop.
             stopRequested = false;
             ed.WriteMessage(
-                "\nWindow: quet nhieu vung neu can. Nhan Space/Enter o goc dau khi chua quet window nao de thoat, hoac sau khi da quet it nhat 1 window de sang buoc stretch.");
+                "\nWindow: quet nhieu vung neu can. Giu Shift khi quet de loai bot doi tuong dang bi overlap. Nhan Space/Enter o goc dau khi chua quet window nao de thoat, hoac sau khi da quet it nhat 1 window de sang buoc stretch.");
 
             List<SmartStretchWindowSelection> windows = new List<SmartStretchWindowSelection>();
             HashSet<ObjectId> selectedIds = new HashSet<ObjectId>();
+            Dictionary<ObjectId, List<SmartStretchWindowSelection>> effectiveWindowsByObject =
+                new Dictionary<ObjectId, List<SmartStretchWindowSelection>>();
             object previousSelectionOffscreen = null;
 
             try
@@ -8364,6 +8337,8 @@ namespace AUTOCAD_COMMANDS
                         return null;
                     }
 
+                    bool removeSelection = IsShiftPressed();
+
                     PromptCornerOptions secondCornerOptions =
                         new PromptCornerOptions(
                             "\nChọn góc đối diện crossing window: ",
@@ -8382,6 +8357,8 @@ namespace AUTOCAD_COMMANDS
                         return null;
                     }
 
+                    removeSelection = removeSelection || IsShiftPressed();
+
                     PromptSelectionResult crossingResult = ed.SelectCrossingWindow(
                         firstCornerResult.Value,
                         secondCornerResult.Value);
@@ -8391,18 +8368,65 @@ namespace AUTOCAD_COMMANDS
                         continue;
                     }
 
-                    windows.Add(
+                    ObjectId[] crossingIds = crossingResult.Value.GetObjectIds();
+                    SmartStretchSelectionMode mode = removeSelection
+                        ? SmartStretchSelectionMode.Remove
+                        : SmartStretchSelectionMode.Add;
+                    SmartStretchWindowSelection windowSelection =
                         new SmartStretchWindowSelection(
                             firstCornerResult.Value,
-                            secondCornerResult.Value));
+                            secondCornerResult.Value,
+                            mode);
 
-                    foreach (ObjectId objectId in crossingResult.Value.GetObjectIds())
+                    if (mode == SmartStretchSelectionMode.Remove)
                     {
-                        selectedIds.Add(objectId);
-                    }
+                        ObjectId[] previouslySelectedIds = selectedIds.ToArray();
+                        int removedCount = 0;
 
-                    ShowSmartStretchSelection(ed, selectedIds.ToArray());
-                    ed.WriteMessage($"\nĐã gom {selectedIds.Count} đối tượng. Có thể quét thêm hoặc nhấn Space/Enter để tiếp tục.");
+                        foreach (ObjectId objectId in crossingIds)
+                        {
+                            if (selectedIds.Remove(objectId))
+                            {
+                                removedCount++;
+                                effectiveWindowsByObject.Remove(objectId);
+                            }
+                        }
+
+                        if (removedCount == 0)
+                        {
+                            ed.WriteMessage(
+                                "\nShift window này không loại được đối tượng nào trong tập chọn hiện tại.");
+                            continue;
+                        }
+
+                        windows.Add(windowSelection);
+                        RefreshSmartStretchSelection(previouslySelectedIds, selectedIds.ToArray());
+                        ed.WriteMessage(
+                            $"\nĐã loại {removedCount} đối tượng. Còn lại {selectedIds.Count} đối tượng.");
+                    }
+                    else
+                    {
+                        windows.Add(windowSelection);
+
+                        foreach (ObjectId objectId in crossingIds)
+                        {
+                            selectedIds.Add(objectId);
+
+                            if (!effectiveWindowsByObject.TryGetValue(
+                                objectId,
+                                out List<SmartStretchWindowSelection> objectWindows))
+                            {
+                                objectWindows = new List<SmartStretchWindowSelection>();
+                                effectiveWindowsByObject[objectId] = objectWindows;
+                            }
+
+                            objectWindows.Add(windowSelection);
+                        }
+
+                        ShowSmartStretchSelection(ed, selectedIds.ToArray());
+                        ed.WriteMessage(
+                            $"\nĐã gom {selectedIds.Count} đối tượng. Có thể quét thêm hoặc giữ Shift để loại bớt rồi nhấn Space/Enter để tiếp tục.");
+                    }
                 }
             }
             finally
@@ -8421,7 +8445,8 @@ namespace AUTOCAD_COMMANDS
 
             return SmartStretchSelectionInput.CreateSelection(
                 windows,
-                selectedIds);
+                selectedIds,
+                effectiveWindowsByObject);
         }
 
         private enum SmartStretchLoopResult
@@ -8449,9 +8474,19 @@ namespace AUTOCAD_COMMANDS
                 ZoomToStretchBounds(ed, stretchBounds);
 
                 List<object> args = new List<object> { "_.STRETCH" };
+                SmartStretchSelectionMode currentMode = SmartStretchSelectionMode.Add;
 
                 foreach (SmartStretchWindowSelection window in selectionInput.Windows)
                 {
+                    if (window.Mode != currentMode)
+                    {
+                        args.Add(
+                            window.Mode == SmartStretchSelectionMode.Remove
+                                ? "_R"
+                                : "_A");
+                        currentMode = window.Mode;
+                    }
+
                     args.Add("_C");
                     args.Add(window.FirstPoint);
                     args.Add(window.SecondPoint);
@@ -8561,6 +8596,23 @@ namespace AUTOCAD_COMMANDS
             Application.UpdateScreen();
         }
 
+        private static void RefreshSmartStretchSelection(
+            ObjectId[] previousObjectIds,
+            ObjectId[] currentObjectIds)
+        {
+            if (previousObjectIds != null && previousObjectIds.Length > 0)
+            {
+                ClearSmartStretchSelection(previousObjectIds);
+            }
+
+            if (currentObjectIds != null && currentObjectIds.Length > 0)
+            {
+                ShowSmartStretchSelection(
+                    Application.DocumentManager.MdiActiveDocument?.Editor,
+                    currentObjectIds);
+            }
+        }
+
         private static List<int> FindStretchIndicesInsideWindow(
             Entity entity,
             SmartStretchSelectionInput selectionInput,
@@ -8578,7 +8630,7 @@ namespace AUTOCAD_COMMANDS
                     Index = index,
                     Point = point.TransformBy(ucsInverse)
                 })
-                .Where(item => selectionInput.Windows.Any(window =>
+                .Where(item => selectionInput.GetEffectiveWindowsForObject(entity.ObjectId).Any(window =>
                 {
                     Point3d firstCornerUcs = window.FirstPoint.TransformBy(ucsInverse);
                     Point3d secondCornerUcs = window.SecondPoint.TransformBy(ucsInverse);
@@ -8623,6 +8675,21 @@ namespace AUTOCAD_COMMANDS
             }
 
             Application.UpdateScreen();
+        }
+
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(int vKey);
+
+        private static bool IsShiftPressed()
+        {
+            const int ShiftVirtualKey = 0x10;
+
+            if ((GetAsyncKeyState(ShiftVirtualKey) & 0x8000) != 0)
+            {
+                return true;
+            }
+
+            return (WF.Control.ModifierKeys & WF.Keys.Shift) == WF.Keys.Shift;
         }
 
         private static SmartStretchDirection ResolveDirection(Point3d startUcs, Point3d nextUcs)
@@ -9303,29 +9370,67 @@ namespace AUTOCAD_COMMANDS
 
         public ObjectId[] SelectedObjectIds { get; private set; }
 
+        public Dictionary<ObjectId, List<SmartStretchWindowSelection>> EffectiveWindowsByObject
+        {
+            get;
+            private set;
+        }
+
         public static SmartStretchSelectionInput CreateSelection(
             IEnumerable<SmartStretchWindowSelection> windows,
-            IEnumerable<ObjectId> selectedObjectIds)
+            IEnumerable<ObjectId> selectedObjectIds,
+            IDictionary<ObjectId, List<SmartStretchWindowSelection>> effectiveWindowsByObject)
         {
             return new SmartStretchSelectionInput
             {
                 Windows = windows?.ToList() ?? new List<SmartStretchWindowSelection>(),
-                SelectedObjectIds = selectedObjectIds?.ToArray() ?? new ObjectId[0]
+                SelectedObjectIds = selectedObjectIds?.ToArray() ?? new ObjectId[0],
+                EffectiveWindowsByObject =
+                    effectiveWindowsByObject?.ToDictionary(
+                        pair => pair.Key,
+                        pair => pair.Value?.ToList() ?? new List<SmartStretchWindowSelection>())
+                    ?? new Dictionary<ObjectId, List<SmartStretchWindowSelection>>()
             };
         }
+
+        public IEnumerable<SmartStretchWindowSelection> GetEffectiveWindowsForObject(
+            ObjectId objectId)
+        {
+            if (EffectiveWindowsByObject != null &&
+                EffectiveWindowsByObject.TryGetValue(
+                    objectId,
+                    out List<SmartStretchWindowSelection> windows))
+            {
+                return windows;
+            }
+
+            return Enumerable.Empty<SmartStretchWindowSelection>();
+        }
+    }
+
+    internal enum SmartStretchSelectionMode
+    {
+        Add,
+        Remove
     }
 
     internal sealed class SmartStretchWindowSelection
     {
-        public SmartStretchWindowSelection(Point3d firstPoint, Point3d secondPoint)
+        public SmartStretchWindowSelection(
+            Point3d firstPoint,
+            Point3d secondPoint,
+            SmartStretchSelectionMode mode)
         {
             FirstPoint = firstPoint;
             SecondPoint = secondPoint;
+            Mode = mode;
         }
 
         public Point3d FirstPoint { get; }
 
         public Point3d SecondPoint { get; }
+
+        public SmartStretchSelectionMode Mode { get; }
     }
 
     internal sealed class SmartStretchEntityInfo
