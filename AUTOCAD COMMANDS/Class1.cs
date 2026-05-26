@@ -2508,7 +2508,8 @@ namespace AUTOCAD_COMMANDS
                     startRes.Value,
                     endPoint,
                     useXAxis,
-                    out Point3d dimPlacementPoint))
+                    out Point3d dimPlacementPoint,
+                    out bool finalUseXAxis))
                 {
                     return;
                 }
@@ -2520,7 +2521,7 @@ namespace AUTOCAD_COMMANDS
                     XLine1Point = startRes.Value,
                     XLine2Point = endPoint,
                     DimLinePoint = dimPlacementPoint,
-                    Rotation = useXAxis ? 0.0 : Math.PI / 2.0,
+                    Rotation = finalUseXAxis ? 0.0 : Math.PI / 2.0,
                     DimensionStyle = db.Dimstyle,
                     LayerId = dimLayerId
                 };
@@ -2537,7 +2538,8 @@ namespace AUTOCAD_COMMANDS
             Point3d startPoint,
             Point3d endPoint,
             bool useXAxis,
-            out Point3d dimPlacementPoint)
+            out Point3d dimPlacementPoint,
+            out bool finalUseXAxis)
         {
             using (SmartDimPlacementJig jig =
                 new SmartDimPlacementJig(db, startPoint, endPoint, useXAxis))
@@ -2546,11 +2548,13 @@ namespace AUTOCAD_COMMANDS
                 if (dragResult.Status == PromptStatus.OK || jig.AcceptedByShortcut)
                 {
                     dimPlacementPoint = jig.DimLinePoint;
+                    finalUseXAxis = jig.UseXAxis;
                     return true;
                 }
             }
 
             dimPlacementPoint = Point3d.Origin;
+            finalUseXAxis = useXAxis;
             return false;
         }
 
@@ -3205,7 +3209,14 @@ namespace AUTOCAD_COMMANDS
         {
             private readonly RotatedDimension _previewDimension;
             private readonly Point3d _defaultPoint;
+            private readonly bool _originalUseXAxis;
+            private readonly double _minX;
+            private readonly double _maxX;
+            private readonly double _minY;
+            private readonly double _maxY;
+            private readonly double _switchMargin;
             private Point3d _currentPoint;
+            private bool _useXAxis;
             private bool _acceptedByShortcut;
 
             public SmartDimPlacementJig(
@@ -3218,6 +3229,13 @@ namespace AUTOCAD_COMMANDS
                     db.Dimtxt + db.Dimgap + db.Dimexe,
                     10.0);
 
+                _originalUseXAxis = useXAxis;
+                _minX = Math.Min(startPoint.X, endPoint.X);
+                _maxX = Math.Max(startPoint.X, endPoint.X);
+                _minY = Math.Min(startPoint.Y, endPoint.Y);
+                _maxY = Math.Max(startPoint.Y, endPoint.Y);
+                _switchMargin = previewOffset;
+
                 _defaultPoint = useXAxis
                     ? new Point3d(
                         (startPoint.X + endPoint.X) * 0.5,
@@ -3228,6 +3246,7 @@ namespace AUTOCAD_COMMANDS
                         (startPoint.Y + endPoint.Y) * 0.5,
                         startPoint.Z);
 
+                _useXAxis = useXAxis;
                 _currentPoint = _defaultPoint;
 
                 _previewDimension = new RotatedDimension
@@ -3235,7 +3254,7 @@ namespace AUTOCAD_COMMANDS
                     XLine1Point = startPoint,
                     XLine2Point = endPoint,
                     DimLinePoint = _currentPoint,
-                    Rotation = useXAxis ? 0.0 : Math.PI / 2.0,
+                    Rotation = _useXAxis ? 0.0 : Math.PI / 2.0,
                     DimensionStyle = db.Dimstyle
                 };
                 _previewDimension.SetDatabaseDefaults(db);
@@ -3243,12 +3262,15 @@ namespace AUTOCAD_COMMANDS
 
             public Point3d DimLinePoint => _currentPoint;
 
+            public bool UseXAxis => _useXAxis;
+
             public bool AcceptedByShortcut => _acceptedByShortcut;
 
             protected override SamplerStatus Sampler(JigPrompts prompts)
             {
                 JigPromptPointOptions pointOptions =
-                    new JigPromptPointOptions("\nChọn điểm đặt dim: ");
+                    new JigPromptPointOptions(
+                        "\nChọn điểm đặt dim (mặc định như cũ, kéo ra ngoài 2 đầu để đổi hướng): ");
                 // Không dùng BasePoint ở bước này để preview DIM không bị
                 // ORTHOMODE của AutoCAD ép theo ngang/dọc.
                 pointOptions.UserInputControls =
@@ -3279,14 +3301,32 @@ namespace AUTOCAD_COMMANDS
                     return SamplerStatus.NoChange;
                 }
 
+                _useXAxis = ResolveUseXAxis(pointResult.Value);
                 _currentPoint = pointResult.Value;
                 _previewDimension.DimLinePoint = _currentPoint;
+                _previewDimension.Rotation = _useXAxis ? 0.0 : Math.PI / 2.0;
                 return SamplerStatus.OK;
             }
 
             protected override bool WorldDraw(WorldDraw draw)
             {
                 return _previewDimension.WorldDraw(draw);
+            }
+
+            private bool ResolveUseXAxis(Point3d point)
+            {
+                if (_originalUseXAxis)
+                {
+                    bool switchedToVertical =
+                        point.X < _minX - _switchMargin ||
+                        point.X > _maxX + _switchMargin;
+                    return !switchedToVertical;
+                }
+
+                bool switchedToHorizontal =
+                    point.Y < _minY - _switchMargin ||
+                    point.Y > _maxY + _switchMargin;
+                return switchedToHorizontal;
             }
 
             public void Dispose()
