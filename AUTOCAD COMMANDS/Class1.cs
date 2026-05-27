@@ -1378,7 +1378,7 @@ namespace AUTOCAD_COMMANDS
     // Cách làm:
     // - Chọn 1 lightweight Polyline.
     // - Hỏi có set Closed hay bỏ qua, có lưu lựa chọn lần cuối.
-    // - Hỏi hướng polyline CW/CCW, có lưu lựa chọn lần cuối.
+    // - Hỏi hướng polyline, hiển thị rõ CCW/CW theo tiếng Việt, có lưu lựa chọn lần cuối.
     // - Luôn yêu cầu người dùng pick điểm đầu mong muốn.
     // - Ép chiều vertex theo hướng người dùng chọn nếu polyline kín.
     // - Đổi điểm đầu theo vertex người dùng chọn.
@@ -1438,7 +1438,7 @@ namespace AUTOCAD_COMMANDS
             CaaDirectionMode savedDirectionMode = CaaPolylineSettingsStore.LoadDirectionMode();
             PromptKeywordOptions directionOptions =
                 new PromptKeywordOptions(
-                    $"\nChọn hướng polyline [CCW/CW] <{savedDirectionMode}>: ");
+                    $"\nChọn hướng polyline [CCW=Nguoc chieu kim dong ho/CW=Cung chieu kim dong ho] <{savedDirectionMode}>: ");
             directionOptions.AllowNone = true;
             directionOptions.Keywords.Add("CCW");
             directionOptions.Keywords.Add("CW");
