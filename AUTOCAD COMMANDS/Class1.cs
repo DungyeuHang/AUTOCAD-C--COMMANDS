@@ -1951,7 +1951,7 @@ namespace AUTOCAD_COMMANDS
     // - Chọn lightweight Polyline.
     // - Nhập prefix điểm, ví dụ bl_fr.
     // - Lệnh tạo circle + text cho từng vertex.
-    // - Lệnh tạo 1 MText tổng hợp gồm toàn bộ APoint(...) và create_smart_shape(...).
+    // - Lệnh tạo 1 MText tổng hợp gồm toàn bộ APoint(...) và smart_pl(...).
     // Lưu ý: text tổng hợp tự đặt tại x = p1.x, y = p1.y - 2.
     // ======================================================
     public class APointCommand
@@ -2165,7 +2165,7 @@ namespace AUTOCAD_COMMANDS
 
             string closeText = polyline.Closed ? "True" : "False";
             string arcsInfo = string.Join(", ", arcsInfoItems);
-            return $"create_smart_shape(\"{prefix}_p\", 1, {points.Count}, arcs_info={{{arcsInfo}}}, close={closeText})";
+            return $"smart_pl(\"{prefix}_p\", 1, {points.Count}, arcs_info={{{arcsInfo}}}, close={closeText})";
         }
 
         private static void AddMText(
