@@ -2268,6 +2268,9 @@ namespace AUTOCAD_COMMANDS
         private static readonly RXClass CurveRxClass = RXObject.GetClass(typeof(Curve));
         private static readonly RXClass DimensionRxClass = RXObject.GetClass(typeof(Dimension));
 
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(int vKey);
+
         public void SmartDimX()
         {
             Document doc = Application.DocumentManager.MdiActiveDocument;
@@ -2422,7 +2425,7 @@ namespace AUTOCAD_COMMANDS
             if (!TryPromptAxisDirection(
                 ed,
                 startRes.Value,
-                "\nChọn điểm để xác định hướng dim X/Y: ",
+                "\nChọn điểm để xác định hướng dim X/Y (nhấn Shift để đổi X/Y): ",
                 null,
                 out Point3d dirPoint,
                 out double direction,
@@ -2568,6 +2571,7 @@ namespace AUTOCAD_COMMANDS
                     PromptResult dragResult = ed.Drag(jig);
                     promptStatus = dragResult.Status;
                     pointResult = jig.CurrentPoint;
+                    useXAxis = jig.UseXAxis;
                 }
 
                 if (promptStatus != PromptStatus.OK)
@@ -2605,7 +2609,6 @@ namespace AUTOCAD_COMMANDS
                     continue;
                 }
 
-                useXAxis = Math.Abs(deltaX) >= Math.Abs(deltaY);
                 direction = useXAxis
                     ? (deltaX >= 0.0 ? 1.0 : -1.0)
                     : (deltaY >= 0.0 ? 1.0 : -1.0);
@@ -3101,6 +3104,8 @@ namespace AUTOCAD_COMMANDS
             private readonly string _message;
             private readonly bool? _forceXAxis;
             private Point3d _currentPoint;
+            private bool _invertAxisChoice;
+            private bool _shiftWasPressed;
 
             public AxisDirectionPreviewJig(
                 Point3d startPoint,
@@ -3111,9 +3116,13 @@ namespace AUTOCAD_COMMANDS
                 _message = message;
                 _forceXAxis = forceXAxis;
                 _currentPoint = startPoint;
+                _invertAxisChoice = false;
+                _shiftWasPressed = false;
             }
 
             public Point3d CurrentPoint => _currentPoint;
+
+            public bool UseXAxis => ResolveUseXAxis(_currentPoint);
 
             protected override SamplerStatus Sampler(JigPrompts prompts)
             {
@@ -3136,9 +3145,22 @@ namespace AUTOCAD_COMMANDS
                     return SamplerStatus.NoChange;
                 }
 
-                if (_currentPoint.DistanceTo(pointResult.Value) <= PreviewPointTolerance)
+                bool shiftPressed = IsShiftPressedForDimJig();
+                bool axisToggled =
+                    !_forceXAxis.HasValue &&
+                    shiftPressed &&
+                    !_shiftWasPressed;
+                _shiftWasPressed = shiftPressed;
+
+                if (_currentPoint.DistanceTo(pointResult.Value) <= PreviewPointTolerance &&
+                    !axisToggled)
                 {
                     return SamplerStatus.NoChange;
+                }
+
+                if (axisToggled)
+                {
+                    _invertAxisChoice = !_invertAxisChoice;
                 }
 
                 _currentPoint = pointResult.Value;
@@ -3159,10 +3181,7 @@ namespace AUTOCAD_COMMANDS
 
             private Point3d GetPreviewPoint()
             {
-                double deltaX = _currentPoint.X - _startPoint.X;
-                double deltaY = _currentPoint.Y - _startPoint.Y;
-
-                bool useXAxis = _forceXAxis ?? (Math.Abs(deltaX) >= Math.Abs(deltaY));
+                bool useXAxis = ResolveUseXAxis(_currentPoint);
                 if (useXAxis)
                 {
                     return new Point3d(_currentPoint.X, _startPoint.Y, _startPoint.Z);
@@ -3171,9 +3190,34 @@ namespace AUTOCAD_COMMANDS
                 return new Point3d(_startPoint.X, _currentPoint.Y, _startPoint.Z);
             }
 
+            private bool ResolveUseXAxis(Point3d point)
+            {
+                if (_forceXAxis.HasValue)
+                {
+                    return _forceXAxis.Value;
+                }
+
+                double deltaX = point.X - _startPoint.X;
+                double deltaY = point.Y - _startPoint.Y;
+                bool useXAxis = Math.Abs(deltaX) >= Math.Abs(deltaY);
+                return _invertAxisChoice ? !useXAxis : useXAxis;
+            }
+
             public void Dispose()
             {
             }
+        }
+
+        private static bool IsShiftPressedForDimJig()
+        {
+            const int ShiftVirtualKey = 0x10;
+
+            if ((GetAsyncKeyState(ShiftVirtualKey) & 0x8000) != 0)
+            {
+                return true;
+            }
+
+            return (WF.Control.ModifierKeys & WF.Keys.Shift) == WF.Keys.Shift;
         }
 
         private sealed class SmartDimPlacementJig : DrawJig, IDisposable
@@ -8614,6 +8658,7 @@ namespace AUTOCAD_COMMANDS
         }
 
         private static List<int> FindStretchIndicesInsideWindow(
+            ObjectId sourceObjectId,
             Entity entity,
             SmartStretchSelectionInput selectionInput,
             Matrix3d ucsInverse)
@@ -8630,7 +8675,7 @@ namespace AUTOCAD_COMMANDS
                     Index = index,
                     Point = point.TransformBy(ucsInverse)
                 })
-                .Where(item => selectionInput.GetEffectiveWindowsForObject(entity.ObjectId).Any(window =>
+                .Where(item => selectionInput.GetEffectiveWindowsForObject(sourceObjectId).Any(window =>
                 {
                     Point3d firstCornerUcs = window.FirstPoint.TransformBy(ucsInverse);
                     Point3d secondCornerUcs = window.SecondPoint.TransformBy(ucsInverse);
@@ -8986,6 +9031,7 @@ namespace AUTOCAD_COMMANDS
                         }
 
                         List<int> indices = FindStretchIndicesInsideWindow(
+                            sourceEntity.ObjectId,
                             previewEntity,
                             _selectionInput,
                             _ucsInverse);
