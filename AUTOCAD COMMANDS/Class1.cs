@@ -159,6 +159,8 @@ namespace AUTOCAD_COMMANDS
     {
         private const double AutoDimTolerance = 1e-6;
         private const double DddMismatchTolerance = 1e-4;
+        private const string DaaBaseObjectKeyword = "Object";
+        private const string DaaBasePointKeyword = "Point";
 
         // DAA_Dim_auto:
         // - Chọn mốc gốc là Object hoặc Point.
@@ -176,40 +178,17 @@ namespace AUTOCAD_COMMANDS
                 // =============================
                 // 1. CHỌN ĐỐI TƯỢNG GỐC
                 // =============================
-                PromptKeywordOptions baseModeOptions =
-                    new PromptKeywordOptions("\nChọn mốc gốc [Object/Point] <Object>: ");
-                baseModeOptions.AllowNone = true;
-                baseModeOptions.Keywords.Add("Object");
-                baseModeOptions.Keywords.Add("Point");
-                baseModeOptions.Keywords.Default = "Object";
-
-                PromptResult baseModeResult = ed.GetKeywords(baseModeOptions);
-                if (baseModeResult.Status == PromptStatus.Cancel) return;
-
-                string baseMode = baseModeResult.Status == PromptStatus.None
-                    ? "Object"
-                    : (baseModeResult.StringResult ?? "Object");
-
                 Extents3d baseExt;
                 Point3d baseCenter;
-
-                if (string.Equals(baseMode, "Point", StringComparison.OrdinalIgnoreCase))
+                DaaBaseMode baseMode = DaaBaseModeStore.Load();
+                if (!TryPromptDaaBaseReference(
+                    ed,
+                    tr,
+                    ref baseMode,
+                    out baseExt,
+                    out baseCenter))
                 {
-                    PromptPointResult basePointResult = ed.GetPoint("\nChọn điểm gốc: ");
-                    if (basePointResult.Status != PromptStatus.OK) return;
-
-                    baseCenter = basePointResult.Value;
-                    baseExt = new Extents3d(baseCenter, baseCenter);
-                }
-                else
-                {
-                    SelectionSet baseSelection = PromptForSelection(
-                        ed,
-                        "\nChọn Polyline hoặc nhóm đối tượng gốc:");
-                    if (baseSelection == null) return;
-
-                    baseExt = GetSelectionExtents(baseSelection, tr);
-                    baseCenter = GetCenter(baseExt);
+                    return;
                 }
 
                 // =============================
@@ -375,23 +354,13 @@ namespace AUTOCAD_COMMANDS
             Editor ed = doc.Editor;
 
             ObjectId[] sourceIds = TryConsumePickFirst(ed);
+            DddTargetFilter targetFilter = DddTargetFilterStore.Load();
             if (sourceIds == null || sourceIds.Length == 0)
             {
-                SelectionSet sourceSelection = PromptForSelection(
-                    ed,
-                    "\nChọn đối tượng gốc hoặc nhóm đối tượng:");
-                if (sourceSelection == null)
+                if (!TryPromptDddSourceSelection(ed, db, ref targetFilter, out sourceIds))
                 {
                     return;
                 }
-
-                sourceIds = sourceSelection.GetObjectIds();
-            }
-
-            DddTargetFilter savedFilter = DddTargetFilterStore.Load();
-            if (!PromptForDddTargetFilter(ed, db, savedFilter, out DddTargetFilter targetFilter))
-            {
-                return;
             }
 
             using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -824,6 +793,161 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
+        private bool TryPromptDaaBaseReference(
+            Editor ed,
+            Transaction tr,
+            ref DaaBaseMode baseMode,
+            out Extents3d baseExt,
+            out Point3d baseCenter)
+        {
+            baseExt = default;
+            baseCenter = Point3d.Origin;
+
+            while (true)
+            {
+                if (!PromptForDaaBaseMode(ed, ref baseMode))
+                {
+                    return false;
+                }
+
+                if (baseMode == DaaBaseMode.Point)
+                {
+                    PromptPointResult pointResult = ed.GetPoint("\nChọn điểm gốc: ");
+                    if (pointResult.Status == PromptStatus.OK)
+                    {
+                        baseCenter = pointResult.Value;
+                        baseExt = new Extents3d(baseCenter, baseCenter);
+                        return true;
+                    }
+
+                    return false;
+                }
+
+                SelectionSet baseSelection = PromptForSelection(
+                    ed,
+                    "\nChọn Polyline hoặc nhóm đối tượng gốc:");
+                if (baseSelection == null)
+                {
+                    return false;
+                }
+
+                baseExt = GetSelectionExtents(baseSelection, tr);
+                baseCenter = GetCenter(baseExt);
+                return true;
+            }
+        }
+
+        private bool PromptForDaaBaseMode(Editor ed, ref DaaBaseMode baseMode)
+        {
+            PromptKeywordOptions options =
+                new PromptKeywordOptions(
+                    $"\nChọn mốc gốc [Object/Point] <{baseMode}>: ");
+            options.AllowNone = true;
+            options.Keywords.Add(DaaBaseObjectKeyword);
+            options.Keywords.Add(DaaBasePointKeyword);
+            options.Keywords.Default = baseMode.ToString();
+
+            PromptResult result = ed.GetKeywords(options);
+            if (result.Status == PromptStatus.Cancel)
+            {
+                return false;
+            }
+
+            if (result.Status == PromptStatus.OK &&
+                Enum.TryParse(result.StringResult, true, out DaaBaseMode parsedMode))
+            {
+                baseMode = parsedMode;
+            }
+
+            DaaBaseModeStore.Save(baseMode);
+            return true;
+        }
+
+        private bool TryPromptDddSourceSelection(
+            Editor ed,
+            Database db,
+            ref DddTargetFilter targetFilter,
+            out ObjectId[] sourceIds)
+        {
+            sourceIds = null;
+
+            while (true)
+            {
+                if (!PromptForDddFilterMode(ed, db, ref targetFilter))
+                {
+                    return false;
+                }
+
+                SelectionSet sourceSelection = PromptForSelection(
+                    ed,
+                    "\nChọn đối tượng gốc hoặc nhóm đối tượng:");
+                if (sourceSelection == null)
+                {
+                    return false;
+                }
+
+                sourceIds = sourceSelection.GetObjectIds();
+                return sourceIds != null && sourceIds.Length > 0;
+            }
+        }
+
+        private bool PromptForDddFilterMode(
+            Editor ed,
+            Database db,
+            ref DddTargetFilter targetFilter)
+        {
+            while (true)
+            {
+                string defaultLabel = targetFilter?.ToDisplayText() ?? "None";
+                PromptKeywordOptions options =
+                    new PromptKeywordOptions(
+                        $"\nFilter đích DDD [UseCurrent/Pick/None] <UseCurrent: {defaultLabel}>: ");
+                options.AllowNone = true;
+                options.Keywords.Add("UseCurrent");
+                options.Keywords.Add("Pick");
+                options.Keywords.Add("None");
+                options.Keywords.Default = "UseCurrent";
+
+                PromptResult result = ed.GetKeywords(options);
+                if (result.Status == PromptStatus.Cancel)
+                {
+                    return false;
+                }
+
+                string action = result.Status == PromptStatus.None
+                    ? "UseCurrent"
+                    : (result.StringResult ?? "UseCurrent");
+
+                if (string.Equals(action, "UseCurrent", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                if (string.Equals(action, "None", StringComparison.OrdinalIgnoreCase))
+                {
+                    targetFilter = null;
+                    DddTargetFilterStore.Save(null);
+                    return true;
+                }
+
+                if (PromptForDddTargetFilter(ed, db, targetFilter, out DddTargetFilter updatedFilter))
+                {
+                    targetFilter = updatedFilter;
+                    try
+                    {
+                        ed.SetImpliedSelection(Array.Empty<ObjectId>());
+                    }
+                    catch
+                    {
+                    }
+
+                    return true;
+                }
+
+                return false;
+            }
+        }
+
         private SelectionSet PromptForDimensionSelection(Editor ed)
         {
             // Chỉ cho phép quét DIMENSION để tránh người dùng click nhầm sang line/text/block.
@@ -1180,6 +1304,14 @@ namespace AUTOCAD_COMMANDS
                     {
                         targetFilter = pickedFilter;
                         DddTargetFilterStore.Save(targetFilter);
+                        try
+                        {
+                            ed.SetImpliedSelection(Array.Empty<ObjectId>());
+                        }
+                        catch
+                        {
+                        }
+
                         return true;
                     }
                 }
@@ -1281,6 +1413,12 @@ namespace AUTOCAD_COMMANDS
             Block
         }
 
+        private enum DaaBaseMode
+        {
+            Object,
+            Point
+        }
+
         private sealed class DddTargetFilter
         {
             public DddTargetKind Kind { get; set; }
@@ -1367,6 +1505,45 @@ namespace AUTOCAD_COMMANDS
                 }
             }
         }
+
+        private static class DaaBaseModeStore
+        {
+            private static readonly string FilePath =
+                Path.Combine(
+                    Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
+                    "daa_dim_base_mode.txt");
+
+            public static DaaBaseMode Load()
+            {
+                try
+                {
+                    if (!File.Exists(FilePath))
+                    {
+                        return DaaBaseMode.Object;
+                    }
+
+                    string raw = (File.ReadAllText(FilePath, Encoding.UTF8) ?? string.Empty).Trim();
+                    return Enum.TryParse(raw, true, out DaaBaseMode mode)
+                        ? mode
+                        : DaaBaseMode.Object;
+                }
+                catch
+                {
+                    return DaaBaseMode.Object;
+                }
+            }
+
+            public static void Save(DaaBaseMode mode)
+            {
+                try
+                {
+                    File.WriteAllText(FilePath, mode.ToString(), Encoding.UTF8);
+                }
+                catch
+                {
+                }
+            }
+        }
     }
 
 
@@ -1400,81 +1577,31 @@ namespace AUTOCAD_COMMANDS
             Editor ed = doc.Editor;
             Database db = doc.Database;
 
-            PromptEntityOptions entityOptions =
-                new PromptEntityOptions("\nChọn polyline cần chuẩn hóa: ");
-            entityOptions.SetRejectMessage("\nChỉ hỗ trợ lightweight Polyline.");
-            entityOptions.AddAllowedClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline), true);
+            CaaCloseMode closeMode = CaaPolylineSettingsStore.LoadCloseMode();
+            CaaDirectionMode directionMode = CaaPolylineSettingsStore.LoadDirectionMode();
 
-            PromptEntityResult entityResult = ed.GetEntity(entityOptions);
-            if (entityResult.Status != PromptStatus.OK)
+            if (!TryPromptCaaEntity(
+                ed,
+                ref closeMode,
+                ref directionMode,
+                out ObjectId polylineId))
             {
                 return;
             }
 
-            CaaCloseMode savedMode = CaaPolylineSettingsStore.LoadCloseMode();
-            PromptKeywordOptions closeOptions =
-                new PromptKeywordOptions(
-                    $"\nXử lý closed polyline [Close/Skip] <{savedMode}>: ");
-            closeOptions.AllowNone = true;
-            closeOptions.Keywords.Add("Close");
-            closeOptions.Keywords.Add("Skip");
-            closeOptions.Keywords.Default = savedMode.ToString();
-
-            PromptResult closeResult = ed.GetKeywords(closeOptions);
-            if (closeResult.Status == PromptStatus.Cancel)
+            if (!TryPromptCaaStartPoint(
+                ed,
+                ref closeMode,
+                ref directionMode,
+                out Point2d pickedStartPoint))
             {
                 return;
             }
-
-            CaaCloseMode closeMode = savedMode;
-            if (closeResult.Status == PromptStatus.OK &&
-                Enum.TryParse(closeResult.StringResult, true, out CaaCloseMode parsedMode))
-            {
-                closeMode = parsedMode;
-            }
-
-            CaaPolylineSettingsStore.SaveCloseMode(closeMode);
-
-            CaaDirectionMode savedDirectionMode = CaaPolylineSettingsStore.LoadDirectionMode();
-            PromptKeywordOptions directionOptions =
-                new PromptKeywordOptions(
-                    $"\nChọn hướng polyline [CCW=Nguoc chieu kim dong ho/CW=Cung chieu kim dong ho] <{savedDirectionMode}>: ");
-            directionOptions.AllowNone = true;
-            directionOptions.Keywords.Add("CCW");
-            directionOptions.Keywords.Add("CW");
-            directionOptions.Keywords.Default = savedDirectionMode.ToString();
-
-            PromptResult directionResult = ed.GetKeywords(directionOptions);
-            if (directionResult.Status == PromptStatus.Cancel)
-            {
-                return;
-            }
-
-            CaaDirectionMode directionMode = savedDirectionMode;
-            if (directionResult.Status == PromptStatus.OK &&
-                Enum.TryParse(directionResult.StringResult, true, out CaaDirectionMode parsedDirectionMode))
-            {
-                directionMode = parsedDirectionMode;
-            }
-
-            CaaPolylineSettingsStore.SaveDirectionMode(directionMode);
-
-            PromptPointOptions startPointOptions =
-                new PromptPointOptions(
-                    "\nChọn điểm đầu mong muốn của polyline (pline hở: chọn gần đầu mút): ");
-            PromptPointResult startPointResult = ed.GetPoint(startPointOptions);
-            if (startPointResult.Status != PromptStatus.OK)
-            {
-                return;
-            }
-
-            Point2d pickedStartPoint =
-                new Point2d(startPointResult.Value.X, startPointResult.Value.Y);
 
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
                 Autodesk.AutoCAD.DatabaseServices.Polyline polyline =
-                    tr.GetObject(entityResult.ObjectId, OpenMode.ForWrite) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                    tr.GetObject(polylineId, OpenMode.ForWrite) as Autodesk.AutoCAD.DatabaseServices.Polyline;
                 if (polyline == null)
                 {
                     ed.WriteMessage("\nCAA_change_pline: không đọc được polyline.");
@@ -1618,6 +1745,136 @@ namespace AUTOCAD_COMMANDS
             }
 
             return vertices;
+        }
+
+        private static bool TryPromptCaaStartPoint(
+            Editor ed,
+            ref CaaCloseMode closeMode,
+            ref CaaDirectionMode directionMode,
+            out Point2d pickedStartPoint)
+        {
+            pickedStartPoint = Point2d.Origin;
+
+            while (true)
+            {
+                PromptPointOptions startPointOptions =
+                    new PromptPointOptions(
+                        $"\nChọn điểm đầu mong muốn (pline hở: chọn gần đầu mút) hoặc [Settings] <Close={closeMode}, Dir={directionMode}>: ");
+                startPointOptions.AppendKeywordsToMessage = false;
+                startPointOptions.Keywords.Add("Settings");
+
+                PromptPointResult startPointResult = ed.GetPoint(startPointOptions);
+                if (startPointResult.Status == PromptStatus.OK)
+                {
+                    pickedStartPoint =
+                        new Point2d(startPointResult.Value.X, startPointResult.Value.Y);
+                    return true;
+                }
+
+                if (startPointResult.Status == PromptStatus.Keyword &&
+                    string.Equals(startPointResult.StringResult, "Settings", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!PromptForCaaSettings(ed, ref closeMode, ref directionMode))
+                    {
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                return false;
+            }
+        }
+
+        private static bool TryPromptCaaEntity(
+            Editor ed,
+            ref CaaCloseMode closeMode,
+            ref CaaDirectionMode directionMode,
+            out ObjectId polylineId)
+        {
+            polylineId = ObjectId.Null;
+
+            while (true)
+            {
+                PromptEntityOptions entityOptions =
+                    new PromptEntityOptions(
+                        $"\nChọn polyline cần chuẩn hóa hoặc [Settings] <Close={closeMode}, Dir={directionMode}>: ");
+                entityOptions.AppendKeywordsToMessage = false;
+                entityOptions.SetRejectMessage("\nChỉ hỗ trợ lightweight Polyline.");
+                entityOptions.AddAllowedClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline), true);
+                entityOptions.Keywords.Add("Settings");
+
+                PromptEntityResult entityResult = ed.GetEntity(entityOptions);
+                if (entityResult.Status == PromptStatus.OK)
+                {
+                    polylineId = entityResult.ObjectId;
+                    return true;
+                }
+
+                if (entityResult.Status == PromptStatus.Keyword &&
+                    string.Equals(entityResult.StringResult, "Settings", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!PromptForCaaSettings(ed, ref closeMode, ref directionMode))
+                    {
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                return false;
+            }
+        }
+
+        private static bool PromptForCaaSettings(
+            Editor ed,
+            ref CaaCloseMode closeMode,
+            ref CaaDirectionMode directionMode)
+        {
+            PromptKeywordOptions closeOptions =
+                new PromptKeywordOptions(
+                    $"\nXử lý closed polyline [Close/Skip] <{closeMode}>: ");
+            closeOptions.AllowNone = true;
+            closeOptions.Keywords.Add("Close");
+            closeOptions.Keywords.Add("Skip");
+            closeOptions.Keywords.Default = closeMode.ToString();
+
+            PromptResult closeResult = ed.GetKeywords(closeOptions);
+            if (closeResult.Status == PromptStatus.Cancel)
+            {
+                return false;
+            }
+
+            if (closeResult.Status == PromptStatus.OK &&
+                Enum.TryParse(closeResult.StringResult, true, out CaaCloseMode parsedCloseMode))
+            {
+                closeMode = parsedCloseMode;
+            }
+
+            CaaPolylineSettingsStore.SaveCloseMode(closeMode);
+
+            PromptKeywordOptions directionOptions =
+                new PromptKeywordOptions(
+                    $"\nChọn hướng polyline [CCW=Nguoc chieu kim dong ho/CW=Cung chieu kim dong ho] <{directionMode}>: ");
+            directionOptions.AllowNone = true;
+            directionOptions.Keywords.Add("CCW");
+            directionOptions.Keywords.Add("CW");
+            directionOptions.Keywords.Default = directionMode.ToString();
+
+            PromptResult directionResult = ed.GetKeywords(directionOptions);
+            if (directionResult.Status == PromptStatus.Cancel)
+            {
+                return false;
+            }
+
+            if (directionResult.Status == PromptStatus.OK &&
+                Enum.TryParse(directionResult.StringResult, true, out CaaDirectionMode parsedDirectionMode))
+            {
+                directionMode = parsedDirectionMode;
+            }
+
+            CaaPolylineSettingsStore.SaveDirectionMode(directionMode);
+            return true;
         }
 
         private readonly struct CaaPolylineVertex
@@ -2267,6 +2524,8 @@ namespace AUTOCAD_COMMANDS
         private const double SearchDistance = 1000000.0;
         private static readonly RXClass CurveRxClass = RXObject.GetClass(typeof(Curve));
         private static readonly RXClass DimensionRxClass = RXObject.GetClass(typeof(Dimension));
+        private static readonly RXClass EntityRxClass = RXObject.GetClass(typeof(Entity));
+        private static List<SdxyEntityTypeChoice> _cachedSdxyEntityTypeChoices;
 
         [DllImport("user32.dll")]
         private static extern short GetAsyncKeyState(int vKey);
@@ -2418,13 +2677,15 @@ namespace AUTOCAD_COMMANDS
             Editor ed = doc.Editor;
             Database db = doc.Database;
 
-            PromptPointResult startRes =
-                ed.GetPoint("\nChọn điểm đầu dim: ");
-            if (startRes.Status != PromptStatus.OK) return;
+            SdxyTargetSettings settings = SdxyTargetSettingsStore.Load();
+            if (!TryPromptSdxyStartPoint(ed, db, ref settings, out Point3d startPoint))
+            {
+                return;
+            }
 
             if (!TryPromptAxisDirection(
                 ed,
-                startRes.Value,
+                startPoint,
                 "\nChọn điểm để xác định hướng dim X/Y (nhấn Shift để đổi X/Y): ",
                 null,
                 out Point3d dirPoint,
@@ -2446,16 +2707,18 @@ namespace AUTOCAD_COMMANDS
                         ed,
                         currentSpace,
                         tr,
-                        startRes.Value,
+                        startPoint,
                         dirPoint,
-                        direction)
+                        direction,
+                        settings)
                     : FindNearestPointOnYAxisFromProbe(
                         ed,
                         currentSpace,
                         tr,
-                        startRes.Value,
+                        startPoint,
                         dirPoint,
-                        direction);
+                        direction,
+                        settings);
 
                 if (!targetPoint.HasValue)
                 {
@@ -2470,7 +2733,7 @@ namespace AUTOCAD_COMMANDS
                     ? new Point3d(targetPoint.Value.X, dirPoint.Y, dirPoint.Z)
                     : new Point3d(dirPoint.X, targetPoint.Value.Y, dirPoint.Z);
 
-                if (startRes.Value.DistanceTo(endPoint) < DirectionTolerance)
+                if (startPoint.DistanceTo(endPoint) < DirectionTolerance)
                 {
                     ed.WriteMessage("\nKhoảng dim quá nhỏ hoặc trùng điểm đầu.");
                     return;
@@ -2479,7 +2742,7 @@ namespace AUTOCAD_COMMANDS
                 if (!TryPromptDimPlacementPoint(
                     ed,
                     db,
-                    startRes.Value,
+                    startPoint,
                     endPoint,
                     useXAxis,
                     out Point3d dimPlacementPoint,
@@ -2492,7 +2755,7 @@ namespace AUTOCAD_COMMANDS
 
                 RotatedDimension dim = new RotatedDimension
                 {
-                    XLine1Point = startRes.Value,
+                    XLine1Point = startPoint,
                     XLine2Point = endPoint,
                     DimLinePoint = dimPlacementPoint,
                     Rotation = finalUseXAxis ? 0.0 : Math.PI / 2.0,
@@ -2503,6 +2766,25 @@ namespace AUTOCAD_COMMANDS
                 currentSpace.AppendEntity(dim);
                 tr.AddNewlyCreatedDBObject(dim, true);
                 tr.Commit();
+            }
+        }
+
+        [CommandMethod("SDXYSETTINGS")]
+        public void ConfigureSmartDimXY()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            if (doc == null)
+            {
+                return;
+            }
+
+            Editor ed = doc.Editor;
+            Database db = doc.Database;
+            SdxyTargetSettings settings = SdxyTargetSettingsStore.Load();
+
+            if (PromptForSdxySettings(ed, db, ref settings))
+            {
+                ed.WriteMessage($"\nSDXY: đã lưu setting target. {BuildSdxySettingsSummary(settings)}");
             }
         }
 
@@ -2616,6 +2898,542 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
+        private bool TryPromptSdxyStartPoint(
+            Editor ed,
+            Database db,
+            ref SdxyTargetSettings settings,
+            out Point3d startPoint)
+        {
+            startPoint = Point3d.Origin;
+
+            while (true)
+            {
+                PromptPointOptions options =
+                    new PromptPointOptions(
+                        $"\nChọn điểm đầu dim hoặc [Settings] <{BuildSdxySettingsSummary(settings)}>:");
+                options.AppendKeywordsToMessage = false;
+                options.Keywords.Add("Settings");
+
+                PromptPointResult result = ed.GetPoint(options);
+                if (result.Status == PromptStatus.OK)
+                {
+                    startPoint = result.Value;
+                    return true;
+                }
+
+                if (result.Status == PromptStatus.Keyword &&
+                    string.Equals(result.StringResult, "Settings", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!PromptForSdxySettings(ed, db, ref settings))
+                    {
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                return false;
+            }
+        }
+
+        private bool PromptForSdxySettings(
+            Editor ed,
+            Database db,
+            ref SdxyTargetSettings settings)
+        {
+            if (ed == null || db == null)
+            {
+                return false;
+            }
+
+            List<SdxyEntityTypeChoice> availableTypes = GetAvailableSdxyEntityTypeChoices();
+            while (true)
+            {
+                List<string> availableLayers = LoadSdxyLayerNames(db, settings);
+                using (SdxySettingsForm form =
+                    new SdxySettingsForm(availableTypes, availableLayers, settings))
+                {
+                    WF.DialogResult result = Application.ShowModalDialog(form);
+                    if (form.PendingAction == SdxySettingsFormAction.PickSample)
+                    {
+                        settings = form.ResultSettings;
+                    }
+                    else if (result == WF.DialogResult.OK)
+                    {
+                        settings = form.ResultSettings;
+                        SdxyTargetSettingsStore.Save(settings);
+                        SdxyNamedFilterStore.SaveCurrentName(form.SelectedNamedFilterName);
+                        return true;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+
+                if (TryPromptSdxySampleDescriptor(ed, db, out SdxySampleDescriptor sampleDescriptor))
+                {
+                    settings.SampleDescriptors.Add(sampleDescriptor);
+                    if (!settings.UseSampleType &&
+                        !settings.UseSampleLayer &&
+                        !settings.UseSampleLinetype &&
+                        !settings.UseSampleColor &&
+                        !settings.UseSampleBlockName)
+                    {
+                        settings.UseSampleType = true;
+                        settings.UseSampleLayer = true;
+                    }
+                }
+            }
+        }
+
+        private bool TryPromptSdxySampleDescriptor(
+            Editor ed,
+            Database db,
+            out SdxySampleDescriptor sampleDescriptor)
+        {
+            sampleDescriptor = null;
+
+            PromptEntityOptions options =
+                new PromptEntityOptions("\nChọn đối tượng mẫu cho SDXY filter: ");
+            PromptEntityResult result = ed.GetEntity(options);
+            if (result.Status != PromptStatus.OK)
+            {
+                return false;
+            }
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                Entity entity = tr.GetObject(result.ObjectId, OpenMode.ForRead) as Entity;
+                if (entity == null)
+                {
+                    return false;
+                }
+
+                sampleDescriptor = BuildSdxySampleDescriptor(entity, tr);
+                return sampleDescriptor != null;
+            }
+        }
+
+        private SdxySampleDescriptor BuildSdxySampleDescriptor(Entity entity, Transaction tr)
+        {
+            if (entity == null)
+            {
+                return null;
+            }
+
+            string typeName = entity.GetType().FullName ?? entity.GetType().Name;
+            string typeDisplayName = GetSdxyEntityDisplayName(entity.GetType());
+            string layerName = entity.Layer ?? string.Empty;
+            string linetypeName = entity.Linetype ?? string.Empty;
+            string colorKey = BuildSdxyColorKey(entity.Color);
+            string colorDisplayName = BuildSdxyColorDisplayName(entity.Color);
+            string blockName = entity is BlockReference blockReference
+                ? GetSdxyBlockName(blockReference, tr)
+                : string.Empty;
+
+            return new SdxySampleDescriptor(
+                typeName,
+                typeDisplayName,
+                layerName,
+                linetypeName,
+                colorKey,
+                colorDisplayName,
+                blockName);
+        }
+
+        private List<string> LoadSdxyLayerNames(Database db, SdxyTargetSettings settings)
+        {
+            SortedSet<string> names =
+                new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                LayerTable layerTable =
+                    tr.GetObject(db.LayerTableId, OpenMode.ForRead) as LayerTable;
+                if (layerTable != null)
+                {
+                    foreach (ObjectId id in layerTable)
+                    {
+                        LayerTableRecord layer =
+                            tr.GetObject(id, OpenMode.ForRead) as LayerTableRecord;
+                        if (layer != null && !string.IsNullOrWhiteSpace(layer.Name))
+                        {
+                            names.Add(layer.Name);
+                        }
+                    }
+                }
+            }
+
+            foreach (string layerName in settings?.AllowedLayers ?? Enumerable.Empty<string>())
+            {
+                if (!string.IsNullOrWhiteSpace(layerName))
+                {
+                    names.Add(layerName);
+                }
+            }
+
+            foreach (SdxySampleDescriptor sample in settings?.SampleDescriptors ?? Enumerable.Empty<SdxySampleDescriptor>())
+            {
+                if (!string.IsNullOrWhiteSpace(sample?.LayerName))
+                {
+                    names.Add(sample.LayerName);
+                }
+            }
+
+            return names.ToList();
+        }
+
+        private List<SdxyEntityTypeChoice> GetAvailableSdxyEntityTypeChoices()
+        {
+            if (_cachedSdxyEntityTypeChoices != null)
+            {
+                return _cachedSdxyEntityTypeChoices;
+            }
+
+            HashSet<string> commonTypes = new HashSet<string>(
+                new[]
+                {
+                    typeof(Line).FullName,
+                    typeof(Autodesk.AutoCAD.DatabaseServices.Polyline).FullName,
+                    typeof(Polyline2d).FullName,
+                    typeof(Polyline3d).FullName,
+                    typeof(Arc).FullName,
+                    typeof(Circle).FullName,
+                    typeof(Ellipse).FullName,
+                    typeof(Spline).FullName,
+                    typeof(BlockReference).FullName,
+                    typeof(Dimension).FullName,
+                    typeof(DBText).FullName,
+                    typeof(MText).FullName,
+                    typeof(Hatch).FullName,
+                    typeof(Xline).FullName,
+                    typeof(Ray).FullName,
+                    typeof(Autodesk.AutoCAD.DatabaseServices.Region).FullName
+                }
+                .Where(name => !string.IsNullOrWhiteSpace(name)),
+                StringComparer.Ordinal);
+
+            List<SdxyEntityTypeChoice> result = typeof(Entity).Assembly
+                .GetTypes()
+                .Where(type =>
+                    type.IsClass &&
+                    type.IsPublic &&
+                    !type.IsGenericTypeDefinition &&
+                    type != typeof(Entity) &&
+                    typeof(Entity).IsAssignableFrom(type))
+                .Select(type =>
+                    new SdxyEntityTypeChoice(
+                        type,
+                        GetSdxyEntityDisplayName(type),
+                        commonTypes.Contains(type.FullName ?? string.Empty)))
+                .OrderByDescending(choice => choice.IsCommon)
+                .ThenBy(choice => choice.DisplayName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            _cachedSdxyEntityTypeChoices = result;
+            return result;
+        }
+
+        private static string GetSdxyEntityDisplayName(Type type)
+        {
+            if (type == null)
+            {
+                return string.Empty;
+            }
+
+            string displayName = type.Name;
+            if (type.IsAbstract)
+            {
+                displayName += " (family)";
+            }
+
+            return displayName;
+        }
+
+        private string BuildSdxySettingsSummary(SdxyTargetSettings settings)
+        {
+            if (settings == null)
+            {
+                return "All types | All layers | No sample";
+            }
+
+            int typeCount = settings.AllowedTypeNames.Count;
+            int layerCount = settings.AllowedLayers.Count;
+            string sampleSummary = "No sample";
+            int sampleCount = settings.SampleDescriptors.Count;
+            if (sampleCount > 0 &&
+                (settings.UseSampleType ||
+                 settings.UseSampleLayer ||
+                 settings.UseSampleLinetype ||
+                 settings.UseSampleColor ||
+                 settings.UseSampleBlockName))
+            {
+                List<string> parts = new List<string>();
+                if (settings.UseSampleType) parts.Add("Type");
+                if (settings.UseSampleLayer) parts.Add("Layer");
+                if (settings.UseSampleLinetype) parts.Add("Linetype");
+                if (settings.UseSampleColor) parts.Add("Color");
+                if (settings.UseSampleBlockName) parts.Add("Block");
+                sampleSummary = $"Sample={sampleCount} obj ({string.Join("+", parts)})";
+            }
+
+            return
+                $"Type={(typeCount == 0 ? "All" : typeCount.ToString())} | " +
+                $"Layer={(layerCount == 0 ? "All" : layerCount.ToString())} | " +
+                sampleSummary;
+        }
+
+        private bool IsSdxyTargetCandidate(
+            Entity entity,
+            Transaction tr,
+            SdxyTargetSettings settings)
+        {
+            if (entity == null || entity.IsErased)
+            {
+                return false;
+            }
+
+            if (!IsSdxyEntityVisible(entity, tr))
+            {
+                return false;
+            }
+
+            if (settings == null)
+            {
+                return entity is Curve && !(entity is Dimension);
+            }
+
+            if (!MatchesSdxyTypeFilters(entity, settings))
+            {
+                return false;
+            }
+
+            if (settings.AllowedLayers.Count > 0 &&
+                !settings.AllowedLayers.Contains(entity.Layer ?? string.Empty))
+            {
+                return false;
+            }
+
+            return MatchesSdxySampleFilters(entity, tr, settings);
+        }
+
+        private bool MatchesSdxyTypeFilters(Entity entity, SdxyTargetSettings settings)
+        {
+            if (settings == null || settings.AllowedTypeNames.Count == 0)
+            {
+                return true;
+            }
+
+            Type entityType = entity.GetType();
+            foreach (string typeName in settings.AllowedTypeNames)
+            {
+                Type targetType = ResolveSdxyEntityType(typeName);
+                if (targetType != null && targetType.IsAssignableFrom(entityType))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool MatchesSdxySampleFilters(
+            Entity entity,
+            Transaction tr,
+            SdxyTargetSettings settings)
+        {
+            List<SdxySampleDescriptor> samples = settings?.SampleDescriptors
+                ?.Where(sample => sample != null)
+                .ToList()
+                ?? new List<SdxySampleDescriptor>();
+            if (samples.Count == 0)
+            {
+                return true;
+            }
+
+            return samples.Any(sample => MatchesSingleSdxySampleFilter(entity, tr, settings, sample));
+        }
+
+        private bool MatchesSingleSdxySampleFilter(
+            Entity entity,
+            Transaction tr,
+            SdxyTargetSettings settings,
+            SdxySampleDescriptor sample)
+        {
+            if (sample == null)
+            {
+                return true;
+            }
+
+            if (settings.UseSampleType)
+            {
+                Type sampleType = ResolveSdxyEntityType(sample.TypeName);
+                if (sampleType == null || !sampleType.IsAssignableFrom(entity.GetType()))
+                {
+                    return false;
+                }
+            }
+
+            if (settings.UseSampleLayer &&
+                !string.Equals(entity.Layer, sample.LayerName, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (settings.UseSampleLinetype &&
+                !string.Equals(entity.Linetype, sample.LinetypeName, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (settings.UseSampleColor &&
+                !string.Equals(
+                    BuildSdxyColorKey(entity.Color),
+                    sample.ColorKey,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (settings.UseSampleBlockName)
+            {
+                if (!(entity is BlockReference blockReference))
+                {
+                    return false;
+                }
+
+                string blockName = GetSdxyBlockName(blockReference, tr);
+                if (!string.Equals(blockName, sample.BlockName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private bool IsSdxyEntityVisible(Entity entity, Transaction tr)
+        {
+            try
+            {
+                if (!entity.Visible)
+                {
+                    return false;
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                LayerTableRecord layer =
+                    tr.GetObject(entity.LayerId, OpenMode.ForRead) as LayerTableRecord;
+                if (layer != null && (layer.IsOff || layer.IsFrozen))
+                {
+                    return false;
+                }
+            }
+            catch
+            {
+            }
+
+            return true;
+        }
+
+        private Type ResolveSdxyEntityType(string typeName)
+        {
+            if (string.IsNullOrWhiteSpace(typeName))
+            {
+                return null;
+            }
+
+            return typeof(Entity).Assembly.GetType(typeName, throwOnError: false, ignoreCase: true);
+        }
+
+        private string BuildSdxyColorKey(Autodesk.AutoCAD.Colors.Color color)
+        {
+            if (color == null)
+            {
+                return string.Empty;
+            }
+
+            switch (color.ColorMethod)
+            {
+                case Autodesk.AutoCAD.Colors.ColorMethod.ByLayer:
+                    return "ByLayer";
+                case Autodesk.AutoCAD.Colors.ColorMethod.ByBlock:
+                    return "ByBlock";
+                case Autodesk.AutoCAD.Colors.ColorMethod.ByAci:
+                    return "ACI:" + color.ColorIndex.ToString(CultureInfo.InvariantCulture);
+                case Autodesk.AutoCAD.Colors.ColorMethod.ByColor:
+                    return "RGB:" +
+                        color.Red.ToString(CultureInfo.InvariantCulture) + "," +
+                        color.Green.ToString(CultureInfo.InvariantCulture) + "," +
+                        color.Blue.ToString(CultureInfo.InvariantCulture);
+                default:
+                    return color.ColorMethod + ":" + color.ColorIndex.ToString(CultureInfo.InvariantCulture);
+            }
+        }
+
+        private string BuildSdxyColorDisplayName(Autodesk.AutoCAD.Colors.Color color)
+        {
+            if (color == null)
+            {
+                return string.Empty;
+            }
+
+            switch (color.ColorMethod)
+            {
+                case Autodesk.AutoCAD.Colors.ColorMethod.ByLayer:
+                    return "ByLayer";
+                case Autodesk.AutoCAD.Colors.ColorMethod.ByBlock:
+                    return "ByBlock";
+                case Autodesk.AutoCAD.Colors.ColorMethod.ByAci:
+                    return "ACI " + color.ColorIndex.ToString(CultureInfo.InvariantCulture);
+                case Autodesk.AutoCAD.Colors.ColorMethod.ByColor:
+                    return "RGB " +
+                        color.Red.ToString(CultureInfo.InvariantCulture) + "," +
+                        color.Green.ToString(CultureInfo.InvariantCulture) + "," +
+                        color.Blue.ToString(CultureInfo.InvariantCulture);
+                default:
+                    return color.ColorMethod.ToString();
+            }
+        }
+
+        private string GetSdxyBlockName(BlockReference blockReference, Transaction tr)
+        {
+            if (blockReference == null)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                ObjectId blockId = blockReference.DynamicBlockTableRecord;
+                if (blockId.IsNull)
+                {
+                    blockId = blockReference.BlockTableRecord;
+                }
+
+                BlockTableRecord block =
+                    tr.GetObject(blockId, OpenMode.ForRead) as BlockTableRecord;
+                return block?.Name ?? string.Empty;
+            }
+            catch
+            {
+                try
+                {
+                    return blockReference.Name ?? string.Empty;
+                }
+                catch
+                {
+                    return string.Empty;
+                }
+            }
+        }
+
         private Point3d? FindNearestPointOnXAxis(
             Editor ed,
             BlockTableRecord currentSpace,
@@ -2623,52 +3441,15 @@ namespace AUTOCAD_COMMANDS
             Point3d startPoint,
             double direction)
         {
-            Point3d? bestPoint = null;
-            double bestDistance = double.MaxValue;
-
-            using (Line scanLine = CreateScanLine(startPoint, direction))
-            {
-                foreach (ObjectId id in GetScanCandidateIds(
-                    ed,
-                    currentSpace,
-                    startPoint,
-                    true,
-                    direction))
-                {
-                    Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                    if (entity == null || entity.IsErased) continue;
-                    Curve curve = entity as Curve;
-                    if (curve == null) continue;
-                    if (!IsHorizontalRayCandidate(
-                        curve,
-                        startPoint.Y,
-                        startPoint.X,
-                        startPoint.X,
-                        direction,
-                        bestDistance))
-                    {
-                        continue;
-                    }
-
-                    Point3dCollection intersections =
-                        TryGetIntersections(curve, scanLine);
-                    if (intersections == null || intersections.Count == 0) continue;
-
-                    foreach (Point3d point in intersections)
-                    {
-                        double projectedDistance =
-                            (point.X - startPoint.X) * direction;
-
-                        if (projectedDistance <= DirectionTolerance) continue;
-                        if (projectedDistance >= bestDistance) continue;
-
-                        bestDistance = projectedDistance;
-                        bestPoint = point;
-                    }
-                }
-            }
-
-            return bestPoint;
+            return FindNearestPointOnAxis(
+                ed,
+                currentSpace,
+                tr,
+                startPoint,
+                startPoint,
+                direction,
+                useXAxis: true,
+                settings: null);
         }
 
         private Point3d? FindNearestPointOnXAxisFromProbe(
@@ -2677,61 +3458,18 @@ namespace AUTOCAD_COMMANDS
             Transaction tr,
             Point3d startPoint,
             Point3d probePoint,
-            double direction)
+            double direction,
+            SdxyTargetSettings settings)
         {
-            // Quét target theo trục X bắt đầu từ probePoint.
-            // bestDistance được tính theo khoảng cách từ probePoint để bắt đối tượng gần điểm click 2 nhất.
-            Point3d? bestPoint = null;
-            double bestDistance = double.MaxValue;
-
-            using (Line scanLine = CreateScanLine(probePoint, direction))
-            {
-                foreach (ObjectId id in GetScanCandidateIds(
-                    ed,
-                    currentSpace,
-                    probePoint,
-                    true,
-                    direction))
-                {
-                    Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                    if (entity == null || entity.IsErased) continue;
-                    Curve curve = entity as Curve;
-                    if (curve == null) continue;
-                    if (!IsHorizontalRayCandidate(
-                        curve,
-                        probePoint.Y,
-                        startPoint.X,
-                        probePoint.X,
-                        direction,
-                        bestDistance))
-                    {
-                        continue;
-                    }
-
-                    Point3dCollection intersections =
-                        TryGetIntersections(curve, scanLine);
-                    if (intersections == null || intersections.Count == 0) continue;
-
-                    foreach (Point3d point in intersections)
-                    {
-                        double projectedFromStart =
-                            (point.X - startPoint.X) * direction;
-                        double projectedFromProbe =
-                            (point.X - probePoint.X) * direction;
-
-                        if (projectedFromStart <= DirectionTolerance) continue;
-                        if (projectedFromProbe < -DirectionTolerance) continue;
-
-                        double rankDistance = Math.Max(0.0, projectedFromProbe);
-                        if (rankDistance >= bestDistance) continue;
-
-                        bestDistance = rankDistance;
-                        bestPoint = point;
-                    }
-                }
-            }
-
-            return bestPoint;
+            return FindNearestPointOnAxis(
+                ed,
+                currentSpace,
+                tr,
+                startPoint,
+                probePoint,
+                direction,
+                useXAxis: true,
+                settings: settings);
         }
 
         private Point3d? FindNearestPointOnYAxis(
@@ -2741,52 +3479,15 @@ namespace AUTOCAD_COMMANDS
             Point3d startPoint,
             double direction)
         {
-            Point3d? bestPoint = null;
-            double bestDistance = double.MaxValue;
-
-            using (Line scanLine = CreateVerticalScanLine(startPoint, direction))
-            {
-                foreach (ObjectId id in GetScanCandidateIds(
-                    ed,
-                    currentSpace,
-                    startPoint,
-                    false,
-                    direction))
-                {
-                    Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                    if (entity == null || entity.IsErased) continue;
-                    Curve curve = entity as Curve;
-                    if (curve == null) continue;
-                    if (!IsVerticalRayCandidate(
-                        curve,
-                        startPoint.X,
-                        startPoint.Y,
-                        startPoint.Y,
-                        direction,
-                        bestDistance))
-                    {
-                        continue;
-                    }
-
-                    Point3dCollection intersections =
-                        TryGetIntersections(curve, scanLine);
-                    if (intersections == null || intersections.Count == 0) continue;
-
-                    foreach (Point3d point in intersections)
-                    {
-                        double projectedDistance =
-                            (point.Y - startPoint.Y) * direction;
-
-                        if (projectedDistance <= DirectionTolerance) continue;
-                        if (projectedDistance >= bestDistance) continue;
-
-                        bestDistance = projectedDistance;
-                        bestPoint = point;
-                    }
-                }
-            }
-
-            return bestPoint;
+            return FindNearestPointOnAxis(
+                ed,
+                currentSpace,
+                tr,
+                startPoint,
+                startPoint,
+                direction,
+                useXAxis: false,
+                settings: null);
         }
 
         private Point3d? FindNearestPointOnYAxisFromProbe(
@@ -2795,53 +3496,102 @@ namespace AUTOCAD_COMMANDS
             Transaction tr,
             Point3d startPoint,
             Point3d probePoint,
-            double direction)
+            double direction,
+            SdxyTargetSettings settings)
         {
-            // Quét target theo trục Y bắt đầu từ probePoint.
-            // Vẫn kiểm tra projectedFromStart để đảm bảo DIM đi đúng hướng từ điểm đầu.
+            return FindNearestPointOnAxis(
+                ed,
+                currentSpace,
+                tr,
+                startPoint,
+                probePoint,
+                direction,
+                useXAxis: false,
+                settings: settings);
+        }
+
+        private Point3d? FindNearestPointOnAxis(
+            Editor ed,
+            BlockTableRecord currentSpace,
+            Transaction tr,
+            Point3d startPoint,
+            Point3d probePoint,
+            double direction,
+            bool useXAxis,
+            SdxyTargetSettings settings)
+        {
             Point3d? bestPoint = null;
             double bestDistance = double.MaxValue;
 
-            using (Line scanLine = CreateVerticalScanLine(probePoint, direction))
+            using (Line scanLine = useXAxis
+                ? CreateScanLine(probePoint, direction)
+                : CreateVerticalScanLine(probePoint, direction))
             {
                 foreach (ObjectId id in GetScanCandidateIds(
                     ed,
                     currentSpace,
                     probePoint,
-                    false,
-                    direction))
+                    useXAxis,
+                    direction,
+                    settings))
                 {
                     Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                    if (entity == null || entity.IsErased) continue;
-                    Curve curve = entity as Curve;
-                    if (curve == null) continue;
-                    if (!IsVerticalRayCandidate(
-                        curve,
-                        probePoint.X,
-                        startPoint.Y,
-                        probePoint.Y,
-                        direction,
-                        bestDistance))
+                    if (!IsSdxyTargetCandidate(entity, tr, settings))
+                    {
+                        continue;
+                    }
+
+                    bool fastPass = useXAxis
+                        ? IsHorizontalRayCandidate(
+                            entity,
+                            probePoint.Y,
+                            startPoint.X,
+                            probePoint.X,
+                            direction,
+                            bestDistance)
+                        : IsVerticalRayCandidate(
+                            entity,
+                            probePoint.X,
+                            startPoint.Y,
+                            probePoint.Y,
+                            direction,
+                            bestDistance);
+                    if (!fastPass)
                     {
                         continue;
                     }
 
                     Point3dCollection intersections =
-                        TryGetIntersections(curve, scanLine);
-                    if (intersections == null || intersections.Count == 0) continue;
+                        TryGetIntersections(entity, scanLine, useXAxis);
+                    if (intersections == null || intersections.Count == 0)
+                    {
+                        continue;
+                    }
 
                     foreach (Point3d point in intersections)
                     {
-                        double projectedFromStart =
-                            (point.Y - startPoint.Y) * direction;
-                        double projectedFromProbe =
-                            (point.Y - probePoint.Y) * direction;
+                        double projectedFromStart = useXAxis
+                            ? (point.X - startPoint.X) * direction
+                            : (point.Y - startPoint.Y) * direction;
+                        double projectedFromProbe = useXAxis
+                            ? (point.X - probePoint.X) * direction
+                            : (point.Y - probePoint.Y) * direction;
 
-                        if (projectedFromStart <= DirectionTolerance) continue;
-                        if (projectedFromProbe < -DirectionTolerance) continue;
+                        if (projectedFromStart <= DirectionTolerance)
+                        {
+                            continue;
+                        }
+
+                        if (projectedFromProbe < -DirectionTolerance)
+                        {
+                            continue;
+                        }
 
                         double rankDistance = Math.Max(0.0, projectedFromProbe);
-                        if (rankDistance >= bestDistance) continue;
+                        if (rankDistance >= bestDistance)
+                        {
+                            continue;
+                        }
 
                         bestDistance = rankDistance;
                         bestPoint = point;
@@ -2853,7 +3603,7 @@ namespace AUTOCAD_COMMANDS
         }
 
         private bool IsHorizontalRayCandidate(
-            Curve curve,
+            Entity entity,
             double scanY,
             double startX,
             double probeX,
@@ -2862,7 +3612,7 @@ namespace AUTOCAD_COMMANDS
         {
             // Lọc nhanh bằng GeometricExtents trước khi gọi IntersectWith.
             // Đây là phần giúp SDXY nhanh hơn khi bản vẽ có nhiều object.
-            if (!TryGetCurveExtents(curve, out Extents3d extents))
+            if (!TryGetEntityExtents(entity, out Extents3d extents))
             {
                 return true;
             }
@@ -2900,14 +3650,14 @@ namespace AUTOCAD_COMMANDS
         }
 
         private bool IsVerticalRayCandidate(
-            Curve curve,
+            Entity entity,
             double scanX,
             double startY,
             double probeY,
             double direction,
             double bestDistance)
         {
-            if (!TryGetCurveExtents(curve, out Extents3d extents))
+            if (!TryGetEntityExtents(entity, out Extents3d extents))
             {
                 return true;
             }
@@ -2949,26 +3699,29 @@ namespace AUTOCAD_COMMANDS
             BlockTableRecord currentSpace,
             Point3d scanStartPoint,
             bool useXAxis,
-            double direction)
+            double direction,
+            SdxyTargetSettings settings)
         {
             ObjectId[] selectionIds = TrySelectFenceCandidates(
                 ed,
                 scanStartPoint,
                 useXAxis,
-                direction);
+                direction,
+                settings);
             if (selectionIds != null)
             {
                 return selectionIds;
             }
 
-            return EnumerateCurveIds(currentSpace);
+            return EnumerateEntityIds(currentSpace, settings);
         }
 
         private ObjectId[] TrySelectFenceCandidates(
             Editor ed,
             Point3d scanStartPoint,
             bool useXAxis,
-            double direction)
+            double direction,
+            SdxyTargetSettings settings)
         {
             if (ed == null)
             {
@@ -2997,7 +3750,7 @@ namespace AUTOCAD_COMMANDS
                     {
                         return result.Value
                             .GetObjectIds()
-                            .Where(IsCurveCandidateId)
+                            .Where(id => IsScanCandidateId(id, settings))
                             .ToArray();
                     }
 
@@ -3016,18 +3769,20 @@ namespace AUTOCAD_COMMANDS
             return null;
         }
 
-        private IEnumerable<ObjectId> EnumerateCurveIds(BlockTableRecord currentSpace)
+        private IEnumerable<ObjectId> EnumerateEntityIds(
+            BlockTableRecord currentSpace,
+            SdxyTargetSettings settings)
         {
             foreach (ObjectId id in currentSpace)
             {
-                if (IsCurveCandidateId(id))
+                if (IsScanCandidateId(id, settings))
                 {
                     yield return id;
                 }
             }
         }
 
-        private bool IsCurveCandidateId(ObjectId id)
+        private bool IsScanCandidateId(ObjectId id, SdxyTargetSettings settings)
         {
             RXClass objectClass = id.ObjectClass;
             if (objectClass == null)
@@ -3035,19 +3790,30 @@ namespace AUTOCAD_COMMANDS
                 return false;
             }
 
-            if (DimensionRxClass != null && objectClass.IsDerivedFrom(DimensionRxClass))
+            if (settings == null)
             {
-                return false;
+                if (DimensionRxClass != null && objectClass.IsDerivedFrom(DimensionRxClass))
+                {
+                    return false;
+                }
+
+                return CurveRxClass == null || objectClass.IsDerivedFrom(CurveRxClass);
             }
 
-            return CurveRxClass == null || objectClass.IsDerivedFrom(CurveRxClass);
+            return EntityRxClass == null || objectClass.IsDerivedFrom(EntityRxClass);
         }
 
-        private bool TryGetCurveExtents(Curve curve, out Extents3d extents)
+        private bool TryGetEntityExtents(Entity entity, out Extents3d extents)
         {
             try
             {
-                extents = curve.GeometricExtents;
+                if (entity == null || entity.IsErased)
+                {
+                    extents = default;
+                    return false;
+                }
+
+                extents = entity.GeometricExtents;
                 return true;
             }
             catch (Autodesk.AutoCAD.Runtime.Exception)
@@ -3057,25 +3823,82 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
-        private Point3dCollection TryGetIntersections(Curve curve, Line scanLine)
+        private Point3dCollection TryGetIntersections(
+            Entity entity,
+            Line scanLine,
+            bool useXAxis)
         {
             // IntersectWith có thể lỗi với vài entity đặc biệt.
             // Bắt lỗi ở đây để lệnh bỏ qua object đó thay vì văng command.
             try
             {
                 Point3dCollection intersections = new Point3dCollection();
-                curve.IntersectWith(
+                entity.IntersectWith(
                     scanLine,
                     Intersect.OnBothOperands,
                     intersections,
                     IntPtr.Zero,
                     IntPtr.Zero);
-                return intersections;
+                if (intersections.Count > 0)
+                {
+                    return intersections;
+                }
             }
             catch (Autodesk.AutoCAD.Runtime.Exception)
             {
+            }
+
+            return BuildExtentsFallbackIntersections(entity, scanLine, useXAxis);
+        }
+
+        private Point3dCollection BuildExtentsFallbackIntersections(
+            Entity entity,
+            Line scanLine,
+            bool useXAxis)
+        {
+            if (!TryGetEntityExtents(entity, out Extents3d extents))
+            {
                 return null;
             }
+
+            Point3dCollection points = new Point3dCollection();
+            if (useXAxis)
+            {
+                double scanY = scanLine.StartPoint.Y;
+                if (scanY < extents.MinPoint.Y - DirectionTolerance ||
+                    scanY > extents.MaxPoint.Y + DirectionTolerance)
+                {
+                    return points;
+                }
+
+                AddIntersectionPoint(points, new Point3d(extents.MinPoint.X, scanY, scanLine.StartPoint.Z));
+                AddIntersectionPoint(points, new Point3d(extents.MaxPoint.X, scanY, scanLine.StartPoint.Z));
+                return points;
+            }
+
+            double scanX = scanLine.StartPoint.X;
+            if (scanX < extents.MinPoint.X - DirectionTolerance ||
+                scanX > extents.MaxPoint.X + DirectionTolerance)
+            {
+                return points;
+            }
+
+            AddIntersectionPoint(points, new Point3d(scanX, extents.MinPoint.Y, scanLine.StartPoint.Z));
+            AddIntersectionPoint(points, new Point3d(scanX, extents.MaxPoint.Y, scanLine.StartPoint.Z));
+            return points;
+        }
+
+        private void AddIntersectionPoint(Point3dCollection points, Point3d candidate)
+        {
+            foreach (Point3d existing in points)
+            {
+                if (existing.DistanceTo(candidate) <= DirectionTolerance)
+                {
+                    return;
+                }
+            }
+
+            points.Add(candidate);
         }
 
         private Line CreateScanLine(Point3d startPoint, double direction)
@@ -5126,6 +5949,1433 @@ namespace AUTOCAD_COMMANDS
 
             DialogResult = WF.DialogResult.OK;
             Close();
+        }
+    }
+
+    internal sealed class SdxyEntityTypeChoice
+    {
+        public SdxyEntityTypeChoice(Type managedType, string displayName, bool isCommon)
+        {
+            ManagedType = managedType;
+            DisplayName = displayName ?? string.Empty;
+            IsCommon = isCommon;
+        }
+
+        public Type ManagedType { get; }
+
+        public string DisplayName { get; }
+
+        public bool IsCommon { get; }
+
+        public string TypeName => ManagedType?.FullName ?? string.Empty;
+
+        public override string ToString()
+        {
+            return DisplayName;
+        }
+    }
+
+    internal sealed class SdxySampleDescriptor
+    {
+        public SdxySampleDescriptor(
+            string typeName,
+            string typeDisplayName,
+            string layerName,
+            string linetypeName,
+            string colorKey,
+            string colorDisplayName,
+            string blockName)
+        {
+            TypeName = typeName ?? string.Empty;
+            TypeDisplayName = typeDisplayName ?? string.Empty;
+            LayerName = layerName ?? string.Empty;
+            LinetypeName = linetypeName ?? string.Empty;
+            ColorKey = colorKey ?? string.Empty;
+            ColorDisplayName = colorDisplayName ?? string.Empty;
+            BlockName = blockName ?? string.Empty;
+        }
+
+        public string TypeName { get; }
+
+        public string TypeDisplayName { get; }
+
+        public string LayerName { get; }
+
+        public string LinetypeName { get; }
+
+        public string ColorKey { get; }
+
+        public string ColorDisplayName { get; }
+
+        public string BlockName { get; }
+
+        public SdxySampleDescriptor Clone()
+        {
+            return new SdxySampleDescriptor(
+                TypeName,
+                TypeDisplayName,
+                LayerName,
+                LinetypeName,
+                ColorKey,
+                ColorDisplayName,
+                BlockName);
+        }
+
+        public string BuildSummary()
+        {
+            List<string> parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(TypeDisplayName))
+            {
+                parts.Add("Type: " + TypeDisplayName);
+            }
+
+            if (!string.IsNullOrWhiteSpace(LayerName))
+            {
+                parts.Add("Layer: " + LayerName);
+            }
+
+            if (!string.IsNullOrWhiteSpace(LinetypeName))
+            {
+                parts.Add("Linetype: " + LinetypeName);
+            }
+
+            if (!string.IsNullOrWhiteSpace(ColorDisplayName))
+            {
+                parts.Add("Color: " + ColorDisplayName);
+            }
+
+            if (!string.IsNullOrWhiteSpace(BlockName))
+            {
+                parts.Add("Block: " + BlockName);
+            }
+
+            return parts.Count == 0
+                ? "Chua co sample object."
+                : string.Join(" | ", parts);
+        }
+    }
+
+    internal sealed class SdxyTargetSettings
+    {
+        public SdxyTargetSettings()
+        {
+            AllowedTypeNames = new HashSet<string>(StringComparer.Ordinal);
+            AllowedLayers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            SampleDescriptors = new List<SdxySampleDescriptor>();
+        }
+
+        public HashSet<string> AllowedTypeNames { get; }
+
+        public HashSet<string> AllowedLayers { get; }
+
+        public bool UseSampleType { get; set; }
+
+        public bool UseSampleLayer { get; set; }
+
+        public bool UseSampleLinetype { get; set; }
+
+        public bool UseSampleColor { get; set; }
+
+        public bool UseSampleBlockName { get; set; }
+
+        public List<SdxySampleDescriptor> SampleDescriptors { get; }
+
+        public SdxySampleDescriptor SampleDescriptor
+        {
+            get
+            {
+                return SampleDescriptors.Count == 0 ? null : SampleDescriptors[0];
+            }
+            set
+            {
+                SampleDescriptors.Clear();
+                if (value != null)
+                {
+                    SampleDescriptors.Add(value.Clone());
+                }
+            }
+        }
+
+        public SdxyTargetSettings Clone()
+        {
+            SdxyTargetSettings clone = new SdxyTargetSettings
+            {
+                UseSampleType = UseSampleType,
+                UseSampleLayer = UseSampleLayer,
+                UseSampleLinetype = UseSampleLinetype,
+                UseSampleColor = UseSampleColor,
+                UseSampleBlockName = UseSampleBlockName
+            };
+
+            foreach (string typeName in AllowedTypeNames)
+            {
+                clone.AllowedTypeNames.Add(typeName);
+            }
+
+            foreach (string layerName in AllowedLayers)
+            {
+                clone.AllowedLayers.Add(layerName);
+            }
+
+            foreach (SdxySampleDescriptor sample in SampleDescriptors)
+            {
+                if (sample != null)
+                {
+                    clone.SampleDescriptors.Add(sample.Clone());
+                }
+            }
+
+            return clone;
+        }
+    }
+
+    internal enum SdxySettingsFormAction
+    {
+        None,
+        PickSample
+    }
+
+    internal sealed class SdxySettingsForm : WF.Form
+    {
+        private readonly List<SdxyEntityTypeChoice> _availableTypes;
+        private readonly List<string> _availableLayers;
+        private readonly WF.ComboBox _namedFilterCombo;
+        private readonly WF.CheckedListBox _typeList;
+        private readonly WF.CheckedListBox _layerList;
+        private readonly WF.Label _filterPreviewLabel;
+        private readonly WF.Label _typeCountLabel;
+        private readonly WF.Label _layerCountLabel;
+        private readonly WF.Label _sampleSummaryLabel;
+        private readonly WF.ListBox _sampleListBox;
+        private readonly WF.Label _sampleListCountLabel;
+        private readonly WF.CheckBox _sampleTypeCheckBox;
+        private readonly WF.CheckBox _sampleLayerCheckBox;
+        private readonly WF.CheckBox _sampleLinetypeCheckBox;
+        private readonly WF.CheckBox _sampleColorCheckBox;
+        private readonly WF.CheckBox _sampleBlockNameCheckBox;
+        private readonly WF.ComboBox _sampleTypeValueCombo;
+        private readonly WF.ComboBox _sampleLayerValueCombo;
+        private readonly WF.TextBox _sampleLinetypeValueTextBox;
+        private readonly WF.TextBox _sampleColorValueTextBox;
+        private readonly WF.TextBox _sampleBlockNameValueTextBox;
+        private readonly Dictionary<string, SdxyTargetSettings> _namedFilters;
+        private SdxyTargetSettings _draftSettings;
+        private string _selectedNamedFilterName;
+        private int _selectedSampleIndex;
+        private bool _suppressSampleEditorEvents;
+
+        public SdxySettingsForm(
+            IEnumerable<SdxyEntityTypeChoice> availableTypes,
+            IEnumerable<string> availableLayers,
+            SdxyTargetSettings currentSettings)
+        {
+            _availableTypes = availableTypes?.ToList() ?? new List<SdxyEntityTypeChoice>();
+            _availableLayers = availableLayers?
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList()
+                ?? new List<string>();
+            _namedFilters = SdxyNamedFilterStore.LoadAll();
+            _draftSettings = currentSettings?.Clone() ?? new SdxyTargetSettings();
+            _selectedNamedFilterName = SdxyNamedFilterStore.LoadCurrentName();
+            _selectedSampleIndex = _draftSettings.SampleDescriptors.Count - 1;
+
+            Text = "SDXY Target Settings";
+            StartPosition = WF.FormStartPosition.CenterParent;
+            MinimumSize = new Size(720, 620);
+            Size = new Size(760, 680);
+            FormBorderStyle = WF.FormBorderStyle.SizableToolWindow;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            Font = new System.Drawing.Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+
+            WF.TableLayoutPanel layout = new WF.TableLayoutPanel
+            {
+                Dock = WF.DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 5,
+                Padding = new WF.Padding(10)
+            };
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.Percent, 100f));
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            Controls.Add(layout);
+
+            WF.GroupBox namedFiltersGroup = new WF.GroupBox
+            {
+                Text = "Named Filters",
+                Dock = WF.DockStyle.Fill,
+                AutoSize = true,
+                Padding = new WF.Padding(10, 20, 10, 10),
+                Margin = new WF.Padding(0, 0, 0, 8)
+            };
+            layout.Controls.Add(namedFiltersGroup, 0, 0);
+
+            WF.TableLayoutPanel namedFiltersLayout = new WF.TableLayoutPanel
+            {
+                Dock = WF.DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 2
+            };
+            namedFiltersLayout.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
+            namedFiltersLayout.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
+            namedFiltersLayout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            namedFiltersLayout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            namedFiltersGroup.Controls.Add(namedFiltersLayout);
+
+            WF.Label currentPresetLabel = new WF.Label
+            {
+                Text = "Current:",
+                AutoSize = true,
+                Dock = WF.DockStyle.Fill,
+                Margin = new WF.Padding(0, 4, 8, 0)
+            };
+            namedFiltersLayout.Controls.Add(currentPresetLabel, 0, 0);
+
+            _namedFilterCombo = new WF.ComboBox
+            {
+                Dock = WF.DockStyle.Top,
+                DropDownStyle = WF.ComboBoxStyle.DropDownList,
+                Margin = new WF.Padding(0, 0, 0, 8)
+            };
+            _namedFilterCombo.SelectedIndexChanged += (_, __) => UpdateNamedFilterButtons();
+            namedFiltersLayout.Controls.Add(_namedFilterCombo, 1, 0);
+
+            WF.FlowLayoutPanel namedButtons = new WF.FlowLayoutPanel
+            {
+                Dock = WF.DockStyle.Fill,
+                AutoSize = true,
+                FlowDirection = WF.FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new WF.Padding(0)
+            };
+            namedFiltersLayout.Controls.Add(namedButtons, 1, 1);
+
+            WF.Button saveAsNamedButton = CreateSmallButton("Save As...");
+            saveAsNamedButton.Click += (_, __) => SaveCurrentAsNamedFilter();
+            namedButtons.Controls.Add(saveAsNamedButton);
+
+            WF.Button loadNamedButton = CreateSmallButton("Load");
+            loadNamedButton.Click += (_, __) => LoadSelectedNamedFilter();
+            namedButtons.Controls.Add(loadNamedButton);
+
+            WF.Button deleteNamedButton = CreateSmallButton("Delete");
+            deleteNamedButton.Click += (_, __) => DeleteSelectedNamedFilter();
+            namedButtons.Controls.Add(deleteNamedButton);
+
+            WF.Label introLabel = new WF.Label
+            {
+                Text =
+                    "Chon cac doi tuong ma SDXY duoc phep dim toi. " +
+                    "Neu bo trong hoac check het thi xem nhu khong loc. " +
+                    "Sample object co the dung de loc them theo type/layer/linetype/color/block.",
+                Dock = WF.DockStyle.Fill,
+                AutoSize = true,
+                Margin = new WF.Padding(0, 0, 0, 8)
+            };
+            layout.Controls.Add(introLabel, 0, 1);
+
+            _filterPreviewLabel = new WF.Label
+            {
+                Dock = WF.DockStyle.Fill,
+                AutoSize = true,
+                BorderStyle = WF.BorderStyle.FixedSingle,
+                Padding = new WF.Padding(10),
+                Margin = new WF.Padding(0, 0, 0, 8),
+                Font = new System.Drawing.Font("Segoe UI Semibold", 9F, FontStyle.Regular, GraphicsUnit.Point)
+            };
+            layout.Controls.Add(_filterPreviewLabel, 0, 2);
+
+            WF.TabControl tabs = new WF.TabControl
+            {
+                Dock = WF.DockStyle.Fill
+            };
+            layout.Controls.Add(tabs, 0, 3);
+
+            WF.TabPage typesPage = new WF.TabPage("Types");
+            tabs.TabPages.Add(typesPage);
+            WF.TableLayoutPanel typesLayout = CreateTabLayout(typesPage);
+            WF.FlowLayoutPanel typeButtons = CreateButtonPanel();
+            typesLayout.Controls.Add(typeButtons, 0, 0);
+
+            WF.Button allTypesButton = CreateSmallButton("All");
+            allTypesButton.Click += (_, __) => SetAllChecked(_typeList, true);
+            typeButtons.Controls.Add(allTypesButton);
+
+            WF.Button noneTypesButton = CreateSmallButton("None");
+            noneTypesButton.Click += (_, __) => SetAllChecked(_typeList, false);
+            typeButtons.Controls.Add(noneTypesButton);
+
+            WF.Button commonTypesButton = CreateSmallButton("Common");
+            commonTypesButton.Click += (_, __) => ApplyCommonTypesSelection();
+            typeButtons.Controls.Add(commonTypesButton);
+
+            _typeList = new WF.CheckedListBox
+            {
+                Dock = WF.DockStyle.Fill,
+                CheckOnClick = true,
+                IntegralHeight = false
+            };
+            _typeList.ItemCheck += TypeList_ItemCheck;
+            typesLayout.Controls.Add(_typeList, 0, 1);
+
+            _typeCountLabel = new WF.Label
+            {
+                AutoSize = true,
+                Dock = WF.DockStyle.Fill,
+                Margin = new WF.Padding(0, 6, 0, 0)
+            };
+            typesLayout.Controls.Add(_typeCountLabel, 0, 2);
+
+            WF.TabPage layersPage = new WF.TabPage("Layers");
+            tabs.TabPages.Add(layersPage);
+            WF.TableLayoutPanel layersLayout = CreateTabLayout(layersPage);
+            WF.FlowLayoutPanel layerButtons = CreateButtonPanel();
+            layersLayout.Controls.Add(layerButtons, 0, 0);
+
+            WF.Button allLayersButton = CreateSmallButton("All");
+            allLayersButton.Click += (_, __) => SetAllChecked(_layerList, true);
+            layerButtons.Controls.Add(allLayersButton);
+
+            WF.Button noneLayersButton = CreateSmallButton("None");
+            noneLayersButton.Click += (_, __) => SetAllChecked(_layerList, false);
+            layerButtons.Controls.Add(noneLayersButton);
+
+            _layerList = new WF.CheckedListBox
+            {
+                Dock = WF.DockStyle.Fill,
+                CheckOnClick = true,
+                IntegralHeight = false
+            };
+            _layerList.ItemCheck += LayerList_ItemCheck;
+            layersLayout.Controls.Add(_layerList, 0, 1);
+
+            _layerCountLabel = new WF.Label
+            {
+                AutoSize = true,
+                Dock = WF.DockStyle.Fill,
+                Margin = new WF.Padding(0, 6, 0, 0)
+            };
+            layersLayout.Controls.Add(_layerCountLabel, 0, 2);
+
+            WF.TabPage samplePage = new WF.TabPage("Sample");
+            tabs.TabPages.Add(samplePage);
+            WF.TableLayoutPanel sampleLayout = new WF.TableLayoutPanel
+            {
+                Dock = WF.DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 6,
+                Padding = new WF.Padding(8)
+            };
+            sampleLayout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            sampleLayout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            sampleLayout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            sampleLayout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            sampleLayout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            sampleLayout.RowStyles.Add(new WF.RowStyle(WF.SizeType.Percent, 100f));
+            samplePage.Controls.Add(sampleLayout);
+
+            _sampleSummaryLabel = new WF.Label
+            {
+                Dock = WF.DockStyle.Fill,
+                AutoSize = true,
+                Margin = new WF.Padding(0, 0, 0, 10)
+            };
+            sampleLayout.Controls.Add(_sampleSummaryLabel, 0, 0);
+
+            WF.FlowLayoutPanel sampleButtons = CreateButtonPanel();
+            sampleLayout.Controls.Add(sampleButtons, 0, 1);
+
+            WF.Button pickSampleButton = CreateSmallButton("Pick sample...");
+            pickSampleButton.Click += (_, __) => RequestPickSample();
+            sampleButtons.Controls.Add(pickSampleButton);
+
+            WF.Button addCurrentSampleButton = CreateSmallButton("Add current");
+            addCurrentSampleButton.Click += (_, __) => AddCurrentSampleFromEditor();
+            sampleButtons.Controls.Add(addCurrentSampleButton);
+
+            WF.Button removeSampleButton = CreateSmallButton("Remove selected");
+            removeSampleButton.Click += (_, __) => RemoveSelectedSample();
+            sampleButtons.Controls.Add(removeSampleButton);
+
+            WF.Button clearSampleButton = CreateSmallButton("Clear editor");
+            clearSampleButton.Click += (_, __) =>
+            {
+                ClearSampleEditor();
+            };
+            sampleButtons.Controls.Add(clearSampleButton);
+
+            WF.GroupBox sampleListGroup = new WF.GroupBox
+            {
+                Text = "Saved sample objects (OR)",
+                Dock = WF.DockStyle.Top,
+                AutoSize = true,
+                Padding = new WF.Padding(12, 24, 12, 12),
+                Margin = new WF.Padding(0, 0, 0, 10)
+            };
+            sampleLayout.Controls.Add(sampleListGroup, 0, 2);
+
+            WF.TableLayoutPanel sampleListLayout = new WF.TableLayoutPanel
+            {
+                Dock = WF.DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 2,
+                AutoSize = true
+            };
+            sampleListLayout.RowStyles.Add(new WF.RowStyle(WF.SizeType.Percent, 100f));
+            sampleListLayout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            sampleListGroup.Controls.Add(sampleListLayout);
+
+            _sampleListBox = new WF.ListBox
+            {
+                Dock = WF.DockStyle.Fill,
+                Height = 120
+            };
+            _sampleListBox.SelectedIndexChanged += (_, __) => LoadSelectedSampleIntoEditors();
+            sampleListLayout.Controls.Add(_sampleListBox, 0, 0);
+
+            _sampleListCountLabel = new WF.Label
+            {
+                Dock = WF.DockStyle.Fill,
+                AutoSize = true,
+                Margin = new WF.Padding(0, 6, 0, 0)
+            };
+            sampleListLayout.Controls.Add(_sampleListCountLabel, 0, 1);
+
+            WF.GroupBox sampleValuesGroup = new WF.GroupBox
+            {
+                Text = "Sample values",
+                Dock = WF.DockStyle.Top,
+                AutoSize = true,
+                Padding = new WF.Padding(12, 24, 12, 12),
+                Margin = new WF.Padding(0, 0, 0, 10)
+            };
+            sampleLayout.Controls.Add(sampleValuesGroup, 0, 3);
+
+            WF.TableLayoutPanel sampleValuesLayout = new WF.TableLayoutPanel
+            {
+                Dock = WF.DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 6,
+                AutoSize = true
+            };
+            sampleValuesLayout.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
+            sampleValuesLayout.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
+            sampleValuesGroup.Controls.Add(sampleValuesLayout);
+
+            _sampleTypeValueCombo = new WF.ComboBox
+            {
+                Dock = WF.DockStyle.Top,
+                DropDownStyle = WF.ComboBoxStyle.DropDown
+            };
+            foreach (SdxyEntityTypeChoice choice in _availableTypes)
+            {
+                _sampleTypeValueCombo.Items.Add(choice);
+            }
+
+            _sampleLayerValueCombo = new WF.ComboBox
+            {
+                Dock = WF.DockStyle.Top,
+                DropDownStyle = WF.ComboBoxStyle.DropDown
+            };
+            foreach (string layerName in _availableLayers)
+            {
+                _sampleLayerValueCombo.Items.Add(layerName);
+            }
+
+            _sampleLinetypeValueTextBox = new WF.TextBox
+            {
+                Dock = WF.DockStyle.Top
+            };
+
+            _sampleColorValueTextBox = new WF.TextBox
+            {
+                Dock = WF.DockStyle.Top
+            };
+
+            _sampleBlockNameValueTextBox = new WF.TextBox
+            {
+                Dock = WF.DockStyle.Top
+            };
+
+            AddSampleValueRow(sampleValuesLayout, 0, "Type:", _sampleTypeValueCombo);
+            AddSampleValueRow(sampleValuesLayout, 1, "Layer:", _sampleLayerValueCombo);
+            AddSampleValueRow(sampleValuesLayout, 2, "Linetype:", _sampleLinetypeValueTextBox);
+            AddSampleValueRow(sampleValuesLayout, 3, "Color key:", _sampleColorValueTextBox);
+            AddSampleValueRow(sampleValuesLayout, 4, "Block name:", _sampleBlockNameValueTextBox);
+
+            WF.Label sampleHintLabel = new WF.Label
+            {
+                Text = "Pick sample de lay nhanh attribute, sau do co the sua tay va luu thanh preset. Color key ho tro: ByLayer, ByBlock, ACI:1, RGB:255,0,0.",
+                AutoSize = true,
+                Dock = WF.DockStyle.Fill,
+                Margin = new WF.Padding(0, 6, 0, 0)
+            };
+            sampleValuesLayout.Controls.Add(sampleHintLabel, 0, 5);
+            sampleValuesLayout.SetColumnSpan(sampleHintLabel, 2);
+
+            WF.GroupBox sampleGroup = new WF.GroupBox
+            {
+                Text = "Match sample attributes",
+                Dock = WF.DockStyle.Top,
+                AutoSize = true,
+                Padding = new WF.Padding(12, 24, 12, 12)
+            };
+            sampleLayout.Controls.Add(sampleGroup, 0, 4);
+
+            WF.FlowLayoutPanel sampleCheckPanel = new WF.FlowLayoutPanel
+            {
+                Dock = WF.DockStyle.Fill,
+                AutoSize = true,
+                FlowDirection = WF.FlowDirection.TopDown,
+                WrapContents = false
+            };
+            sampleGroup.Controls.Add(sampleCheckPanel);
+
+            _sampleTypeCheckBox = CreateSampleCheckBox("Match type");
+            _sampleLayerCheckBox = CreateSampleCheckBox("Match layer");
+            _sampleLinetypeCheckBox = CreateSampleCheckBox("Match linetype");
+            _sampleColorCheckBox = CreateSampleCheckBox("Match color");
+            _sampleBlockNameCheckBox = CreateSampleCheckBox("Match block name");
+            sampleCheckPanel.Controls.Add(_sampleTypeCheckBox);
+            sampleCheckPanel.Controls.Add(_sampleLayerCheckBox);
+            sampleCheckPanel.Controls.Add(_sampleLinetypeCheckBox);
+            sampleCheckPanel.Controls.Add(_sampleColorCheckBox);
+            sampleCheckPanel.Controls.Add(_sampleBlockNameCheckBox);
+
+            _sampleTypeValueCombo.TextChanged += (_, __) => RefreshSampleEditorState();
+            _sampleTypeValueCombo.SelectedIndexChanged += (_, __) => RefreshSampleEditorState();
+            _sampleLayerValueCombo.TextChanged += (_, __) => RefreshSampleEditorState();
+            _sampleLayerValueCombo.SelectedIndexChanged += (_, __) => RefreshSampleEditorState();
+            _sampleLinetypeValueTextBox.TextChanged += (_, __) => RefreshSampleEditorState();
+            _sampleColorValueTextBox.TextChanged += (_, __) => RefreshSampleEditorState();
+            _sampleBlockNameValueTextBox.TextChanged += (_, __) => RefreshSampleEditorState();
+            _sampleTypeCheckBox.CheckedChanged += (_, __) => RefreshSampleEditorState();
+            _sampleLayerCheckBox.CheckedChanged += (_, __) => RefreshSampleEditorState();
+            _sampleLinetypeCheckBox.CheckedChanged += (_, __) => RefreshSampleEditorState();
+            _sampleColorCheckBox.CheckedChanged += (_, __) => RefreshSampleEditorState();
+            _sampleBlockNameCheckBox.CheckedChanged += (_, __) => RefreshSampleEditorState();
+
+            WF.FlowLayoutPanel footer = new WF.FlowLayoutPanel
+            {
+                Dock = WF.DockStyle.Fill,
+                FlowDirection = WF.FlowDirection.RightToLeft,
+                AutoSize = true,
+                WrapContents = false,
+                Margin = new WF.Padding(0, 8, 0, 0)
+            };
+            layout.Controls.Add(footer, 0, 4);
+
+            WF.Button okButton = new WF.Button
+            {
+                Text = "OK",
+                AutoSize = true,
+                DialogResult = WF.DialogResult.OK
+            };
+            footer.Controls.Add(okButton);
+
+            WF.Button cancelButton = new WF.Button
+            {
+                Text = "Cancel",
+                AutoSize = true,
+                DialogResult = WF.DialogResult.Cancel
+            };
+            footer.Controls.Add(cancelButton);
+
+            AcceptButton = okButton;
+            CancelButton = cancelButton;
+
+            LoadNamedFilterItems();
+            LoadTypeItems();
+            LoadLayerItems();
+            LoadSampleState();
+            RefreshFilterPreview();
+        }
+
+        public SdxySettingsFormAction PendingAction { get; private set; }
+
+        public SdxyTargetSettings ResultSettings => BuildSettings();
+
+        public string SelectedNamedFilterName => _selectedNamedFilterName ?? string.Empty;
+
+        private static WF.TableLayoutPanel CreateTabLayout(WF.Control parent)
+        {
+            WF.TableLayoutPanel layout = new WF.TableLayoutPanel
+            {
+                Dock = WF.DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 3,
+                Padding = new WF.Padding(8)
+            };
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.Percent, 100f));
+            layout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+            parent.Controls.Add(layout);
+            return layout;
+        }
+
+        private static WF.FlowLayoutPanel CreateButtonPanel()
+        {
+            return new WF.FlowLayoutPanel
+            {
+                Dock = WF.DockStyle.Fill,
+                FlowDirection = WF.FlowDirection.LeftToRight,
+                AutoSize = true,
+                WrapContents = false,
+                Margin = new WF.Padding(0, 0, 0, 8)
+            };
+        }
+
+        private static WF.Button CreateSmallButton(string text)
+        {
+            return new WF.Button
+            {
+                Text = text,
+                AutoSize = true,
+                Margin = new WF.Padding(0, 0, 8, 0)
+            };
+        }
+
+        private static WF.CheckBox CreateSampleCheckBox(string text)
+        {
+            return new WF.CheckBox
+            {
+                Text = text,
+                AutoSize = true,
+                Margin = new WF.Padding(0, 0, 0, 6)
+            };
+        }
+
+        private static void AddSampleValueRow(
+            WF.TableLayoutPanel layout,
+            int rowIndex,
+            string labelText,
+            WF.Control control)
+        {
+            WF.Label label = new WF.Label
+            {
+                Text = labelText,
+                AutoSize = true,
+                Dock = WF.DockStyle.Fill,
+                Margin = new WF.Padding(0, 4, 8, 0)
+            };
+
+            control.Margin = new WF.Padding(0, 0, 0, 6);
+            layout.Controls.Add(label, 0, rowIndex);
+            layout.Controls.Add(control, 1, rowIndex);
+        }
+
+        private void LoadTypeItems()
+        {
+            _typeList.Items.Clear();
+            HashSet<string> selected =
+                _draftSettings.AllowedTypeNames.Count == 0
+                    ? new HashSet<string>(_availableTypes.Select(item => item.TypeName), StringComparer.Ordinal)
+                    : new HashSet<string>(_draftSettings.AllowedTypeNames, StringComparer.Ordinal);
+
+            foreach (SdxyEntityTypeChoice choice in _availableTypes)
+            {
+                int index = _typeList.Items.Add(choice);
+                _typeList.SetItemChecked(index, selected.Contains(choice.TypeName));
+            }
+
+            UpdateTypeCountLabel();
+        }
+
+        private void LoadLayerItems()
+        {
+            _layerList.Items.Clear();
+            HashSet<string> selected =
+                _draftSettings.AllowedLayers.Count == 0
+                    ? new HashSet<string>(_availableLayers, StringComparer.OrdinalIgnoreCase)
+                    : new HashSet<string>(_draftSettings.AllowedLayers, StringComparer.OrdinalIgnoreCase);
+
+            foreach (string layerName in _availableLayers)
+            {
+                int index = _layerList.Items.Add(layerName);
+                _layerList.SetItemChecked(index, selected.Contains(layerName));
+            }
+
+            UpdateLayerCountLabel();
+        }
+
+        private void ApplyCommonTypesSelection()
+        {
+            for (int i = 0; i < _typeList.Items.Count; i++)
+            {
+                bool isCommon =
+                    _typeList.Items[i] is SdxyEntityTypeChoice choice &&
+                    choice.IsCommon;
+                _typeList.SetItemChecked(i, isCommon);
+            }
+
+            UpdateTypeCountLabel();
+        }
+
+        private void SetAllChecked(WF.CheckedListBox list, bool isChecked)
+        {
+            for (int i = 0; i < list.Items.Count; i++)
+            {
+                list.SetItemChecked(i, isChecked);
+            }
+
+            UpdateTypeCountLabel();
+            UpdateLayerCountLabel();
+        }
+
+        private void UpdateTypeCountLabel()
+        {
+            _typeCountLabel.Text =
+                $"Dang chon {_typeList.CheckedItems.Count}/{_typeList.Items.Count} type.";
+        }
+
+        private void UpdateLayerCountLabel()
+        {
+            _layerCountLabel.Text =
+                $"Dang chon {_layerList.CheckedItems.Count}/{_layerList.Items.Count} layer.";
+        }
+
+        private void TypeList_ItemCheck(object sender, WF.ItemCheckEventArgs e)
+        {
+            UpdateCheckedCountLabel(_typeList, _typeCountLabel, "type", e);
+            QueueRefreshFilterPreview();
+        }
+
+        private void LayerList_ItemCheck(object sender, WF.ItemCheckEventArgs e)
+        {
+            UpdateCheckedCountLabel(_layerList, _layerCountLabel, "layer", e);
+            QueueRefreshFilterPreview();
+        }
+
+        private static void UpdateCheckedCountLabel(
+            WF.CheckedListBox list,
+            WF.Label label,
+            string noun,
+            WF.ItemCheckEventArgs e)
+        {
+            if (list == null || label == null)
+            {
+                return;
+            }
+
+            int checkedCount = list.CheckedItems.Count;
+            if (e != null)
+            {
+                if (e.CurrentValue != WF.CheckState.Checked &&
+                    e.NewValue == WF.CheckState.Checked)
+                {
+                    checkedCount++;
+                }
+                else if (e.CurrentValue == WF.CheckState.Checked &&
+                    e.NewValue != WF.CheckState.Checked)
+                {
+                    checkedCount--;
+                }
+            }
+
+            label.Text = $"Dang chon {checkedCount}/{list.Items.Count} {noun}.";
+        }
+
+        private void LoadSampleState()
+        {
+            LoadSampleListItems();
+            SdxySampleDescriptor sample = GetSelectedOrCurrentSample();
+
+            _suppressSampleEditorEvents = true;
+            try
+            {
+                SetSampleTypeEditorValue(sample);
+                _sampleLayerValueCombo.Text = sample?.LayerName ?? string.Empty;
+                _sampleLinetypeValueTextBox.Text = sample?.LinetypeName ?? string.Empty;
+                _sampleColorValueTextBox.Text = sample?.ColorKey ?? string.Empty;
+                _sampleBlockNameValueTextBox.Text = sample?.BlockName ?? string.Empty;
+            }
+            finally
+            {
+                _suppressSampleEditorEvents = false;
+            }
+
+            _sampleTypeCheckBox.Checked = _draftSettings.UseSampleType;
+            _sampleLayerCheckBox.Checked = _draftSettings.UseSampleLayer;
+            _sampleLinetypeCheckBox.Checked = _draftSettings.UseSampleLinetype;
+            _sampleColorCheckBox.Checked = _draftSettings.UseSampleColor;
+            _sampleBlockNameCheckBox.Checked = _draftSettings.UseSampleBlockName;
+            RefreshSampleEditorState();
+        }
+
+        private void LoadNamedFilterItems()
+        {
+            _namedFilterCombo.Items.Clear();
+            foreach (string name in _namedFilters.Keys.OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+            {
+                _namedFilterCombo.Items.Add(name);
+            }
+
+            if (!string.IsNullOrWhiteSpace(_selectedNamedFilterName) &&
+                _namedFilters.ContainsKey(_selectedNamedFilterName))
+            {
+                _namedFilterCombo.SelectedItem = _selectedNamedFilterName;
+            }
+            else if (_namedFilterCombo.Items.Count > 0)
+            {
+                _namedFilterCombo.SelectedIndex = 0;
+            }
+
+            UpdateNamedFilterButtons();
+        }
+
+        private void UpdateNamedFilterButtons()
+        {
+            if (_namedFilterCombo.SelectedItem is string selectedName &&
+                !string.IsNullOrWhiteSpace(selectedName))
+            {
+                _selectedNamedFilterName = selectedName;
+            }
+        }
+
+        private void SaveCurrentAsNamedFilter()
+        {
+            string inputName = PaletteUiHelpers.ShowTextPrompt(
+                "SDXY Named Filter",
+                "Nhap ten filter de luu:");
+            string filterName = NormalizeNamedFilterName(inputName);
+            if (string.IsNullOrWhiteSpace(filterName))
+            {
+                return;
+            }
+
+            if (_namedFilters.ContainsKey(filterName))
+            {
+                WF.DialogResult overwriteResult = WF.MessageBox.Show(
+                    $"Filter '{filterName}' da ton tai. Ghi de?",
+                    "SDXY Named Filter",
+                    WF.MessageBoxButtons.YesNo,
+                    WF.MessageBoxIcon.Question);
+                if (overwriteResult != WF.DialogResult.Yes)
+                {
+                    return;
+                }
+            }
+
+            _namedFilters[filterName] = BuildSettings();
+            _selectedNamedFilterName = filterName;
+            SdxyNamedFilterStore.SaveAll(_namedFilters);
+            LoadNamedFilterItems();
+            _namedFilterCombo.SelectedItem = filterName;
+        }
+
+        private void LoadSelectedNamedFilter()
+        {
+            if (!(_namedFilterCombo.SelectedItem is string filterName) ||
+                string.IsNullOrWhiteSpace(filterName) ||
+                !_namedFilters.TryGetValue(filterName, out SdxyTargetSettings settings))
+            {
+                return;
+            }
+
+            _draftSettings = settings.Clone();
+            _selectedNamedFilterName = filterName;
+            _selectedSampleIndex = _draftSettings.SampleDescriptors.Count > 0 ? 0 : -1;
+            LoadTypeItems();
+            LoadLayerItems();
+            LoadSampleState();
+            RefreshFilterPreview();
+        }
+
+        private void DeleteSelectedNamedFilter()
+        {
+            if (!(_namedFilterCombo.SelectedItem is string filterName) ||
+                string.IsNullOrWhiteSpace(filterName))
+            {
+                return;
+            }
+
+            WF.DialogResult deleteResult = WF.MessageBox.Show(
+                $"Xoa filter '{filterName}'?",
+                "SDXY Named Filter",
+                WF.MessageBoxButtons.YesNo,
+                WF.MessageBoxIcon.Question);
+            if (deleteResult != WF.DialogResult.Yes)
+            {
+                return;
+            }
+
+            _namedFilters.Remove(filterName);
+            if (string.Equals(_selectedNamedFilterName, filterName, StringComparison.OrdinalIgnoreCase))
+            {
+                _selectedNamedFilterName = string.Empty;
+            }
+
+            SdxyNamedFilterStore.SaveAll(_namedFilters);
+            LoadNamedFilterItems();
+        }
+
+        private static string NormalizeNamedFilterName(string name)
+        {
+            string normalized = (name ?? string.Empty).Trim();
+            normalized = normalized.Replace("\t", " ").Replace("\r", " ").Replace("\n", " ");
+            while (normalized.Contains("  "))
+            {
+                normalized = normalized.Replace("  ", " ");
+            }
+
+            return normalized;
+        }
+
+        private void RequestPickSample()
+        {
+            _draftSettings = BuildSettings();
+            PendingAction = SdxySettingsFormAction.PickSample;
+            Close();
+        }
+
+        private SdxyTargetSettings BuildSettings()
+        {
+            SdxyTargetSettings settings = new SdxyTargetSettings
+            {
+                UseSampleType = _sampleTypeCheckBox.Checked,
+                UseSampleLayer = _sampleLayerCheckBox.Checked,
+                UseSampleLinetype = _sampleLinetypeCheckBox.Checked,
+                UseSampleColor = _sampleColorCheckBox.Checked,
+                UseSampleBlockName = _sampleBlockNameCheckBox.Checked
+            };
+
+            HashSet<string> selectedTypes = new HashSet<string>(StringComparer.Ordinal);
+            foreach (object item in _typeList.CheckedItems)
+            {
+                if (item is SdxyEntityTypeChoice choice &&
+                    !string.IsNullOrWhiteSpace(choice.TypeName))
+                {
+                    selectedTypes.Add(choice.TypeName);
+                }
+            }
+
+            if (selectedTypes.Count > 0 && selectedTypes.Count < _availableTypes.Count)
+            {
+                foreach (string typeName in selectedTypes)
+                {
+                    settings.AllowedTypeNames.Add(typeName);
+                }
+            }
+
+            HashSet<string> selectedLayers =
+                new HashSet<string>(_layerList.CheckedItems.Cast<string>(), StringComparer.OrdinalIgnoreCase);
+            if (selectedLayers.Count > 0 && selectedLayers.Count < _availableLayers.Count)
+            {
+                foreach (string layerName in selectedLayers)
+                {
+                    settings.AllowedLayers.Add(layerName);
+                }
+            }
+
+            foreach (SdxySampleDescriptor sample in BuildSampleDescriptorListFromUi())
+            {
+                settings.SampleDescriptors.Add(sample);
+            }
+
+            if (settings.SampleDescriptors.Count == 0)
+            {
+                settings.UseSampleType = false;
+                settings.UseSampleLayer = false;
+                settings.UseSampleLinetype = false;
+                settings.UseSampleColor = false;
+                settings.UseSampleBlockName = false;
+            }
+            else
+            {
+                bool hasType = settings.SampleDescriptors.Any(sample => !string.IsNullOrWhiteSpace(sample.TypeName));
+                bool hasLayer = settings.SampleDescriptors.Any(sample => !string.IsNullOrWhiteSpace(sample.LayerName));
+                bool hasLinetype = settings.SampleDescriptors.Any(sample => !string.IsNullOrWhiteSpace(sample.LinetypeName));
+                bool hasColor = settings.SampleDescriptors.Any(sample => !string.IsNullOrWhiteSpace(sample.ColorKey));
+                bool hasBlock = settings.SampleDescriptors.Any(sample => !string.IsNullOrWhiteSpace(sample.BlockName));
+
+                if (!hasType)
+                {
+                    settings.UseSampleType = false;
+                }
+
+                if (!hasLayer)
+                {
+                    settings.UseSampleLayer = false;
+                }
+
+                if (!hasLinetype)
+                {
+                    settings.UseSampleLinetype = false;
+                }
+
+                if (!hasColor)
+                {
+                    settings.UseSampleColor = false;
+                }
+
+                if (!hasBlock)
+                {
+                    settings.UseSampleBlockName = false;
+                }
+            }
+
+            return settings;
+        }
+
+        private void QueueRefreshFilterPreview()
+        {
+            if (IsHandleCreated)
+            {
+                BeginInvoke((Action)RefreshFilterPreview);
+            }
+        }
+
+        private void RefreshFilterPreview()
+        {
+            if (_filterPreviewLabel == null)
+            {
+                return;
+            }
+
+            SdxyTargetSettings settings = BuildSettings();
+            string typeText = settings.AllowedTypeNames.Count == 0
+                ? "All types"
+                : $"{settings.AllowedTypeNames.Count} type";
+            string layerText = settings.AllowedLayers.Count == 0
+                ? "All layers"
+                : $"{settings.AllowedLayers.Count} layer";
+
+            List<string> sampleModes = GetEnabledSampleModeLabels(settings);
+            string sampleText = settings.SampleDescriptors.Count == 0
+                ? "No sample objects"
+                : $"{settings.SampleDescriptors.Count} sample object(s)" +
+                  (sampleModes.Count == 0 ? string.Empty : $" match {string.Join("+", sampleModes)}");
+
+            _filterPreviewLabel.Text =
+                "Current filter = " + typeText + " AND " + layerText + " AND " + sampleText;
+        }
+
+        private List<string> GetEnabledSampleModeLabels(SdxyTargetSettings settings)
+        {
+            List<string> modes = new List<string>();
+            if (settings.UseSampleType) modes.Add("Type");
+            if (settings.UseSampleLayer) modes.Add("Layer");
+            if (settings.UseSampleLinetype) modes.Add("Linetype");
+            if (settings.UseSampleColor) modes.Add("Color");
+            if (settings.UseSampleBlockName) modes.Add("Block");
+            return modes;
+        }
+
+        private void SetSampleTypeEditorValue(SdxySampleDescriptor sample)
+        {
+            string sampleTypeName = sample?.TypeName ?? string.Empty;
+            SdxyEntityTypeChoice matchedChoice = _availableTypes.FirstOrDefault(choice =>
+                string.Equals(choice.TypeName, sampleTypeName, StringComparison.OrdinalIgnoreCase));
+            if (matchedChoice != null)
+            {
+                _sampleTypeValueCombo.SelectedItem = matchedChoice;
+                return;
+            }
+
+            _sampleTypeValueCombo.SelectedItem = null;
+            _sampleTypeValueCombo.Text = !string.IsNullOrWhiteSpace(sample?.TypeDisplayName)
+                ? sample.TypeDisplayName
+                : sampleTypeName;
+        }
+
+        private SdxySampleDescriptor BuildSampleDescriptorFromEditors()
+        {
+            string typeName = string.Empty;
+            string typeDisplayName = string.Empty;
+
+            if (_sampleTypeValueCombo.SelectedItem is SdxyEntityTypeChoice selectedChoice)
+            {
+                typeName = selectedChoice.TypeName ?? string.Empty;
+                typeDisplayName = selectedChoice.DisplayName ?? string.Empty;
+            }
+            else
+            {
+                string sampleTypeText = (_sampleTypeValueCombo.Text ?? string.Empty).Trim();
+                if (!string.IsNullOrWhiteSpace(sampleTypeText))
+                {
+                    SdxyEntityTypeChoice matchedChoice = _availableTypes.FirstOrDefault(choice =>
+                        string.Equals(choice.DisplayName, sampleTypeText, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(choice.TypeName, sampleTypeText, StringComparison.OrdinalIgnoreCase));
+                    if (matchedChoice != null)
+                    {
+                        typeName = matchedChoice.TypeName ?? string.Empty;
+                        typeDisplayName = matchedChoice.DisplayName ?? string.Empty;
+                    }
+                    else
+                    {
+                        typeName = sampleTypeText;
+                        typeDisplayName = sampleTypeText;
+                    }
+                }
+            }
+
+            string layerName = (_sampleLayerValueCombo.Text ?? string.Empty).Trim();
+            string linetypeName = (_sampleLinetypeValueTextBox.Text ?? string.Empty).Trim();
+            string colorKey = (_sampleColorValueTextBox.Text ?? string.Empty).Trim();
+            string blockName = (_sampleBlockNameValueTextBox.Text ?? string.Empty).Trim();
+
+            if (string.IsNullOrWhiteSpace(typeName) &&
+                string.IsNullOrWhiteSpace(layerName) &&
+                string.IsNullOrWhiteSpace(linetypeName) &&
+                string.IsNullOrWhiteSpace(colorKey) &&
+                string.IsNullOrWhiteSpace(blockName))
+            {
+                return null;
+            }
+
+            string colorDisplayName = colorKey;
+            if (_draftSettings.SampleDescriptor != null &&
+                string.Equals(_draftSettings.SampleDescriptor.ColorKey, colorKey, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(_draftSettings.SampleDescriptor.ColorDisplayName))
+            {
+                colorDisplayName = _draftSettings.SampleDescriptor.ColorDisplayName;
+            }
+
+            return new SdxySampleDescriptor(
+                typeName,
+                typeDisplayName,
+                layerName,
+                linetypeName,
+                colorKey,
+                colorDisplayName,
+                blockName);
+        }
+
+        private List<SdxySampleDescriptor> BuildSampleDescriptorListFromUi()
+        {
+            List<SdxySampleDescriptor> samples = _draftSettings.SampleDescriptors
+                .Where(sample => sample != null)
+                .Select(sample => sample.Clone())
+                .ToList();
+
+            SdxySampleDescriptor currentEditorSample = BuildSampleDescriptorFromEditors();
+            if (_selectedSampleIndex >= 0 && _selectedSampleIndex < samples.Count)
+            {
+                if (currentEditorSample == null)
+                {
+                    samples.RemoveAt(_selectedSampleIndex);
+                }
+                else
+                {
+                    samples[_selectedSampleIndex] = currentEditorSample;
+                }
+            }
+            else if (currentEditorSample != null)
+            {
+                samples.Add(currentEditorSample);
+            }
+
+            return samples;
+        }
+
+        private void LoadSampleListItems()
+        {
+            List<SdxySampleDescriptor> samples = _draftSettings.SampleDescriptors
+                .Where(sample => sample != null)
+                .ToList();
+
+            _sampleListBox.Items.Clear();
+            for (int i = 0; i < samples.Count; i++)
+            {
+                string summary = samples[i].BuildSummary();
+                _sampleListBox.Items.Add($"{i + 1}. {summary}");
+            }
+
+            _sampleListCountLabel.Text = $"Dang luu {samples.Count} sample object.";
+            if (samples.Count == 0)
+            {
+                _selectedSampleIndex = -1;
+                _sampleListBox.ClearSelected();
+                return;
+            }
+
+            if (_selectedSampleIndex < 0 || _selectedSampleIndex >= samples.Count)
+            {
+                _selectedSampleIndex = samples.Count - 1;
+            }
+
+            if (_sampleListBox.Items.Count > 0)
+            {
+                _suppressSampleEditorEvents = true;
+                try
+                {
+                    _sampleListBox.SelectedIndex = _selectedSampleIndex;
+                }
+                finally
+                {
+                    _suppressSampleEditorEvents = false;
+                }
+            }
+        }
+
+        private SdxySampleDescriptor GetSelectedOrCurrentSample()
+        {
+            if (_selectedSampleIndex >= 0 &&
+                _selectedSampleIndex < _draftSettings.SampleDescriptors.Count)
+            {
+                return _draftSettings.SampleDescriptors[_selectedSampleIndex];
+            }
+
+            return null;
+        }
+
+        private void LoadSelectedSampleIntoEditors()
+        {
+            if (_suppressSampleEditorEvents)
+            {
+                return;
+            }
+
+            _selectedSampleIndex = _sampleListBox.SelectedIndex;
+            SdxySampleDescriptor sample = GetSelectedOrCurrentSample();
+
+            _suppressSampleEditorEvents = true;
+            try
+            {
+                SetSampleTypeEditorValue(sample);
+                _sampleLayerValueCombo.Text = sample?.LayerName ?? string.Empty;
+                _sampleLinetypeValueTextBox.Text = sample?.LinetypeName ?? string.Empty;
+                _sampleColorValueTextBox.Text = sample?.ColorKey ?? string.Empty;
+                _sampleBlockNameValueTextBox.Text = sample?.BlockName ?? string.Empty;
+            }
+            finally
+            {
+                _suppressSampleEditorEvents = false;
+            }
+
+            RefreshSampleEditorState();
+        }
+
+        private void AddCurrentSampleFromEditor()
+        {
+            SdxySampleDescriptor sample = BuildSampleDescriptorFromEditors();
+            if (sample == null)
+            {
+                return;
+            }
+
+            _draftSettings.SampleDescriptors.Add(sample);
+            _selectedSampleIndex = _draftSettings.SampleDescriptors.Count - 1;
+            LoadSampleListItems();
+            RefreshSampleEditorState();
+        }
+
+        private void RemoveSelectedSample()
+        {
+            if (_selectedSampleIndex < 0 || _selectedSampleIndex >= _draftSettings.SampleDescriptors.Count)
+            {
+                return;
+            }
+
+            _draftSettings.SampleDescriptors.RemoveAt(_selectedSampleIndex);
+            if (_selectedSampleIndex >= _draftSettings.SampleDescriptors.Count)
+            {
+                _selectedSampleIndex = _draftSettings.SampleDescriptors.Count - 1;
+            }
+
+            LoadSampleListItems();
+            LoadSelectedSampleIntoEditors();
+            RefreshSampleEditorState();
+        }
+
+        private void ClearSampleEditor()
+        {
+            _selectedSampleIndex = -1;
+            _suppressSampleEditorEvents = true;
+            try
+            {
+                _sampleListBox.ClearSelected();
+                _sampleTypeValueCombo.SelectedItem = null;
+                _sampleTypeValueCombo.Text = string.Empty;
+                _sampleLayerValueCombo.Text = string.Empty;
+                _sampleLinetypeValueTextBox.Text = string.Empty;
+                _sampleColorValueTextBox.Text = string.Empty;
+                _sampleBlockNameValueTextBox.Text = string.Empty;
+            }
+            finally
+            {
+                _suppressSampleEditorEvents = false;
+            }
+
+            RefreshSampleEditorState();
+        }
+
+        private void RefreshSampleEditorState()
+        {
+            if (_suppressSampleEditorEvents)
+            {
+                return;
+            }
+
+            if (_selectedSampleIndex >= 0 && _selectedSampleIndex < _draftSettings.SampleDescriptors.Count)
+            {
+                SdxySampleDescriptor selectedSample = BuildSampleDescriptorFromEditors();
+                if (selectedSample != null)
+                {
+                    _draftSettings.SampleDescriptors[_selectedSampleIndex] = selectedSample;
+                    LoadSampleListItems();
+                }
+            }
+
+            SdxySampleDescriptor sample = BuildSampleDescriptorFromEditors();
+            List<string> activeConditions = new List<string>();
+
+            if (_sampleTypeCheckBox.Checked && !string.IsNullOrWhiteSpace(sample?.TypeName))
+            {
+                activeConditions.Add("Type");
+            }
+
+            if (_sampleLayerCheckBox.Checked && !string.IsNullOrWhiteSpace(sample?.LayerName))
+            {
+                activeConditions.Add("Layer");
+            }
+
+            if (_sampleLinetypeCheckBox.Checked && !string.IsNullOrWhiteSpace(sample?.LinetypeName))
+            {
+                activeConditions.Add("Linetype");
+            }
+
+            if (_sampleColorCheckBox.Checked && !string.IsNullOrWhiteSpace(sample?.ColorKey))
+            {
+                activeConditions.Add("Color");
+            }
+
+            if (_sampleBlockNameCheckBox.Checked && !string.IsNullOrWhiteSpace(sample?.BlockName))
+            {
+                activeConditions.Add("Block");
+            }
+
+            _sampleSummaryLabel.Text = sample == null
+                ? "Chua co sample/filter value. Bam Pick sample de lay nhanh, hoac nhap tay cac attribute ben duoi."
+                : sample.BuildSummary() + Environment.NewLine +
+                  "Dang match: " +
+                  (activeConditions.Count == 0 ? "chua chon attribute nao." : string.Join(" + ", activeConditions));
+
+            UpdateSampleCheckBoxState(_sampleTypeCheckBox, !string.IsNullOrWhiteSpace(sample?.TypeName));
+            UpdateSampleCheckBoxState(_sampleLayerCheckBox, !string.IsNullOrWhiteSpace(sample?.LayerName));
+            UpdateSampleCheckBoxState(_sampleLinetypeCheckBox, !string.IsNullOrWhiteSpace(sample?.LinetypeName));
+            UpdateSampleCheckBoxState(_sampleColorCheckBox, !string.IsNullOrWhiteSpace(sample?.ColorKey));
+            UpdateSampleCheckBoxState(_sampleBlockNameCheckBox, !string.IsNullOrWhiteSpace(sample?.BlockName));
+            RefreshFilterPreview();
+        }
+
+        private static void UpdateSampleCheckBoxState(WF.CheckBox checkBox, bool isEnabled)
+        {
+            if (checkBox == null)
+            {
+                return;
+            }
+
+            checkBox.Enabled = isEnabled;
+            if (!isEnabled)
+            {
+                checkBox.Checked = false;
+            }
         }
     }
 
@@ -7981,7 +10231,8 @@ namespace AUTOCAD_COMMANDS
         private const double ComparisonTolerance = 1e-6;
 
         // SS:
-        // - Hỏi L trước.
+        // - Dùng ngay L đã lưu từ lần trước.
+        // - Nếu cần đổi L thì gõ keyword Length ngay tại prompt chọn điểm đầu.
         // - Quét một hoặc nhiều crossing window.
         // - Chọn điểm đầu + điểm hướng để quyết định SX+/SX-/SY+/SY-.
         [CommandMethod("SS")]
@@ -7996,12 +10247,12 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
-            if (!TryPromptStretchLength(ed, out double length))
-            {
-                return;
-            }
-
-            RunSmartStretchLoopWithLength(ed, db, length, "SS");
+            RunSmartStretchLoopWithLength(
+                ed,
+                db,
+                SmartStretchSettingsStore.LoadLength(),
+                "SS",
+                allowInteractiveLengthOverride: true);
         }
 
         // SSD:
@@ -8068,9 +10319,10 @@ namespace AUTOCAD_COMMANDS
         private static void RunSmartStretchLoopWithLength(
             Editor ed,
             Database db,
-            double length,
+            double initialLength,
             string commandLabel,
-            int passCount = 1)
+            int passCount = 1,
+            bool allowInteractiveLengthOverride = false)
         {
             // Core dùng chung cho SS/SSD/SSD2.
             // Sau mỗi lượt stretch sẽ quay lại chọn tiếp.
@@ -8078,6 +10330,7 @@ namespace AUTOCAD_COMMANDS
             // Tắt OSMODE tạm thời để điểm click không bị OSNAP kéo lệch.
             // Khi kết thúc/cancel luôn khôi phục OSMODE cũ.
             object previousOsMode = null;
+            double length = initialLength;
 
             try
             {
@@ -8101,10 +10354,11 @@ namespace AUTOCAD_COMMANDS
                             SmartStretchLoopResult result = RunSingleSmartStretchWithLength(
                                 ed,
                                 db,
-                                length,
+                                ref length,
                                 passCount > 1
                                     ? $"{commandLabel} [{pass}/{passCount}]"
-                                    : commandLabel);
+                                    : commandLabel,
+                                allowInteractiveLengthOverride);
 
                             if (result == SmartStretchLoopResult.Completed)
                             {
@@ -8131,11 +10385,12 @@ namespace AUTOCAD_COMMANDS
         private static SmartStretchLoopResult RunSingleSmartStretchWithLength(
             Editor ed,
             Database db,
-            double length,
-            string commandLabel)
+            ref double length,
+            string commandLabel,
+            bool allowInteractiveLengthOverride)
         {
             SmartStretchSelectionInput selectionInput =
-                GetSmartStretchSelectionInput(ed, out bool stopRequested);
+                GetSmartStretchSelectionInput(ed, ref length, out bool stopRequested);
             if (stopRequested)
             {
                 return SmartStretchLoopResult.StopRequested;
@@ -8148,28 +10403,24 @@ namespace AUTOCAD_COMMANDS
 
             ShowSmartStretchSelection(ed, selectionInput.SelectedObjectIds);
 
-            PromptPointOptions startPointOptions =
-                new PromptPointOptions("\nChọn điểm đầu hoặc Space/Enter để kết thúc: ");
-            startPointOptions.AllowNone = true;
-
-            PromptPointResult startResult = ed.GetPoint(startPointOptions);
-            if (startResult.Status == PromptStatus.None ||
-                startResult.Status == PromptStatus.Cancel)
+            if (!TryPromptSmartStretchStartPoint(
+                ed,
+                ref length,
+                allowInteractiveLengthOverride,
+                commandLabel,
+                out Point3d startPoint,
+                out bool stopAtStartPointPrompt))
             {
                 ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
-                return SmartStretchLoopResult.StopRequested;
-            }
-
-            if (startResult.Status != PromptStatus.OK)
-            {
-                ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
-                return SmartStretchLoopResult.Retry;
+                return stopAtStartPointPrompt
+                    ? SmartStretchLoopResult.StopRequested
+                    : SmartStretchLoopResult.Retry;
             }
 
             PromptResult directionResult = GetDirectionWithPreview(
                 ed,
                 selectionInput,
-                startResult.Value,
+                startPoint,
                 length,
                 out SmartStretchDirection direction,
                 out Point3d secondPoint);
@@ -8193,23 +10444,79 @@ namespace AUTOCAD_COMMANDS
             }
 
             ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
-            ExecuteNativeStretch(ed, selectionInput, startResult.Value, secondPoint);
+            ExecuteNativeStretch(ed, selectionInput, startPoint, secondPoint);
 
             ed.WriteMessage(
-                $"\n{commandLabel}: đã gọi STRETCH gốc theo {GetDirectionLabel(direction)} với L = {length.ToString("0.###", CultureInfo.InvariantCulture)}.");
+                $"\n{commandLabel}: đã gọi STRETCH gốc theo {GetDirectionLabel(direction)} với L = {FormatLength(length)}.");
             return SmartStretchLoopResult.Completed;
         }
 
-        private static bool TryPromptStretchLength(Editor ed, out double length)
+        private static bool TryPromptSmartStretchStartPoint(
+            Editor ed,
+            ref double length,
+            bool allowInteractiveLengthOverride,
+            string commandLabel,
+            out Point3d startPoint,
+            out bool stopRequested)
         {
-            double savedLength = SmartStretchSettingsStore.LoadLength();
+            startPoint = Point3d.Origin;
+            stopRequested = false;
+
+            while (true)
+            {
+                string message = allowInteractiveLengthOverride
+                    ? $"\nChọn điểm đầu hoặc [Length] <{FormatLength(length)}> để đổi L, Space/Enter để kết thúc: "
+                    : "\nChọn điểm đầu hoặc Space/Enter để kết thúc: ";
+
+                PromptPointOptions startPointOptions = new PromptPointOptions(message);
+                startPointOptions.AllowNone = true;
+
+                if (allowInteractiveLengthOverride)
+                {
+                    startPointOptions.AppendKeywordsToMessage = false;
+                    startPointOptions.Keywords.Add("Length");
+                }
+
+                PromptPointResult startResult = ed.GetPoint(startPointOptions);
+                if (startResult.Status == PromptStatus.None ||
+                    startResult.Status == PromptStatus.Cancel)
+                {
+                    stopRequested = true;
+                    return false;
+                }
+
+                if (startResult.Status == PromptStatus.Keyword &&
+                    string.Equals(startResult.StringResult, "Length", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (TryPromptStretchLength(ed, length, out double updatedLength))
+                    {
+                        length = updatedLength;
+                        SmartStretchSettingsStore.SaveLength(length);
+                        ed.WriteMessage($"\n{commandLabel}: cập nhật L = {FormatLength(length)}.");
+                    }
+
+                    continue;
+                }
+
+                if (startResult.Status != PromptStatus.OK)
+                {
+                    return false;
+                }
+
+                startPoint = startResult.Value;
+                return true;
+            }
+        }
+
+        private static bool TryPromptStretchLength(Editor ed, double defaultLength, out double length)
+        {
             PromptDoubleOptions lengthOptions =
                 new PromptDoubleOptions(
-                    $"\nNhập L cho smart stretch <{savedLength.ToString("0.###", CultureInfo.InvariantCulture)}>:");
+                    $"\nNhập L cho smart stretch <{defaultLength.ToString("0.###", CultureInfo.InvariantCulture)}>:");
             lengthOptions.AllowNegative = false;
             lengthOptions.AllowZero = false;
             lengthOptions.AllowNone = true;
-            lengthOptions.DefaultValue = savedLength;
+            lengthOptions.DefaultValue = defaultLength;
             lengthOptions.UseDefaultValue = true;
 
             PromptDoubleResult lengthResult = ed.GetDouble(lengthOptions);
@@ -8220,7 +10527,7 @@ namespace AUTOCAD_COMMANDS
             }
 
             length = lengthResult.Status == PromptStatus.None
-                ? savedLength
+                ? defaultLength
                 : lengthResult.Value;
 
             if (length <= ComparisonTolerance)
@@ -8230,6 +10537,11 @@ namespace AUTOCAD_COMMANDS
             }
 
             return true;
+        }
+
+        private static string FormatLength(double value)
+        {
+            return value.ToString("0.###", CultureInfo.InvariantCulture);
         }
 
         private static bool TryPromptStretchLengthFromDimensions(
@@ -8326,6 +10638,7 @@ namespace AUTOCAD_COMMANDS
 
         private static SmartStretchSelectionInput GetSmartStretchSelectionInput(
             Editor ed,
+            ref double length,
             out bool stopRequested)
         {
             // Cho phép quét nhiều crossing window.
@@ -8351,11 +10664,27 @@ namespace AUTOCAD_COMMANDS
                     PromptPointOptions firstCornerOptions =
                         new PromptPointOptions(
                             windows.Count == 0
-                                ? "\nChọn góc đầu crossing window hoặc Space/Enter để thoát: "
-                                : "\nChọn góc đầu crossing window tiếp theo hoặc Space/Enter để stretch: ");
+                                ? $"\nChọn góc đầu crossing window hoặc [Length] <{FormatLength(length)}> để đổi L, Space/Enter để thoát: "
+                                : $"\nChọn góc đầu crossing window tiếp theo hoặc [Length] <{FormatLength(length)}> để đổi L, Space/Enter để stretch: ");
                     firstCornerOptions.AllowNone = true;
+                    firstCornerOptions.AppendKeywordsToMessage = false;
+                    firstCornerOptions.Keywords.Add("Length");
 
                     PromptPointResult firstCornerResult = ed.GetPoint(firstCornerOptions);
+                    if (firstCornerResult.Status == PromptStatus.Keyword &&
+                        string.Equals(firstCornerResult.StringResult, "Length", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (TryPromptStretchLength(ed, length, out double updatedLength))
+                        {
+                            length = updatedLength;
+                            SmartStretchSettingsStore.SaveLength(length);
+                            ed.WriteMessage(
+                                $"\nSS: cập nhật L hiện tại = {FormatLength(length)}.");
+                        }
+
+                        continue;
+                    }
+
                     if (firstCornerResult.Status == PromptStatus.None)
                     {
                         if (windows.Count == 0)
@@ -10722,6 +13051,425 @@ namespace AUTOCAD_COMMANDS
                 LengthFilePath,
                 value.ToString("0.###", CultureInfo.InvariantCulture),
                 Encoding.UTF8);
+        }
+    }
+
+    internal static class SdxyTargetSettingsStore
+    {
+        private static readonly string FilePath =
+            Path.Combine(
+                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
+                "sdxy_target_settings.tsv");
+
+        public static SdxyTargetSettings Load()
+        {
+            if (!File.Exists(FilePath))
+            {
+                return new SdxyTargetSettings();
+            }
+
+            try
+            {
+                return ParseLines(File.ReadAllLines(FilePath, Encoding.UTF8));
+            }
+            catch
+            {
+                return new SdxyTargetSettings();
+            }
+        }
+
+        public static void Save(SdxyTargetSettings settings)
+        {
+            settings = settings ?? new SdxyTargetSettings();
+            File.WriteAllLines(FilePath, BuildLines(settings), Encoding.UTF8);
+        }
+
+        internal static SdxyTargetSettings ParseLines(IEnumerable<string> rawLines)
+        {
+            SdxyTargetSettings settings = new SdxyTargetSettings();
+            string sampleTypeName = string.Empty;
+            string sampleTypeDisplay = string.Empty;
+            string sampleLayer = string.Empty;
+            string sampleLinetype = string.Empty;
+            string sampleColorKey = string.Empty;
+            string sampleColorDisplay = string.Empty;
+            string sampleBlock = string.Empty;
+            Dictionary<int, Dictionary<string, string>> indexedSamples =
+                new Dictionary<int, Dictionary<string, string>>();
+
+            foreach (string rawLine in rawLines ?? Enumerable.Empty<string>())
+            {
+                if (string.IsNullOrWhiteSpace(rawLine))
+                {
+                    continue;
+                }
+
+                string[] parts = rawLine.Split(new[] { '\t' }, 2);
+                string key = parts[0].Trim();
+                string value = parts.Length > 1 ? parts[1] : string.Empty;
+
+                if (TryParseIndexedSampleKey(key, out int sampleIndex, out string sampleField))
+                {
+                    if (!indexedSamples.TryGetValue(sampleIndex, out Dictionary<string, string> sampleValues))
+                    {
+                        sampleValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                        indexedSamples[sampleIndex] = sampleValues;
+                    }
+
+                    sampleValues[sampleField] = value.Trim();
+                    continue;
+                }
+
+                switch (key)
+                {
+                    case "Type":
+                        if (!string.IsNullOrWhiteSpace(value))
+                        {
+                            settings.AllowedTypeNames.Add(value.Trim());
+                        }
+                        break;
+                    case "Layer":
+                        if (!string.IsNullOrWhiteSpace(value))
+                        {
+                            settings.AllowedLayers.Add(value.Trim());
+                        }
+                        break;
+                    case "UseSampleType":
+                        settings.UseSampleType = ParseBoolean(value);
+                        break;
+                    case "UseSampleLayer":
+                        settings.UseSampleLayer = ParseBoolean(value);
+                        break;
+                    case "UseSampleLinetype":
+                        settings.UseSampleLinetype = ParseBoolean(value);
+                        break;
+                    case "UseSampleColor":
+                        settings.UseSampleColor = ParseBoolean(value);
+                        break;
+                    case "UseSampleBlockName":
+                        settings.UseSampleBlockName = ParseBoolean(value);
+                        break;
+                    case "SampleType":
+                        sampleTypeName = value.Trim();
+                        break;
+                    case "SampleTypeDisplay":
+                        sampleTypeDisplay = value.Trim();
+                        break;
+                    case "SampleLayer":
+                        sampleLayer = value.Trim();
+                        break;
+                    case "SampleLinetype":
+                        sampleLinetype = value.Trim();
+                        break;
+                    case "SampleColorKey":
+                        sampleColorKey = value.Trim();
+                        break;
+                    case "SampleColorDisplay":
+                        sampleColorDisplay = value.Trim();
+                        break;
+                    case "SampleBlock":
+                        sampleBlock = value.Trim();
+                        break;
+                }
+            }
+
+            foreach (KeyValuePair<int, Dictionary<string, string>> pair in indexedSamples
+                .OrderBy(item => item.Key))
+            {
+                SdxySampleDescriptor indexedSample = BuildSampleDescriptor(pair.Value);
+                if (indexedSample != null)
+                {
+                    settings.SampleDescriptors.Add(indexedSample);
+                }
+            }
+
+            if (settings.SampleDescriptors.Count == 0 &&
+                (!string.IsNullOrWhiteSpace(sampleTypeName) ||
+                 !string.IsNullOrWhiteSpace(sampleLayer) ||
+                 !string.IsNullOrWhiteSpace(sampleLinetype) ||
+                 !string.IsNullOrWhiteSpace(sampleColorKey) ||
+                 !string.IsNullOrWhiteSpace(sampleBlock)))
+            {
+                settings.SampleDescriptors.Add(new SdxySampleDescriptor(
+                    sampleTypeName,
+                    sampleTypeDisplay,
+                    sampleLayer,
+                    sampleLinetype,
+                    sampleColorKey,
+                    sampleColorDisplay,
+                    sampleBlock));
+            }
+
+            if (settings.SampleDescriptors.Count == 0)
+            {
+                settings.UseSampleType = false;
+                settings.UseSampleLayer = false;
+                settings.UseSampleLinetype = false;
+                settings.UseSampleColor = false;
+                settings.UseSampleBlockName = false;
+            }
+
+            return settings;
+        }
+
+        internal static List<string> BuildLines(SdxyTargetSettings settings)
+        {
+            settings = settings ?? new SdxyTargetSettings();
+
+            List<string> lines = new List<string>();
+            foreach (string typeName in settings.AllowedTypeNames.OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+            {
+                lines.Add("Type\t" + typeName);
+            }
+
+            foreach (string layerName in settings.AllowedLayers.OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+            {
+                lines.Add("Layer\t" + layerName);
+            }
+
+            lines.Add("UseSampleType\t" + (settings.UseSampleType ? "1" : "0"));
+            lines.Add("UseSampleLayer\t" + (settings.UseSampleLayer ? "1" : "0"));
+            lines.Add("UseSampleLinetype\t" + (settings.UseSampleLinetype ? "1" : "0"));
+            lines.Add("UseSampleColor\t" + (settings.UseSampleColor ? "1" : "0"));
+            lines.Add("UseSampleBlockName\t" + (settings.UseSampleBlockName ? "1" : "0"));
+
+            List<SdxySampleDescriptor> samples = settings.SampleDescriptors
+                .Where(sample => sample != null)
+                .ToList();
+            for (int i = 0; i < samples.Count; i++)
+            {
+                SdxySampleDescriptor sample = samples[i];
+                lines.Add("Sample" + i + "Type\t" + (sample.TypeName ?? string.Empty));
+                lines.Add("Sample" + i + "TypeDisplay\t" + (sample.TypeDisplayName ?? string.Empty));
+                lines.Add("Sample" + i + "Layer\t" + (sample.LayerName ?? string.Empty));
+                lines.Add("Sample" + i + "Linetype\t" + (sample.LinetypeName ?? string.Empty));
+                lines.Add("Sample" + i + "ColorKey\t" + (sample.ColorKey ?? string.Empty));
+                lines.Add("Sample" + i + "ColorDisplay\t" + (sample.ColorDisplayName ?? string.Empty));
+                lines.Add("Sample" + i + "Block\t" + (sample.BlockName ?? string.Empty));
+            }
+
+            return lines;
+        }
+
+        private static SdxySampleDescriptor BuildSampleDescriptor(IReadOnlyDictionary<string, string> values)
+        {
+            if (values == null)
+            {
+                return null;
+            }
+
+            values.TryGetValue("Type", out string typeName);
+            values.TryGetValue("TypeDisplay", out string typeDisplay);
+            values.TryGetValue("Layer", out string layerName);
+            values.TryGetValue("Linetype", out string linetypeName);
+            values.TryGetValue("ColorKey", out string colorKey);
+            values.TryGetValue("ColorDisplay", out string colorDisplay);
+            values.TryGetValue("Block", out string blockName);
+
+            if (string.IsNullOrWhiteSpace(typeName) &&
+                string.IsNullOrWhiteSpace(layerName) &&
+                string.IsNullOrWhiteSpace(linetypeName) &&
+                string.IsNullOrWhiteSpace(colorKey) &&
+                string.IsNullOrWhiteSpace(blockName))
+            {
+                return null;
+            }
+
+            return new SdxySampleDescriptor(
+                typeName,
+                typeDisplay,
+                layerName,
+                linetypeName,
+                colorKey,
+                colorDisplay,
+                blockName);
+        }
+
+        private static bool TryParseIndexedSampleKey(string key, out int sampleIndex, out string sampleField)
+        {
+            sampleIndex = -1;
+            sampleField = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(key) ||
+                !key.StartsWith("Sample", StringComparison.Ordinal) ||
+                key.Length <= "Sample".Length ||
+                !char.IsDigit(key["Sample".Length]))
+            {
+                return false;
+            }
+
+            int index = "Sample".Length;
+            while (index < key.Length && char.IsDigit(key[index]))
+            {
+                index++;
+            }
+
+            if (index <= "Sample".Length || index >= key.Length)
+            {
+                return false;
+            }
+
+            if (!int.TryParse(key.Substring("Sample".Length, index - "Sample".Length), out sampleIndex))
+            {
+                sampleIndex = -1;
+                return false;
+            }
+
+            sampleField = key.Substring(index);
+            return !string.IsNullOrWhiteSpace(sampleField);
+        }
+
+        private static bool ParseBoolean(string value)
+        {
+            string normalized = (value ?? string.Empty).Trim();
+            return string.Equals(normalized, "1", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "true", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "yes", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    internal static class SdxyNamedFilterStore
+    {
+        private static readonly string FilePath =
+            Path.Combine(
+                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
+                "sdxy_named_filters.tsv");
+
+        private static readonly string CurrentNameFilePath =
+            Path.Combine(
+                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
+                "sdxy_named_filter_current.txt");
+
+        public static Dictionary<string, SdxyTargetSettings> LoadAll()
+        {
+            Dictionary<string, SdxyTargetSettings> result =
+                new Dictionary<string, SdxyTargetSettings>(StringComparer.OrdinalIgnoreCase);
+            if (!File.Exists(FilePath))
+            {
+                return result;
+            }
+
+            try
+            {
+                string currentName = null;
+                List<string> blockLines = new List<string>();
+                foreach (string rawLine in File.ReadAllLines(FilePath, Encoding.UTF8))
+                {
+                    if (rawLine.StartsWith("[Filter]\t", StringComparison.Ordinal))
+                    {
+                        SaveCurrentBlock(result, currentName, blockLines);
+                        currentName = NormalizeName(rawLine.Substring("[Filter]\t".Length));
+                        blockLines = new List<string>();
+                        continue;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(rawLine))
+                    {
+                        SaveCurrentBlock(result, currentName, blockLines);
+                        currentName = null;
+                        blockLines = new List<string>();
+                        continue;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(currentName))
+                    {
+                        blockLines.Add(rawLine);
+                    }
+                }
+
+                SaveCurrentBlock(result, currentName, blockLines);
+            }
+            catch
+            {
+                return new Dictionary<string, SdxyTargetSettings>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            return result;
+        }
+
+        public static void SaveAll(IReadOnlyDictionary<string, SdxyTargetSettings> namedFilters)
+        {
+            List<string> lines = new List<string>();
+            foreach (KeyValuePair<string, SdxyTargetSettings> pair in (namedFilters ?? new Dictionary<string, SdxyTargetSettings>())
+                .Where(item => !string.IsNullOrWhiteSpace(item.Key))
+                .OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                string name = NormalizeName(pair.Key);
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
+
+                lines.Add("[Filter]\t" + name);
+                lines.AddRange(SdxyTargetSettingsStore.BuildLines(pair.Value));
+                lines.Add(string.Empty);
+            }
+
+            File.WriteAllLines(FilePath, lines, Encoding.UTF8);
+        }
+
+        public static string LoadCurrentName()
+        {
+            try
+            {
+                if (!File.Exists(CurrentNameFilePath))
+                {
+                    return string.Empty;
+                }
+
+                return NormalizeName(File.ReadAllText(CurrentNameFilePath, Encoding.UTF8));
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        public static void SaveCurrentName(string name)
+        {
+            try
+            {
+                string normalized = NormalizeName(name);
+                if (string.IsNullOrWhiteSpace(normalized))
+                {
+                    if (File.Exists(CurrentNameFilePath))
+                    {
+                        File.Delete(CurrentNameFilePath);
+                    }
+
+                    return;
+                }
+
+                File.WriteAllText(CurrentNameFilePath, normalized, Encoding.UTF8);
+            }
+            catch
+            {
+            }
+        }
+
+        private static void SaveCurrentBlock(
+            Dictionary<string, SdxyTargetSettings> result,
+            string currentName,
+            List<string> blockLines)
+        {
+            if (string.IsNullOrWhiteSpace(currentName))
+            {
+                return;
+            }
+
+            result[currentName] = SdxyTargetSettingsStore.ParseLines(blockLines ?? Enumerable.Empty<string>());
+        }
+
+        private static string NormalizeName(string name)
+        {
+            string normalized = (name ?? string.Empty).Trim();
+            normalized = normalized.Replace("\t", " ").Replace("\r", " ").Replace("\n", " ");
+            while (normalized.Contains("  "))
+            {
+                normalized = normalized.Replace("  ", " ");
+            }
+
+            return normalized;
         }
     }
 
