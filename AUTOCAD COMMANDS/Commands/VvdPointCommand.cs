@@ -15,7 +15,7 @@ namespace AUTOCAD_COMMANDS
     // - Nhập prefix.
     // - Click lần lượt các điểm, Enter để dừng.
     // - Chọn vị trí đặt MText tổng hợp.
-    // Lưu ý: toàn bộ pick point trong lệnh đều tắt snap/osnap tạm thời.
+    // Lưu ý: pick point dùng đúng snap/osnap hiện tại của người dùng.
     // ======================================================
     public class VvdPointCommand
     {
@@ -38,34 +38,33 @@ namespace AUTOCAD_COMMANDS
 
             Editor ed = doc.Editor;
             Database db = doc.Database;
-            object previousOsMode = null;
-            object previousSnapMode = null;
+            ed.WriteMessage("\nĐang xử lý...");
 
-            try
-            {
-                previousOsMode = Application.GetSystemVariable("OSMODE");
-                previousSnapMode = Application.GetSystemVariable("SNAPMODE");
-                Application.SetSystemVariable("OSMODE", 0);
-                Application.SetSystemVariable("SNAPMODE", 0);
-
-                ed.WriteMessage("\nĐang xử lý...");
-
-                PromptStringOptions prefixOptions =
-                    new PromptStringOptions("\nNhập tiền tố (có thể bỏ trống): ")
-                    {
-                        AllowSpaces = false
-                    };
-                PromptResult prefixResult = ed.GetString(prefixOptions);
-                if (prefixResult.Status != PromptStatus.OK)
+            PromptStringOptions prefixOptions =
+                new PromptStringOptions("\nNhập tiền tố (có thể bỏ trống): ")
                 {
-                    return;
-                }
+                    AllowSpaces = false
+                };
+            PromptResult prefixResult = ed.GetString(prefixOptions);
+            if (prefixResult.Status != PromptStatus.OK)
+            {
+                return;
+            }
 
-                string prefix = (prefixResult.StringResult ?? string.Empty).Trim();
-                ObjectId layerId = EnsurePhantomLayer(db);
+            string prefix = (prefixResult.StringResult ?? string.Empty).Trim();
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                ObjectId layerId = CadLayerHelper.EnsureLayer(db, tr, PhantomLayerName);
                 if (layerId == ObjectId.Null)
                 {
                     ed.WriteMessage("\nVVD: không tạo được layer phantom.");
+                    return;
+                }
+
+                BlockTableRecord currentSpace =
+                    tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
+                if (currentSpace == null)
+                {
                     return;
                 }
 
@@ -96,8 +95,9 @@ namespace AUTOCAD_COMMANDS
                     Point3d point = pointResult.Value;
                     string currentDefinition = BuildDefinitionLine(prefix, counter, point, lastPoint);
 
-                    AddPointMarkerAndText(db, layerId, point, counter, currentDefinition);
-                    ed.Regen();
+                    AddPointMarkerAndText(currentSpace, tr, db, layerId, point, counter, currentDefinition);
+                    db.TransactionManager.QueueForGraphicsFlush();
+                    Application.UpdateScreen();
 
                     definitionLines.Add(currentDefinition);
                     lastPoint = point;
@@ -112,40 +112,20 @@ namespace AUTOCAD_COMMANDS
                     if (summaryPointResult.Status == PromptStatus.OK)
                     {
                         AddSummaryText(
+                            currentSpace,
+                            tr,
                             db,
                             layerId,
                             summaryPointResult.Value,
                             string.Join("\n", definitionLines));
-                        ed.Regen();
                     }
                 }
 
+                tr.Commit();
                 ed.WriteMessage(
                     definitionLines.Count > 0
                         ? $"\nĐã xử lý xong {definitionLines.Count} điểm."
                         : "\nKhông có điểm nào được tạo.");
-            }
-            finally
-            {
-                if (previousOsMode != null)
-                {
-                    Application.SetSystemVariable("OSMODE", previousOsMode);
-                }
-
-                if (previousSnapMode != null)
-                {
-                    Application.SetSystemVariable("SNAPMODE", previousSnapMode);
-                }
-            }
-        }
-
-        private static ObjectId EnsurePhantomLayer(Database db)
-        {
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                ObjectId layerId = CadLayerHelper.EnsureLayer(db, tr, PhantomLayerName);
-                tr.Commit();
-                return layerId;
             }
         }
 
@@ -177,81 +157,61 @@ namespace AUTOCAD_COMMANDS
         }
 
         private static void AddPointMarkerAndText(
+            BlockTableRecord currentSpace,
+            Transaction tr,
             Database db,
             ObjectId layerId,
             Point3d point,
             int counter,
             string definitionLine)
         {
-            using (Transaction tr = db.TransactionManager.StartTransaction())
+            Circle marker = new Circle(point, Vector3d.ZAxis, MarkerRadius)
             {
-                BlockTableRecord currentSpace =
-                    tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
-                if (currentSpace == null)
-                {
-                    return;
-                }
+                LayerId = layerId
+            };
+            currentSpace.AppendEntity(marker);
+            tr.AddNewlyCreatedDBObject(marker, true);
 
-                Circle marker = new Circle(point, Vector3d.ZAxis, MarkerRadius)
-                {
-                    LayerId = layerId
-                };
-                currentSpace.AppendEntity(marker);
-                tr.AddNewlyCreatedDBObject(marker, true);
+            Point3d labelPoint =
+                new Point3d(
+                    point.X,
+                    point.Y + (counter % 2 == 1 ? LabelOffsetY : -LabelOffsetY),
+                    point.Z);
 
-                Point3d labelPoint =
-                    new Point3d(
-                        point.X,
-                        point.Y + (counter % 2 == 1 ? LabelOffsetY : -LabelOffsetY),
-                        point.Z);
-
-                CadMTextHelper.AddMText(
-                    currentSpace,
-                    tr,
-                    layerId,
-                    labelPoint,
-                    TextWidth,
-                    definitionLine,
-                    counter % 2 == 1
-                        ? AttachmentPoint.BottomLeft
-                        : AttachmentPoint.TopLeft,
-                    db.Textsize > NumericTolerance
-                        ? db.Textsize
-                        : TextHeightFallback);
-
-                tr.Commit();
-            }
+            CadMTextHelper.AddMText(
+                currentSpace,
+                tr,
+                layerId,
+                labelPoint,
+                TextWidth,
+                definitionLine,
+                counter % 2 == 1
+                    ? AttachmentPoint.BottomLeft
+                    : AttachmentPoint.TopLeft,
+                db.Textsize > NumericTolerance
+                    ? db.Textsize
+                    : TextHeightFallback);
         }
 
         private static void AddSummaryText(
+            BlockTableRecord currentSpace,
+            Transaction tr,
             Database db,
             ObjectId layerId,
             Point3d location,
             string contents)
         {
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                BlockTableRecord currentSpace =
-                    tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
-                if (currentSpace == null)
-                {
-                    return;
-                }
-
-                CadMTextHelper.AddMText(
-                    currentSpace,
-                    tr,
-                    layerId,
-                    location,
-                    TextWidth,
-                    contents,
-                    AttachmentPoint.BottomLeft,
-                    db.Textsize > NumericTolerance
-                        ? db.Textsize
-                        : TextHeightFallback);
-
-                tr.Commit();
-            }
+            CadMTextHelper.AddMText(
+                currentSpace,
+                tr,
+                layerId,
+                location,
+                TextWidth,
+                contents,
+                AttachmentPoint.BottomLeft,
+                db.Textsize > NumericTolerance
+                    ? db.Textsize
+                    : TextHeightFallback);
         }
     }
 }
