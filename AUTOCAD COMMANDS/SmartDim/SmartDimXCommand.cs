@@ -1638,7 +1638,7 @@ namespace AUTOCAD_COMMANDS
                             IsSdxyBlockContainerCandidate(nestedBlockReference, tr, settings))
                         {
                             using (Entity transformedNestedEntity =
-                                nestedBlockReference.GetTransformedCopy(blockReference.BlockTransform) as Entity)
+                                TryGetTransformedEntity(nestedBlockReference, blockReference.BlockTransform))
                             {
                                 if (transformedNestedEntity is BlockReference transformedNestedBlock &&
                                     TryGetSdxyBlockContentExtents(
@@ -1651,6 +1651,15 @@ namespace AUTOCAD_COMMANDS
                                     combinedExtents = combinedExtents == null
                                         ? nestedExtents
                                         : UnionExtents(combinedExtents.Value, nestedExtents);
+                                }
+                                else if (TryGetTransformedExtents(
+                                    nestedBlockReference,
+                                    blockReference.BlockTransform,
+                                    out Extents3d fallbackNestedExtents))
+                                {
+                                    combinedExtents = combinedExtents == null
+                                        ? fallbackNestedExtents
+                                        : UnionExtents(combinedExtents.Value, fallbackNestedExtents);
                                 }
                             }
 
@@ -1759,7 +1768,7 @@ namespace AUTOCAD_COMMANDS
                             IsSdxyBlockContainerCandidate(nestedBlockReference, tr, settings))
                         {
                             using (Entity transformedNestedEntity =
-                                nestedBlockReference.GetTransformedCopy(blockReference.BlockTransform) as Entity)
+                                TryGetTransformedEntity(nestedBlockReference, blockReference.BlockTransform))
                             {
                                 if (transformedNestedEntity is BlockReference transformedNestedBlock)
                                 {
@@ -1772,6 +1781,16 @@ namespace AUTOCAD_COMMANDS
                                             useXAxis,
                                             visitedBlockDefinitions);
                                     AddIntersectionPoints(result, nestedPoints);
+                                }
+                                else
+                                {
+                                    AddIntersectionPoints(
+                                        result,
+                                        BuildTransformedExtentsFallbackIntersections(
+                                            nestedBlockReference,
+                                            blockReference.BlockTransform,
+                                            scanLine,
+                                            useXAxis));
                                 }
                             }
 
@@ -1788,11 +1807,17 @@ namespace AUTOCAD_COMMANDS
                         }
 
                         using (Entity transformedEntity =
-                            childEntity.GetTransformedCopy(blockReference.BlockTransform) as Entity)
+                            TryGetTransformedEntity(childEntity, blockReference.BlockTransform))
                         {
-                            AddIntersectionPoints(
-                                result,
-                                TryGetIntersections(transformedEntity, scanLine, useXAxis));
+                            Point3dCollection intersections = transformedEntity != null
+                                ? TryGetIntersections(transformedEntity, scanLine, useXAxis)
+                                : BuildTransformedExtentsFallbackIntersections(
+                                    childEntity,
+                                    blockReference.BlockTransform,
+                                    scanLine,
+                                    useXAxis);
+
+                            AddIntersectionPoints(result, intersections);
                         }
                     }
                 }
@@ -2037,11 +2062,73 @@ namespace AUTOCAD_COMMANDS
                     Math.Max(left.MaxPoint.Z, right.MaxPoint.Z)));
         }
 
+        private Entity TryGetTransformedEntity(Entity entity, Matrix3d transform)
+        {
+            if (entity == null || entity.IsErased)
+            {
+                return null;
+            }
+
+            try
+            {
+                return entity.GetTransformedCopy(transform) as Entity;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private Point3dCollection BuildTransformedExtentsFallbackIntersections(
+            Entity entity,
+            Matrix3d transform,
+            Line scanLine,
+            bool useXAxis)
+        {
+            if (scanLine == null ||
+                !TryGetTransformedExtents(entity, transform, out Extents3d transformedExtents))
+            {
+                return null;
+            }
+
+            return BuildExtentsFallbackIntersections(
+                transformedExtents,
+                scanLine,
+                useXAxis);
+        }
+
+        private bool TryGetTransformedExtents(
+            Entity entity,
+            Matrix3d transform,
+            out Extents3d extents)
+        {
+            extents = default;
+            if (entity == null || entity.IsErased)
+            {
+                return false;
+            }
+
+            try
+            {
+                extents = TransformExtents(entity.GeometricExtents, transform);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private Point3dCollection TryGetIntersections(
             Entity entity,
             Line scanLine,
             bool useXAxis)
         {
+            if (entity == null || scanLine == null)
+            {
+                return null;
+            }
+
             // IntersectWith có thể lỗi với vài entity đặc biệt.
             // Bắt lỗi ở đây để lệnh bỏ qua object đó thay vì văng command.
             try
@@ -2071,6 +2158,19 @@ namespace AUTOCAD_COMMANDS
             bool useXAxis)
         {
             if (!TryGetEntityExtents(entity, out Extents3d extents))
+            {
+                return null;
+            }
+
+            return BuildExtentsFallbackIntersections(extents, scanLine, useXAxis);
+        }
+
+        private Point3dCollection BuildExtentsFallbackIntersections(
+            Extents3d extents,
+            Line scanLine,
+            bool useXAxis)
+        {
+            if (scanLine == null)
             {
                 return null;
             }
