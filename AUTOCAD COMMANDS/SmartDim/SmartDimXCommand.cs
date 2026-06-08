@@ -1391,7 +1391,74 @@ namespace AUTOCAD_COMMANDS
             catch
             {
                 // Nếu engine selection không trả được kết quả ổn định trong một số
-                // bản vẽ đặc biệt thì fallback về cách duyệt cũ.
+                // bản vẽ đặc biệt thì fallback về cách quét hẹp.
+            }
+
+            return TrySelectScanWindowCandidates(
+                ed,
+                scanStartPoint,
+                fenceEnd,
+                useXAxis,
+                settings);
+        }
+
+        private ObjectId[] TrySelectScanWindowCandidates(
+            Editor ed,
+            Point3d scanStartPoint,
+            Point3d fenceEnd,
+            bool useXAxis,
+            SdxyTargetSettings settings)
+        {
+            if (ed == null)
+            {
+                return null;
+            }
+
+            const double windowHalfWidth = 10.0;
+            Point3dCollection windowPoints = new Point3dCollection();
+            if (useXAxis)
+            {
+                windowPoints.Add(new Point3d(
+                    scanStartPoint.X,
+                    scanStartPoint.Y - windowHalfWidth,
+                    scanStartPoint.Z));
+                windowPoints.Add(new Point3d(
+                    fenceEnd.X,
+                    fenceEnd.Y + windowHalfWidth,
+                    fenceEnd.Z));
+            }
+            else
+            {
+                windowPoints.Add(new Point3d(
+                    scanStartPoint.X - windowHalfWidth,
+                    scanStartPoint.Y,
+                    scanStartPoint.Z));
+                windowPoints.Add(new Point3d(
+                    fenceEnd.X + windowHalfWidth,
+                    fenceEnd.Y,
+                    fenceEnd.Z));
+            }
+
+            try
+            {
+                PromptSelectionResult result = ed.SelectCrossingWindow(
+                    windowPoints[0],
+                    windowPoints[1]);
+                if (result.Status == PromptStatus.OK && result.Value != null)
+                {
+                    return result.Value
+                        .GetObjectIds()
+                        .Where(id => IsScanCandidateId(id, settings))
+                        .ToArray();
+                }
+
+                if (result.Status == PromptStatus.None)
+                {
+                    return Array.Empty<ObjectId>();
+                }
+            }
+            catch
+            {
             }
 
             return null;
@@ -2379,6 +2446,41 @@ namespace AUTOCAD_COMMANDS
                 }
 
                 _previewAdded = false;
+            }
+
+            private static ViewTableRecord TryGetCurrentView(Editor editor)
+            {
+                if (editor == null)
+                {
+                    return null;
+                }
+
+                try
+                {
+                    return editor.GetCurrentView();
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+
+            private void ScheduleLatestViewRestore()
+            {
+                if (_latestChangedView != null)
+                {
+                    ViewTableRecord view = _latestChangedView;
+                    _latestChangedView = null;
+                    ScheduleSdxyViewRestore(view);
+                    return;
+                }
+
+                if (_initialView != null)
+                {
+                    ViewTableRecord view = _initialView;
+                    _initialView = null;
+                    ScheduleSdxyViewRestore(view);
+                }
             }
 
             public void Dispose()
