@@ -43,6 +43,8 @@ namespace AUTOCAD_COMMANDS
         private static readonly RXClass DimensionRxClass = RXObject.GetClass(typeof(Dimension));
         private static readonly RXClass EntityRxClass = RXObject.GetClass(typeof(Entity));
         private static List<SdxyEntityTypeChoice> _cachedSdxyEntityTypeChoices;
+        private static ViewTableRecord _pendingSdxyViewRestore;
+        private static bool _sdxyViewRestoreScheduled;
 
         [DllImport("user32.dll")]
         private static extern short GetAsyncKeyState(int vKey);
@@ -212,10 +214,11 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
+            Point3d endPoint;
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
                 BlockTableRecord currentSpace =
-                    tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
+                    tr.GetObject(db.CurrentSpaceId, OpenMode.ForRead) as BlockTableRecord;
 
                 if (currentSpace == null) return;
 
@@ -246,7 +249,7 @@ namespace AUTOCAD_COMMANDS
                     return;
                 }
 
-                Point3d endPoint = useXAxis
+                endPoint = useXAxis
                     ? new Point3d(targetPoint.Value.X, dirPoint.Y, dirPoint.Z)
                     : new Point3d(dirPoint.X, targetPoint.Value.Y, dirPoint.Z);
 
@@ -255,18 +258,26 @@ namespace AUTOCAD_COMMANDS
                     ed.WriteMessage("\nKhoảng dim quá nhỏ hoặc trùng điểm đầu.");
                     return;
                 }
+            }
 
-                if (!TryPromptDimPlacementPoint(
-                    ed,
-                    db,
-                    startPoint,
-                    endPoint,
-                    useXAxis,
-                    out Point3d dimPlacementPoint,
-                    out bool finalUseXAxis))
-                {
-                    return;
-                }
+            if (!TryPromptDimPlacementPoint(
+                ed,
+                db,
+                startPoint,
+                endPoint,
+                useXAxis,
+                out Point3d dimPlacementPoint,
+                out bool finalUseXAxis))
+            {
+                return;
+            }
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                BlockTableRecord currentSpace =
+                    tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
+
+                if (currentSpace == null) return;
 
                 ObjectId dimLayerId = EnsureDimLayer(db, tr);
 
@@ -314,14 +325,11 @@ namespace AUTOCAD_COMMANDS
             out Point3d dimPlacementPoint,
             out bool finalUseXAxis)
         {
-            using (SmartDimPlacementJig jig =
-                new SmartDimPlacementJig(db, startPoint, endPoint, useXAxis))
+            using (SmartDimPlacementPrompt prompt =
+                new SmartDimPlacementPrompt(ed, db, startPoint, endPoint, useXAxis))
             {
-                PromptResult dragResult = ed.Drag(jig);
-                if (dragResult.Status == PromptStatus.OK || jig.AcceptedByShortcut)
+                if (prompt.Prompt(out dimPlacementPoint, out finalUseXAxis))
                 {
-                    dimPlacementPoint = jig.DimLinePoint;
-                    finalUseXAxis = jig.UseXAxis;
                     return true;
                 }
             }
@@ -329,6 +337,67 @@ namespace AUTOCAD_COMMANDS
             dimPlacementPoint = Point3d.Origin;
             finalUseXAxis = useXAxis;
             return false;
+        }
+
+        private static void ScheduleSdxyViewRestore(ViewTableRecord view)
+        {
+            if (view == null)
+            {
+                return;
+            }
+
+            _pendingSdxyViewRestore?.Dispose();
+            _pendingSdxyViewRestore = view;
+
+            if (_sdxyViewRestoreScheduled)
+            {
+                return;
+            }
+
+            try
+            {
+                Application.Idle += RestoreSdxyViewOnIdle;
+                _sdxyViewRestoreScheduled = true;
+            }
+            catch
+            {
+                _pendingSdxyViewRestore?.Dispose();
+                _pendingSdxyViewRestore = null;
+                _sdxyViewRestoreScheduled = false;
+            }
+        }
+
+        private static void RestoreSdxyViewOnIdle(object sender, EventArgs e)
+        {
+            try
+            {
+                Application.Idle -= RestoreSdxyViewOnIdle;
+            }
+            catch
+            {
+            }
+
+            _sdxyViewRestoreScheduled = false;
+
+            ViewTableRecord view = _pendingSdxyViewRestore;
+            _pendingSdxyViewRestore = null;
+            if (view == null)
+            {
+                return;
+            }
+
+            try
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                doc?.Editor?.SetCurrentView(view);
+            }
+            catch
+            {
+            }
+            finally
+            {
+                view.Dispose();
+            }
         }
 
         private bool TryPromptAxisDirection(
@@ -1053,7 +1122,19 @@ namespace AUTOCAD_COMMANDS
                     settings))
                 {
                     Entity entity = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                    if (!IsSdxyTargetCandidate(entity, tr, settings))
+                    BlockReference blockReference = entity as BlockReference;
+                    bool useBlockContentMode =
+                        blockReference != null &&
+                        ShouldUseSdxyBlockContentMode(settings);
+
+                    if (useBlockContentMode)
+                    {
+                        if (!IsSdxyBlockContainerCandidate(blockReference, tr, settings))
+                        {
+                            continue;
+                        }
+                    }
+                    else if (!IsSdxyTargetCandidate(entity, tr, settings))
                     {
                         continue;
                     }
@@ -1061,6 +1142,9 @@ namespace AUTOCAD_COMMANDS
                     bool fastPass = useXAxis
                         ? IsHorizontalRayCandidate(
                             entity,
+                            tr,
+                            settings,
+                            useBlockContentMode,
                             probePoint.Y,
                             startPoint.X,
                             probePoint.X,
@@ -1068,6 +1152,9 @@ namespace AUTOCAD_COMMANDS
                             bestDistance)
                         : IsVerticalRayCandidate(
                             entity,
+                            tr,
+                            settings,
+                            useBlockContentMode,
                             probePoint.X,
                             startPoint.Y,
                             probePoint.Y,
@@ -1079,7 +1166,15 @@ namespace AUTOCAD_COMMANDS
                     }
 
                     Point3dCollection intersections =
-                        TryGetIntersections(entity, scanLine, useXAxis);
+                        useBlockContentMode
+                            ? TryGetSdxyBlockContentIntersections(
+                                blockReference,
+                                tr,
+                                settings,
+                                scanLine,
+                                useXAxis,
+                                new HashSet<ObjectId>())
+                            : TryGetIntersections(entity, scanLine, useXAxis);
                     if (intersections == null || intersections.Count == 0)
                     {
                         continue;
@@ -1121,6 +1216,9 @@ namespace AUTOCAD_COMMANDS
 
         private bool IsHorizontalRayCandidate(
             Entity entity,
+            Transaction tr,
+            SdxyTargetSettings settings,
+            bool useBlockContentMode,
             double scanY,
             double startX,
             double probeX,
@@ -1129,7 +1227,12 @@ namespace AUTOCAD_COMMANDS
         {
             // Lọc nhanh bằng GeometricExtents trước khi gọi IntersectWith.
             // Đây là phần giúp SDXY nhanh hơn khi bản vẽ có nhiều object.
-            if (!TryGetEntityExtents(entity, out Extents3d extents))
+            if (!TryGetSdxyScanExtents(
+                entity,
+                tr,
+                settings,
+                useBlockContentMode,
+                out Extents3d extents))
             {
                 return true;
             }
@@ -1168,13 +1271,21 @@ namespace AUTOCAD_COMMANDS
 
         private bool IsVerticalRayCandidate(
             Entity entity,
+            Transaction tr,
+            SdxyTargetSettings settings,
+            bool useBlockContentMode,
             double scanX,
             double startY,
             double probeY,
             double direction,
             double bestDistance)
         {
-            if (!TryGetEntityExtents(entity, out Extents3d extents))
+            if (!TryGetSdxyScanExtents(
+                entity,
+                tr,
+                settings,
+                useBlockContentMode,
+                out Extents3d extents))
             {
                 return true;
             }
@@ -1338,6 +1449,525 @@ namespace AUTOCAD_COMMANDS
                 extents = default;
                 return false;
             }
+        }
+
+        private bool ShouldUseSdxyBlockContentMode(SdxyTargetSettings settings)
+        {
+            if (settings == null)
+            {
+                return false;
+            }
+
+            if (settings.AllowedTypeNames.Count == 0)
+            {
+                return true;
+            }
+
+            foreach (string typeName in settings.AllowedTypeNames)
+            {
+                Type targetType = ResolveSdxyEntityType(typeName);
+                if (targetType != null &&
+                    !typeof(BlockReference).IsAssignableFrom(targetType))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool IsSdxyBlockContainerCandidate(
+            BlockReference blockReference,
+            Transaction tr,
+            SdxyTargetSettings settings)
+        {
+            if (blockReference == null || blockReference.IsErased)
+            {
+                return false;
+            }
+
+            if (!IsSdxyEntityVisible(blockReference, tr))
+            {
+                return false;
+            }
+
+            if (settings == null || settings.AllowedTypeNames.Count == 0)
+            {
+                return true;
+            }
+
+            Type blockReferenceType = typeof(BlockReference);
+            foreach (string typeName in settings.AllowedTypeNames)
+            {
+                Type targetType = ResolveSdxyEntityType(typeName);
+                if (targetType != null && targetType.IsAssignableFrom(blockReferenceType))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryGetSdxyScanExtents(
+            Entity entity,
+            Transaction tr,
+            SdxyTargetSettings settings,
+            bool useBlockContentMode,
+            out Extents3d extents)
+        {
+            if (useBlockContentMode && entity is BlockReference blockReference)
+            {
+                return TryGetSdxyBlockContentExtents(
+                    blockReference,
+                    tr,
+                    settings,
+                    out extents,
+                    new HashSet<ObjectId>());
+            }
+
+            return TryGetEntityExtents(entity, out extents);
+        }
+
+        private bool TryGetSdxyBlockContentExtents(
+            BlockReference blockReference,
+            Transaction tr,
+            SdxyTargetSettings settings,
+            out Extents3d extents,
+            HashSet<ObjectId> visitedBlockDefinitions)
+        {
+            extents = default;
+            if (blockReference == null || tr == null)
+            {
+                return false;
+            }
+
+            ObjectId blockDefinitionId = blockReference.BlockTableRecord;
+            if (blockDefinitionId.IsNull ||
+                visitedBlockDefinitions.Contains(blockDefinitionId))
+            {
+                return false;
+            }
+
+            visitedBlockDefinitions.Add(blockDefinitionId);
+
+            try
+            {
+                Extents3d? combinedExtents = null;
+                BlockTableRecord definition =
+                    tr.GetObject(blockDefinitionId, OpenMode.ForRead) as BlockTableRecord;
+                if (definition != null)
+                {
+                    foreach (ObjectId childId in definition)
+                    {
+                        Entity childEntity =
+                            tr.GetObject(childId, OpenMode.ForRead) as Entity;
+                        if (childEntity == null)
+                        {
+                            continue;
+                        }
+
+                        if (childEntity is BlockReference nestedBlockReference &&
+                            IsSdxyBlockContainerCandidate(nestedBlockReference, tr, settings))
+                        {
+                            using (Entity transformedNestedEntity =
+                                nestedBlockReference.GetTransformedCopy(blockReference.BlockTransform) as Entity)
+                            {
+                                if (transformedNestedEntity is BlockReference transformedNestedBlock &&
+                                    TryGetSdxyBlockContentExtents(
+                                        transformedNestedBlock,
+                                        tr,
+                                        settings,
+                                        out Extents3d nestedExtents,
+                                        visitedBlockDefinitions))
+                                {
+                                    combinedExtents = combinedExtents == null
+                                        ? nestedExtents
+                                        : UnionExtents(combinedExtents.Value, nestedExtents);
+                                }
+                            }
+
+                            continue;
+                        }
+
+                        if (!IsSdxyBlockContentCandidate(
+                            childEntity,
+                            tr,
+                            settings,
+                            blockReference))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            Extents3d transformedExtents =
+                                TransformExtents(
+                                    childEntity.GeometricExtents,
+                                    blockReference.BlockTransform);
+                            combinedExtents = combinedExtents == null
+                                ? transformedExtents
+                                : UnionExtents(combinedExtents.Value, transformedExtents);
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
+
+                foreach (ObjectId attributeId in blockReference.AttributeCollection)
+                {
+                    AttributeReference attribute =
+                        tr.GetObject(attributeId, OpenMode.ForRead, false) as AttributeReference;
+                    if (!IsSdxyBlockContentCandidate(attribute, tr, settings, blockReference))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        Extents3d attributeExtents = attribute.GeometricExtents;
+                        combinedExtents = combinedExtents == null
+                            ? attributeExtents
+                            : UnionExtents(combinedExtents.Value, attributeExtents);
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                if (combinedExtents == null)
+                {
+                    return false;
+                }
+
+                extents = combinedExtents.Value;
+                return true;
+            }
+            finally
+            {
+                visitedBlockDefinitions.Remove(blockDefinitionId);
+            }
+        }
+
+        private Point3dCollection TryGetSdxyBlockContentIntersections(
+            BlockReference blockReference,
+            Transaction tr,
+            SdxyTargetSettings settings,
+            Line scanLine,
+            bool useXAxis,
+            HashSet<ObjectId> visitedBlockDefinitions)
+        {
+            Point3dCollection result = new Point3dCollection();
+            if (blockReference == null || tr == null || scanLine == null)
+            {
+                return result;
+            }
+
+            ObjectId blockDefinitionId = blockReference.BlockTableRecord;
+            if (blockDefinitionId.IsNull ||
+                visitedBlockDefinitions.Contains(blockDefinitionId))
+            {
+                return result;
+            }
+
+            visitedBlockDefinitions.Add(blockDefinitionId);
+
+            try
+            {
+                BlockTableRecord definition =
+                    tr.GetObject(blockDefinitionId, OpenMode.ForRead) as BlockTableRecord;
+                if (definition != null)
+                {
+                    foreach (ObjectId childId in definition)
+                    {
+                        Entity childEntity =
+                            tr.GetObject(childId, OpenMode.ForRead) as Entity;
+                        if (childEntity == null)
+                        {
+                            continue;
+                        }
+
+                        if (childEntity is BlockReference nestedBlockReference &&
+                            IsSdxyBlockContainerCandidate(nestedBlockReference, tr, settings))
+                        {
+                            using (Entity transformedNestedEntity =
+                                nestedBlockReference.GetTransformedCopy(blockReference.BlockTransform) as Entity)
+                            {
+                                if (transformedNestedEntity is BlockReference transformedNestedBlock)
+                                {
+                                    Point3dCollection nestedPoints =
+                                        TryGetSdxyBlockContentIntersections(
+                                            transformedNestedBlock,
+                                            tr,
+                                            settings,
+                                            scanLine,
+                                            useXAxis,
+                                            visitedBlockDefinitions);
+                                    AddIntersectionPoints(result, nestedPoints);
+                                }
+                            }
+
+                            continue;
+                        }
+
+                        if (!IsSdxyBlockContentCandidate(
+                            childEntity,
+                            tr,
+                            settings,
+                            blockReference))
+                        {
+                            continue;
+                        }
+
+                        using (Entity transformedEntity =
+                            childEntity.GetTransformedCopy(blockReference.BlockTransform) as Entity)
+                        {
+                            AddIntersectionPoints(
+                                result,
+                                TryGetIntersections(transformedEntity, scanLine, useXAxis));
+                        }
+                    }
+                }
+
+                foreach (ObjectId attributeId in blockReference.AttributeCollection)
+                {
+                    AttributeReference attribute =
+                        tr.GetObject(attributeId, OpenMode.ForRead, false) as AttributeReference;
+                    if (!IsSdxyBlockContentCandidate(attribute, tr, settings, blockReference))
+                    {
+                        continue;
+                    }
+
+                    AddIntersectionPoints(
+                        result,
+                        TryGetIntersections(attribute, scanLine, useXAxis));
+                }
+            }
+            finally
+            {
+                visitedBlockDefinitions.Remove(blockDefinitionId);
+            }
+
+            return result;
+        }
+
+        private bool IsSdxyBlockContentCandidate(
+            Entity entity,
+            Transaction tr,
+            SdxyTargetSettings settings,
+            BlockReference containerBlockReference)
+        {
+            if (entity == null || entity.IsErased)
+            {
+                return false;
+            }
+
+            if (!IsSdxyEntityVisible(entity, tr))
+            {
+                return false;
+            }
+
+            if (!MatchesSdxyContentTypeFilters(entity, settings))
+            {
+                return false;
+            }
+
+            if (!MatchesSdxyContentLayerFilters(entity, settings, containerBlockReference))
+            {
+                return false;
+            }
+
+            return MatchesSdxyContentSampleFilters(entity, tr, settings, containerBlockReference);
+        }
+
+        private bool MatchesSdxyContentTypeFilters(Entity entity, SdxyTargetSettings settings)
+        {
+            if (entity == null)
+            {
+                return false;
+            }
+
+            if (settings == null || settings.AllowedTypeNames.Count == 0)
+            {
+                return true;
+            }
+
+            Type entityType = entity.GetType();
+            foreach (string typeName in settings.AllowedTypeNames)
+            {
+                Type targetType = ResolveSdxyEntityType(typeName);
+                if (targetType == null ||
+                    typeof(BlockReference).IsAssignableFrom(targetType))
+                {
+                    continue;
+                }
+
+                if (targetType.IsAssignableFrom(entityType))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool MatchesSdxyContentLayerFilters(
+            Entity entity,
+            SdxyTargetSettings settings,
+            BlockReference containerBlockReference)
+        {
+            if (settings == null || settings.AllowedLayers.Count == 0)
+            {
+                return true;
+            }
+
+            string entityLayer = entity?.Layer ?? string.Empty;
+            if (settings.AllowedLayers.Contains(entityLayer))
+            {
+                return true;
+            }
+
+            string containerLayer = containerBlockReference?.Layer ?? string.Empty;
+            return !string.IsNullOrEmpty(containerLayer) &&
+                   settings.AllowedLayers.Contains(containerLayer);
+        }
+
+        private bool MatchesSdxyContentSampleFilters(
+            Entity entity,
+            Transaction tr,
+            SdxyTargetSettings settings,
+            BlockReference containerBlockReference)
+        {
+            List<SdxySampleDescriptor> samples = settings?.SampleDescriptors
+                ?.Where(sample => sample != null)
+                .ToList()
+                ?? new List<SdxySampleDescriptor>();
+            if (samples.Count == 0)
+            {
+                return true;
+            }
+
+            return samples.Any(sample =>
+                MatchesSingleSdxyContentSampleFilter(
+                    entity,
+                    tr,
+                    settings,
+                    sample,
+                    containerBlockReference));
+        }
+
+        private bool MatchesSingleSdxyContentSampleFilter(
+            Entity entity,
+            Transaction tr,
+            SdxyTargetSettings settings,
+            SdxySampleDescriptor sample,
+            BlockReference containerBlockReference)
+        {
+            if (sample == null)
+            {
+                return true;
+            }
+
+            if (settings.UseSampleType)
+            {
+                Type sampleType = ResolveSdxyEntityType(sample.TypeName);
+                if (sampleType == null || !sampleType.IsAssignableFrom(entity.GetType()))
+                {
+                    return false;
+                }
+            }
+
+            if (settings.UseSampleLayer)
+            {
+                string entityLayer = entity.Layer ?? string.Empty;
+                string containerLayer = containerBlockReference?.Layer ?? string.Empty;
+                if (!string.Equals(entityLayer, sample.LayerName, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(containerLayer, sample.LayerName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+
+            if (settings.UseSampleLinetype &&
+                !string.Equals(entity.Linetype, sample.LinetypeName, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (settings.UseSampleColor &&
+                !string.Equals(
+                    BuildSdxyColorKey(entity.Color),
+                    sample.ColorKey,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (settings.UseSampleBlockName)
+            {
+                string blockName = entity is BlockReference childBlockReference
+                    ? GetSdxyBlockName(childBlockReference, tr)
+                    : GetSdxyBlockName(containerBlockReference, tr);
+                if (!string.Equals(blockName, sample.BlockName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private void AddIntersectionPoints(
+            Point3dCollection target,
+            Point3dCollection source)
+        {
+            if (target == null || source == null)
+            {
+                return;
+            }
+
+            foreach (Point3d point in source)
+            {
+                AddIntersectionPoint(target, point);
+            }
+        }
+
+        private Extents3d TransformExtents(Extents3d extents, Matrix3d transform)
+        {
+            Point3d[] corners =
+            {
+                new Point3d(extents.MinPoint.X, extents.MinPoint.Y, extents.MinPoint.Z),
+                new Point3d(extents.MinPoint.X, extents.MinPoint.Y, extents.MaxPoint.Z),
+                new Point3d(extents.MinPoint.X, extents.MaxPoint.Y, extents.MinPoint.Z),
+                new Point3d(extents.MinPoint.X, extents.MaxPoint.Y, extents.MaxPoint.Z),
+                new Point3d(extents.MaxPoint.X, extents.MinPoint.Y, extents.MinPoint.Z),
+                new Point3d(extents.MaxPoint.X, extents.MinPoint.Y, extents.MaxPoint.Z),
+                new Point3d(extents.MaxPoint.X, extents.MaxPoint.Y, extents.MinPoint.Z),
+                new Point3d(extents.MaxPoint.X, extents.MaxPoint.Y, extents.MaxPoint.Z)
+            };
+
+            Point3d firstPoint = corners[0].TransformBy(transform);
+            Extents3d transformed = new Extents3d(firstPoint, firstPoint);
+            for (int i = 1; i < corners.Length; i++)
+            {
+                transformed.AddPoint(corners[i].TransformBy(transform));
+            }
+
+            return transformed;
+        }
+
+        private Extents3d UnionExtents(Extents3d left, Extents3d right)
+        {
+            return new Extents3d(
+                new Point3d(
+                    Math.Min(left.MinPoint.X, right.MinPoint.X),
+                    Math.Min(left.MinPoint.Y, right.MinPoint.Y),
+                    Math.Min(left.MinPoint.Z, right.MinPoint.Z)),
+                new Point3d(
+                    Math.Max(left.MaxPoint.X, right.MaxPoint.X),
+                    Math.Max(left.MaxPoint.Y, right.MaxPoint.Y),
+                    Math.Max(left.MaxPoint.Z, right.MaxPoint.Z)));
         }
 
         private Point3dCollection TryGetIntersections(
@@ -1560,9 +2190,11 @@ namespace AUTOCAD_COMMANDS
             return (WF.Control.ModifierKeys & WF.Keys.Shift) == WF.Keys.Shift;
         }
 
-        private sealed class SmartDimPlacementJig : DrawJig, IDisposable
+        private sealed class SmartDimPlacementPrompt : IDisposable
         {
+            private readonly Editor _editor;
             private readonly RotatedDimension _previewDimension;
+            private readonly IntegerCollection _viewportNumbers;
             private readonly Point3d _defaultPoint;
             private readonly bool _originalUseXAxis;
             private readonly double _minX;
@@ -1572,14 +2204,21 @@ namespace AUTOCAD_COMMANDS
             private readonly double _switchMargin;
             private Point3d _currentPoint;
             private bool _useXAxis;
-            private bool _acceptedByShortcut;
+            private bool _previewAdded;
+            private ViewTableRecord _initialView;
+            private ViewTableRecord _latestChangedView;
 
-            public SmartDimPlacementJig(
+            public SmartDimPlacementPrompt(
+                Editor editor,
                 Database db,
                 Point3d startPoint,
                 Point3d endPoint,
                 bool useXAxis)
             {
+                _editor = editor;
+                _viewportNumbers = new IntegerCollection();
+                _initialView = TryGetCurrentView(editor);
+
                 double previewOffset = Math.Max(
                     db.Dimtxt + db.Dimgap + db.Dimexe,
                     10.0);
@@ -1615,57 +2254,47 @@ namespace AUTOCAD_COMMANDS
                 _previewDimension.SetDatabaseDefaults(db);
             }
 
-            public Point3d DimLinePoint => _currentPoint;
-
-            public bool UseXAxis => _useXAxis;
-
-            public bool AcceptedByShortcut => _acceptedByShortcut;
-
-            protected override SamplerStatus Sampler(JigPrompts prompts)
+            public bool Prompt(out Point3d dimLinePoint, out bool useXAxis)
             {
-                JigPromptPointOptions pointOptions =
-                    new JigPromptPointOptions(
-                        "\nChọn điểm đặt dim (mặc định như cũ, kéo ra ngoài 2 đầu để đổi hướng): ");
-                // Không dùng BasePoint ở bước này để preview DIM không bị
-                // ORTHOMODE của AutoCAD ép theo ngang/dọc.
-                pointOptions.UserInputControls =
-                    UserInputControls.Accept3dCoordinates |
-                    UserInputControls.NullResponseAccepted;
+                AddPreview();
+                _editor.PointMonitor += EditorPointMonitor;
 
-                PromptPointResult pointResult = prompts.AcquirePoint(pointOptions);
+                PromptPointOptions pointOptions =
+                    new PromptPointOptions(
+                        "\nChọn điểm đặt dim (Enter/Space = mặc định, kéo ra ngoài 2 đầu để đổi hướng): ");
+                pointOptions.AllowNone = true;
+
+                PromptPointResult pointResult = _editor.GetPoint(pointOptions);
                 if (pointResult.Status == PromptStatus.None)
                 {
-                    // Space/Enter: chốt luôn tại điểm preview hiện tại.
-                    // Nếu người dùng chưa rê chuột thì _currentPoint vẫn là điểm auto cũ.
-                    _acceptedByShortcut = true;
-                    return SamplerStatus.Cancel;
-                }
-
-                if (pointResult.Status == PromptStatus.Cancel)
-                {
-                    return SamplerStatus.Cancel;
+                    dimLinePoint = _currentPoint;
+                    useXAxis = _useXAxis;
+                    return true;
                 }
 
                 if (pointResult.Status != PromptStatus.OK)
                 {
-                    return SamplerStatus.NoChange;
+                    ScheduleLatestViewRestore();
+                    dimLinePoint = Point3d.Origin;
+                    useXAxis = _originalUseXAxis;
+                    return false;
                 }
 
-                if (_currentPoint.DistanceTo(pointResult.Value) <= PreviewPointTolerance)
-                {
-                    return SamplerStatus.NoChange;
-                }
-
-                _useXAxis = ResolveUseXAxis(pointResult.Value);
-                _currentPoint = pointResult.Value;
-                _previewDimension.DimLinePoint = _currentPoint;
-                _previewDimension.Rotation = _useXAxis ? 0.0 : Math.PI / 2.0;
-                return SamplerStatus.OK;
+                UpdatePreview(pointResult.Value);
+                dimLinePoint = _currentPoint;
+                useXAxis = _useXAxis;
+                return true;
             }
 
-            protected override bool WorldDraw(WorldDraw draw)
+            private void EditorPointMonitor(object sender, PointMonitorEventArgs e)
             {
-                return _previewDimension.WorldDraw(draw);
+                try
+                {
+                    UpdatePreview(e.Context.ComputedPoint);
+                }
+                catch
+                {
+                }
             }
 
             private bool ResolveUseXAxis(Point3d point)
@@ -1684,8 +2313,84 @@ namespace AUTOCAD_COMMANDS
                 return switchedToHorizontal;
             }
 
+            private void UpdatePreview(Point3d point)
+            {
+                if (_currentPoint.DistanceTo(point) <= PreviewPointTolerance)
+                {
+                    return;
+                }
+
+                _useXAxis = ResolveUseXAxis(point);
+                _currentPoint = point;
+                _previewDimension.DimLinePoint = _currentPoint;
+                _previewDimension.Rotation = _useXAxis ? 0.0 : Math.PI / 2.0;
+                UpdateTransient();
+            }
+
+            private void AddPreview()
+            {
+                try
+                {
+                    TransientManager.CurrentTransientManager.AddTransient(
+                        _previewDimension,
+                        TransientDrawingMode.DirectShortTerm,
+                        128,
+                        _viewportNumbers);
+                    _previewAdded = true;
+                }
+                catch
+                {
+                }
+            }
+
+            private void UpdateTransient()
+            {
+                if (!_previewAdded)
+                {
+                    return;
+                }
+
+                try
+                {
+                    TransientManager.CurrentTransientManager.UpdateTransient(
+                        _previewDimension,
+                        _viewportNumbers);
+                }
+                catch
+                {
+                }
+            }
+
+            private void ErasePreview()
+            {
+                if (!_previewAdded)
+                {
+                    return;
+                }
+
+                try
+                {
+                    TransientManager.CurrentTransientManager.EraseTransient(
+                        _previewDimension,
+                        _viewportNumbers);
+                }
+                catch
+                {
+                }
+
+                _previewAdded = false;
+            }
+
             public void Dispose()
             {
+                if (_editor != null)
+                {
+                    _editor.PointMonitor -= EditorPointMonitor;
+                }
+
+                ErasePreview();
+                _initialView?.Dispose();
+                _latestChangedView?.Dispose();
                 _previewDimension?.Dispose();
             }
         }
