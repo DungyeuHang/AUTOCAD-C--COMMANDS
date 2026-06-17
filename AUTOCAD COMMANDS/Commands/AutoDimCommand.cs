@@ -1,4 +1,4 @@
-﻿using Autodesk.AutoCAD.ApplicationServices;
+﻿﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.GraphicsInterface;
@@ -38,6 +38,7 @@ namespace AUTOCAD_COMMANDS
     {
         private const double AutoDimTolerance = 1e-6;
         private const double DddMismatchTolerance = 1e-4;
+        private const double DddSearchDistance = 1000000.0;
         private const string DaaBaseObjectKeyword = "Object";
         private const string DaaBasePointKeyword = "Point";
 
@@ -234,9 +235,17 @@ namespace AUTOCAD_COMMANDS
 
             ObjectId[] sourceIds = TryConsumePickFirst(ed);
             DddTargetFilter targetFilter = DddTargetFilterStore.Load();
+
             if (sourceIds == null || sourceIds.Length == 0)
             {
                 if (!TryPromptDddSourceSelection(ed, db, ref targetFilter, out sourceIds))
+                {
+                    return;
+                }
+            }
+            else
+            {
+                if (!PromptForDddFilterMode(ed, db, ref targetFilter))
                 {
                     return;
                 }
@@ -261,10 +270,10 @@ namespace AUTOCAD_COMMANDS
                     return;
                 }
 
-                Extents3d? leftExtents = null;
-                Extents3d? rightExtents = null;
-                Extents3d? topExtents = null;
-                Extents3d? bottomExtents = null;
+                Point3d? leftPoint = null;
+                Point3d? rightPoint = null;
+                Point3d? topPoint = null;
+                Point3d? bottomPoint = null;
                 double leftDistance = double.MaxValue;
                 double rightDistance = double.MaxValue;
                 double topDistance = double.MaxValue;
@@ -288,51 +297,85 @@ namespace AUTOCAD_COMMANDS
                         continue;
                     }
 
-                    if (HasVerticalOverlap(sourceExtents.Value, extents))
+                    if (TryGetDddDirectionalPoint(
+                        entity,
+                        extents,
+                        sourceCenter,
+                        useXAxis: true,
+                        direction: -1.0,
+                        out Point3d currentLeftPoint))
                     {
-                        double currentLeftDistance = sourceExtents.Value.MinPoint.X - extents.MaxPoint.X;
+                        double currentLeftDistance =
+                            sourceExtents.Value.MinPoint.X - currentLeftPoint.X;
                         if (currentLeftDistance >= -AutoDimTolerance &&
                             currentLeftDistance < leftDistance)
                         {
                             leftDistance = Math.Max(0.0, currentLeftDistance);
-                            leftExtents = extents;
+                            leftPoint = currentLeftPoint;
                         }
+                    }
 
-                        double currentRightDistance = extents.MinPoint.X - sourceExtents.Value.MaxPoint.X;
+                    if (TryGetDddDirectionalPoint(
+                        entity,
+                        extents,
+                        sourceCenter,
+                        useXAxis: true,
+                        direction: 1.0,
+                        out Point3d currentRightPoint))
+                    {
+                        double currentRightDistance =
+                            currentRightPoint.X - sourceExtents.Value.MaxPoint.X;
                         if (currentRightDistance >= -AutoDimTolerance &&
                             currentRightDistance < rightDistance)
                         {
                             rightDistance = Math.Max(0.0, currentRightDistance);
-                            rightExtents = extents;
+                            rightPoint = currentRightPoint;
                         }
                     }
 
-                    if (HasHorizontalOverlap(sourceExtents.Value, extents))
+                    if (TryGetDddDirectionalPoint(
+                        entity,
+                        extents,
+                        sourceCenter,
+                        useXAxis: false,
+                        direction: 1.0,
+                        out Point3d currentTopPoint))
                     {
-                        double currentTopDistance = extents.MinPoint.Y - sourceExtents.Value.MaxPoint.Y;
+                        double currentTopDistance =
+                            currentTopPoint.Y - sourceExtents.Value.MaxPoint.Y;
                         if (currentTopDistance >= -AutoDimTolerance &&
                             currentTopDistance < topDistance)
                         {
                             topDistance = Math.Max(0.0, currentTopDistance);
-                            topExtents = extents;
+                            topPoint = currentTopPoint;
                         }
+                    }
 
-                        double currentBottomDistance = sourceExtents.Value.MinPoint.Y - extents.MaxPoint.Y;
+                    if (TryGetDddDirectionalPoint(
+                        entity,
+                        extents,
+                        sourceCenter,
+                        useXAxis: false,
+                        direction: -1.0,
+                        out Point3d currentBottomPoint))
+                    {
+                        double currentBottomDistance =
+                            sourceExtents.Value.MinPoint.Y - currentBottomPoint.Y;
                         if (currentBottomDistance >= -AutoDimTolerance &&
                             currentBottomDistance < bottomDistance)
                         {
                             bottomDistance = Math.Max(0.0, currentBottomDistance);
-                            bottomExtents = extents;
+                            bottomPoint = currentBottomPoint;
                         }
                     }
                 }
 
-                if (!leftExtents.HasValue &&
-                    !rightExtents.HasValue &&
-                    !topExtents.HasValue &&
-                    !bottomExtents.HasValue)
+                if (!leftPoint.HasValue &&
+                    !rightPoint.HasValue &&
+                    !topPoint.HasValue &&
+                    !bottomPoint.HasValue)
                 {
-                    ed.WriteMessage("\nDDD_Dim_4_direction: không tìm thấy đối tượng bao quanh phù hợp.");
+                    WriteDddNoSurroundingTargetMessage(ed, targetFilter);
                     return;
                 }
 
@@ -348,7 +391,7 @@ namespace AUTOCAD_COMMANDS
                 int createdCount = 0;
                 double verticalDimPlacementX = sourceCenter.X - 200.0;
 
-                if (leftExtents.HasValue && leftDistance > AutoDimTolerance)
+                if (leftPoint.HasValue && leftDistance > AutoDimTolerance)
                 {
                     CreateDimWithLayer(
                         ms,
@@ -356,13 +399,13 @@ namespace AUTOCAD_COMMANDS
                         db,
                         dimLayerId,
                         0.0,
-                        new Point3d(leftExtents.Value.MaxPoint.X, sourceCenter.Y, 0.0),
+                        new Point3d(leftPoint.Value.X, sourceCenter.Y, 0.0),
                         new Point3d(sourceExtents.Value.MinPoint.X, sourceCenter.Y, 0.0),
                         new Point3d(sourceCenter.X, sourceCenter.Y, 0.0));
                     createdCount++;
                 }
 
-                if (rightExtents.HasValue && rightDistance > AutoDimTolerance)
+                if (rightPoint.HasValue && rightDistance > AutoDimTolerance)
                 {
                     CreateDimWithLayer(
                         ms,
@@ -371,12 +414,12 @@ namespace AUTOCAD_COMMANDS
                         dimLayerId,
                         0.0,
                         new Point3d(sourceExtents.Value.MaxPoint.X, sourceCenter.Y, 0.0),
-                        new Point3d(rightExtents.Value.MinPoint.X, sourceCenter.Y, 0.0),
+                        new Point3d(rightPoint.Value.X, sourceCenter.Y, 0.0),
                         new Point3d(sourceCenter.X, sourceCenter.Y, 0.0));
                     createdCount++;
                 }
 
-                if (topExtents.HasValue && topDistance > AutoDimTolerance)
+                if (topPoint.HasValue && topDistance > AutoDimTolerance)
                 {
                     CreateDimWithLayer(
                         ms,
@@ -385,12 +428,12 @@ namespace AUTOCAD_COMMANDS
                         dimLayerId,
                         Math.PI / 2.0,
                         new Point3d(sourceCenter.X, sourceExtents.Value.MaxPoint.Y, 0.0),
-                        new Point3d(sourceCenter.X, topExtents.Value.MinPoint.Y, 0.0),
+                        new Point3d(sourceCenter.X, topPoint.Value.Y, 0.0),
                         new Point3d(verticalDimPlacementX, sourceCenter.Y, 0.0));
                     createdCount++;
                 }
 
-                if (bottomExtents.HasValue && bottomDistance > AutoDimTolerance)
+                if (bottomPoint.HasValue && bottomDistance > AutoDimTolerance)
                 {
                     CreateDimWithLayer(
                         ms,
@@ -398,7 +441,7 @@ namespace AUTOCAD_COMMANDS
                         db,
                         dimLayerId,
                         Math.PI / 2.0,
-                        new Point3d(sourceCenter.X, bottomExtents.Value.MaxPoint.Y, 0.0),
+                        new Point3d(sourceCenter.X, bottomPoint.Value.Y, 0.0),
                         new Point3d(sourceCenter.X, sourceExtents.Value.MinPoint.Y, 0.0),
                         new Point3d(verticalDimPlacementX, sourceCenter.Y, 0.0));
                     createdCount++;
@@ -414,10 +457,10 @@ namespace AUTOCAD_COMMANDS
                 ed.WriteMessage($"\nDDD_Dim_4_direction: đã tạo {createdCount} dim.");
 
                 string mismatchWarning = BuildDddMismatchWarning(
-                    leftExtents.HasValue ? (double?)leftDistance : null,
-                    rightExtents.HasValue ? (double?)rightDistance : null,
-                    topExtents.HasValue ? (double?)topDistance : null,
-                    bottomExtents.HasValue ? (double?)bottomDistance : null);
+                    leftPoint.HasValue ? (double?)leftDistance : null,
+                    rightPoint.HasValue ? (double?)rightDistance : null,
+                    topPoint.HasValue ? (double?)topDistance : null,
+                    bottomPoint.HasValue ? (double?)bottomDistance : null);
                 if (!string.IsNullOrWhiteSpace(mismatchWarning))
                 {
                     WF.MessageBox.Show(
@@ -606,6 +649,187 @@ namespace AUTOCAD_COMMANDS
             return value.ToString("0.###", CultureInfo.InvariantCulture);
         }
 
+        private bool TryGetDddDirectionalPoint(
+            Entity entity,
+            Extents3d extents,
+            Point3d origin,
+            bool useXAxis,
+            double direction,
+            out Point3d point)
+        {
+            point = default;
+
+            if (!IsDddRayCandidate(extents, origin, useXAxis, direction))
+            {
+                return false;
+            }
+
+            using (Line scanLine = useXAxis
+                ? CreateDddHorizontalScanLine(origin, direction)
+                : CreateDddVerticalScanLine(origin, direction))
+            {
+                Point3dCollection intersections =
+                    TryGetDddIntersections(entity, scanLine, extents, useXAxis);
+                if (intersections == null || intersections.Count == 0)
+                {
+                    return false;
+                }
+
+                bool found = false;
+                double bestProjectedDistance = double.MaxValue;
+                foreach (Point3d candidate in intersections)
+                {
+                    double projectedDistance = useXAxis
+                        ? (candidate.X - origin.X) * direction
+                        : (candidate.Y - origin.Y) * direction;
+
+                    if (projectedDistance < -AutoDimTolerance ||
+                        projectedDistance >= bestProjectedDistance)
+                    {
+                        continue;
+                    }
+
+                    bestProjectedDistance = projectedDistance;
+                    point = candidate;
+                    found = true;
+                }
+
+                return found;
+            }
+        }
+
+        private bool IsDddRayCandidate(
+            Extents3d extents,
+            Point3d origin,
+            bool useXAxis,
+            double direction)
+        {
+            if (useXAxis)
+            {
+                if (origin.Y < extents.MinPoint.Y - AutoDimTolerance ||
+                    origin.Y > extents.MaxPoint.Y + AutoDimTolerance)
+                {
+                    return false;
+                }
+
+                return direction > 0.0
+                    ? extents.MaxPoint.X > origin.X + AutoDimTolerance
+                    : extents.MinPoint.X < origin.X - AutoDimTolerance;
+            }
+
+            if (origin.X < extents.MinPoint.X - AutoDimTolerance ||
+                origin.X > extents.MaxPoint.X + AutoDimTolerance)
+            {
+                return false;
+            }
+
+            return direction > 0.0
+                ? extents.MaxPoint.Y > origin.Y + AutoDimTolerance
+                : extents.MinPoint.Y < origin.Y - AutoDimTolerance;
+        }
+
+        private Point3dCollection TryGetDddIntersections(
+            Entity entity,
+            Line scanLine,
+            Extents3d extents,
+            bool useXAxis)
+        {
+            if (entity == null || scanLine == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                Point3dCollection intersections = new Point3dCollection();
+                entity.IntersectWith(
+                    scanLine,
+                    Intersect.OnBothOperands,
+                    intersections,
+                    IntPtr.Zero,
+                    IntPtr.Zero);
+                if (intersections.Count > 0)
+                {
+                    return intersections;
+                }
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception)
+            {
+            }
+
+            return entity is BlockReference
+                ? BuildDddExtentsFallbackIntersections(extents, scanLine, useXAxis)
+                : null;
+        }
+
+        private Point3dCollection BuildDddExtentsFallbackIntersections(
+            Extents3d extents,
+            Line scanLine,
+            bool useXAxis)
+        {
+            Point3dCollection points = new Point3dCollection();
+            if (useXAxis)
+            {
+                double scanY = scanLine.StartPoint.Y;
+                AddDddIntersectionPoint(points, new Point3d(extents.MinPoint.X, scanY, 0.0));
+                AddDddIntersectionPoint(points, new Point3d(extents.MaxPoint.X, scanY, 0.0));
+                return points;
+            }
+
+            double scanX = scanLine.StartPoint.X;
+            AddDddIntersectionPoint(points, new Point3d(scanX, extents.MinPoint.Y, 0.0));
+            AddDddIntersectionPoint(points, new Point3d(scanX, extents.MaxPoint.Y, 0.0));
+            return points;
+        }
+
+        private void AddDddIntersectionPoint(Point3dCollection points, Point3d candidate)
+        {
+            foreach (Point3d existing in points)
+            {
+                if (existing.DistanceTo(candidate) <= AutoDimTolerance)
+                {
+                    return;
+                }
+            }
+
+            points.Add(candidate);
+        }
+
+        private Line CreateDddHorizontalScanLine(Point3d origin, double direction)
+        {
+            return new Line(
+                origin,
+                new Point3d(
+                    origin.X + DddSearchDistance * direction,
+                    origin.Y,
+                    origin.Z));
+        }
+
+        private Line CreateDddVerticalScanLine(Point3d origin, double direction)
+        {
+            return new Line(
+                origin,
+                new Point3d(
+                    origin.X,
+                    origin.Y + DddSearchDistance * direction,
+                    origin.Z));
+        }
+
+        private static void WriteDddNoSurroundingTargetMessage(
+            Editor ed,
+            DddTargetFilter targetFilter)
+        {
+            if (targetFilter == null)
+            {
+                ed.WriteMessage("\nDDD_Dim_4_direction: không tìm thấy đối tượng bao quanh phù hợp.");
+                return;
+            }
+
+            ed.WriteMessage(
+                "\nDDD_Dim_4_direction: không tìm thấy đối tượng bao quanh phù hợp " +
+                $"với filter hiện tại ({targetFilter.ToDisplayText()}). Hãy thử Pick lại target hoặc chọn None.");
+        }
+
         // ======================================================
         // LẤY EXTENTS CỦA SELECTION
         // ======================================================
@@ -741,35 +965,7 @@ namespace AUTOCAD_COMMANDS
             DaaBaseModeStore.Save(baseMode);
             return true;
         }
-
-        private bool TryPromptDddSourceSelection(
-            Editor ed,
-            Database db,
-            ref DddTargetFilter targetFilter,
-            out ObjectId[] sourceIds)
-        {
-            sourceIds = null;
-
-            while (true)
-            {
-                if (!PromptForDddFilterMode(ed, db, ref targetFilter))
-                {
-                    return false;
-                }
-
-                SelectionSet sourceSelection = PromptForSelection(
-                    ed,
-                    "\nChọn đối tượng gốc hoặc nhóm đối tượng:");
-                if (sourceSelection == null)
-                {
-                    return false;
-                }
-
-                sourceIds = sourceSelection.GetObjectIds();
-                return sourceIds != null && sourceIds.Length > 0;
-            }
-        }
-
+        
         private bool PromptForDddFilterMode(
             Editor ed,
             Database db,
@@ -1117,7 +1313,7 @@ namespace AUTOCAD_COMMANDS
                 return false;
             }
 
-            return TryGetDddTargetKind(entity, out DddTargetKind kind) && kind == targetFilter.Kind;
+            return TryGetDddObjectKind(entity, out DddObjectKind kind) && kind == targetFilter.Kind;
         }
 
         private bool PromptForDddTargetFilter(
@@ -1207,7 +1403,7 @@ namespace AUTOCAD_COMMANDS
                 return false;
             }
 
-            if (!TryGetDddTargetKind(entity, out DddTargetKind kind))
+            if (!TryGetDddObjectKind(entity, out DddObjectKind kind))
             {
                 return false;
             }
@@ -1220,11 +1416,11 @@ namespace AUTOCAD_COMMANDS
             return true;
         }
 
-        private bool TryGetDddTargetKind(Entity entity, out DddTargetKind kind)
+        private bool TryGetDddObjectKind(Entity entity, out DddObjectKind kind)
         {
             if (entity is Line)
             {
-                kind = DddTargetKind.Line;
+                kind = DddObjectKind.Line;
                 return true;
             }
 
@@ -1232,13 +1428,13 @@ namespace AUTOCAD_COMMANDS
                 entity is Polyline2d ||
                 entity is Polyline3d)
             {
-                kind = DddTargetKind.Polyline;
+                kind = DddObjectKind.Polyline;
                 return true;
             }
 
             if (entity is BlockReference)
             {
-                kind = DddTargetKind.Block;
+                kind = DddObjectKind.Block;
                 return true;
             }
 
@@ -1285,22 +1481,16 @@ namespace AUTOCAD_COMMANDS
             return layerId;
         }
 
-        private enum DddTargetKind
+        private enum DddObjectKind
         {
             Line,
             Polyline,
             Block
         }
 
-        private enum DaaBaseMode
-        {
-            Object,
-            Point
-        }
-
         private sealed class DddTargetFilter
         {
-            public DddTargetKind Kind { get; set; }
+            public DddObjectKind Kind { get; set; }
             public string LayerName { get; set; }
 
             public string ToDisplayText()
@@ -1337,7 +1527,7 @@ namespace AUTOCAD_COMMANDS
                         return null;
                     }
 
-                    if (!Enum.TryParse(parts[0].Trim(), true, out DddTargetKind kind))
+                    if (!Enum.TryParse(parts[0].Trim(), true, out DddObjectKind kind))
                     {
                         return null;
                     }
@@ -1385,6 +1575,12 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
+        private enum DaaBaseMode
+        {
+            Object,
+            Point
+        }
+
         private static class DaaBaseModeStore
         {
             private static readonly string FilePath =
@@ -1421,6 +1617,34 @@ namespace AUTOCAD_COMMANDS
                 catch
                 {
                 }
+            }
+        }
+
+        private bool TryPromptDddSourceSelection(
+            Editor ed,
+            Database db,
+            ref DddTargetFilter targetFilter,
+            out ObjectId[] sourceIds)
+        {
+            sourceIds = null;
+
+            while (true)
+            {
+                if (!PromptForDddFilterMode(ed, db, ref targetFilter))
+                {
+                    return false;
+                }
+
+                SelectionSet sourceSelection = PromptForSelection(
+                    ed,
+                    "\nChọn đối tượng gốc hoặc nhóm đối tượng:");
+                if (sourceSelection == null)
+                {
+                    return false;
+                }
+
+                sourceIds = sourceSelection.GetObjectIds();
+                return sourceIds != null && sourceIds.Length > 0;
             }
         }
     }
