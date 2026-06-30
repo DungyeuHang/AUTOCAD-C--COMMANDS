@@ -562,6 +562,440 @@ namespace AUTOCAD_COMMANDS
                     : $"\nBD_CHANGE_POSITION_DIM: đã đổi vị trí đặt cho {changedCount} DIM.");
         }
 
+        [CommandMethod("DPA_DimAutoPline")]
+        public void DimAutoPline()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            if (doc == null)
+            {
+                return;
+            }
+
+            Editor ed = doc.Editor;
+            Database db = doc.Database;
+
+            PromptEntityOptions entityOptions =
+                new PromptEntityOptions("\nChọn Polyline để tạo DIM tự động: ");
+            entityOptions.SetRejectMessage("\nChỉ hỗ trợ Polyline.");
+            entityOptions.AddAllowedClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline), true);
+
+            PromptEntityResult entityResult = ed.GetEntity(entityOptions);
+            if (entityResult.Status != PromptStatus.OK)
+            {
+                return;
+            }
+
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                Autodesk.AutoCAD.DatabaseServices.Polyline polyline =
+                    tr.GetObject(entityResult.ObjectId, OpenMode.ForWrite) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                if (polyline == null)
+                {
+                    ed.WriteMessage("\nDPA_DimAutoPline: không đọc được Polyline.");
+                    return;
+                }
+
+                int vertexCount = polyline.NumberOfVertices;
+                if (vertexCount < 2)
+                {
+                    ed.WriteMessage("\nDPA_DimAutoPline: Polyline cần ít nhất 2 đỉnh.");
+                    return;
+                }
+
+                DpaDimAutoPlineSettings settings = DpaDimAutoPlineSettings.Load();
+                if (!TryShowDpaSettingsDialog(settings, out DpaDimAutoPlineSettings editedSettings))
+                {
+                    return;
+                }
+
+                settings = editedSettings;
+                settings.Save();
+
+                if (!string.Equals(settings.Orientation, "Keep current", StringComparison.OrdinalIgnoreCase))
+                {
+                    double initialSignedArea = GetPolylineSignedArea(polyline);
+                    bool shouldReverse = false;
+
+                    if (string.Equals(settings.Orientation, "Counterclockwise", StringComparison.OrdinalIgnoreCase))
+                    {
+                        shouldReverse = initialSignedArea < 0.0;
+                    }
+                    else if (string.Equals(settings.Orientation, "Clockwise", StringComparison.OrdinalIgnoreCase))
+                    {
+                        shouldReverse = initialSignedArea >= 0.0;
+                    }
+
+                    if (shouldReverse)
+                    {
+                        polyline.ReverseCurve();
+                    }
+                }
+
+                int startIndex = 1;
+                int endIndex = vertexCount;
+
+                double scaleFactor = settings.ScaleFactor;
+                double offsetMul = settings.OffsetMul;
+                double dimOffsetMul = settings.DimOffsetMul;
+
+                int start0 = NormalizeVertexIndex(startIndex, vertexCount);
+                int end0 = NormalizeVertexIndex(endIndex, vertexCount);
+
+                if (start0 < 0 || end0 < 0 || start0 >= end0 || end0 >= vertexCount)
+                {
+                    ed.WriteMessage("\nDPA_DimAutoPline: phạm vi đỉnh không hợp lệ.");
+                    return;
+                }
+
+                List<Point2d> vertices = new List<Point2d>();
+                for (int i = 0; i < vertexCount; i++)
+                {
+                    vertices.Add(polyline.GetPoint2dAt(i));
+                }
+
+                double signedArea = GetPolylineSignedArea(vertices);
+                double baseOffset = 70.0;
+                double sf = scaleFactor > 0.0 ? scaleFactor : 1.0;
+                double dimOffset = Math.Max(15.0, baseOffset / sf);
+                double effectiveOffset = dimOffset * offsetMul * dimOffsetMul;
+
+                BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                BlockTableRecord ms =
+                    tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
+
+                ObjectId layerId = GetCurrentLayerId(tr, db);
+                int createdCount = 0;
+                for (int n = start0; n < end0; n++)
+                {
+                    Point2d p1 = vertices[n];
+                    Point2d p2 = vertices[n + 1];
+
+                    bool isXEqual = Math.Abs(p1.X - p2.X) < 1e-6;
+                    bool isYEqual = Math.Abs(p1.Y - p2.Y) < 1e-6;
+
+                    if (isXEqual && !isYEqual)
+                    {
+                        double midX = (p1.X + p2.X) / 2.0;
+                        double midY = (p1.Y + p2.Y) / 2.0;
+                        double sign = signedArea > 0.0 ? -1.0 : 1.0;
+                        Point3d dimPoint = new Point3d(midX + sign * effectiveOffset, midY, 0.0);
+                        CreateRotatedDimWithLayer(
+                            ms,
+                            tr,
+                            db,
+                            layerId,
+                            Math.PI / 2.0,
+                            new Point3d(p1.X, p1.Y, 0.0),
+                            new Point3d(p2.X, p2.Y, 0.0),
+                            dimPoint,
+                            scaleFactor);
+                        createdCount++;
+                    }
+                    else if (isYEqual && !isXEqual)
+                    {
+                        double midX = (p1.X + p2.X) / 2.0;
+                        double midY = (p1.Y + p2.Y) / 2.0;
+                        double sign = signedArea > 0.0 ? -1.0 : 1.0;
+                        Point3d dimPoint = new Point3d(midX, midY + sign * effectiveOffset, 0.0);
+                        CreateRotatedDimWithLayer(
+                            ms,
+                            tr,
+                            db,
+                            layerId,
+                            0.0,
+                            new Point3d(p1.X, p1.Y, 0.0),
+                            new Point3d(p2.X, p2.Y, 0.0),
+                            dimPoint,
+                            scaleFactor);
+                        createdCount++;
+                    }
+                    else
+                    {
+                        double dx = p2.X - p1.X;
+                        double dy = p2.Y - p1.Y;
+                        double length = Math.Sqrt(dx * dx + dy * dy);
+                        if (length < 1e-9)
+                        {
+                            continue;
+                        }
+
+                        double nx = -dy / length;
+                        double ny = dx / length;
+                        double sign = signedArea > 0.0 ? -1.0 : 1.0;
+                        double midX = (p1.X + p2.X) / 2.0;
+                        double midY = (p1.Y + p2.Y) / 2.0;
+                        Point3d dimPoint = new Point3d(midX + nx * sign * effectiveOffset, midY + ny * sign * effectiveOffset, 0.0);
+                        CreateAlignedDimWithLayer(
+                            ms,
+                            tr,
+                            db,
+                            layerId,
+                            new Point3d(p1.X, p1.Y, 0.0),
+                            new Point3d(p2.X, p2.Y, 0.0),
+                            dimPoint,
+                            scaleFactor);
+                        createdCount++;
+
+                        if (settings.CreateAngular)
+                        {
+                            Point3d center = new Point3d(p1.X, p1.Y, 0.0);
+                            Point3d firstRay = new Point3d(p2.X, p2.Y, 0.0);
+                            Point3d secondRay = n > 0
+                                ? new Point3d(vertices[n - 1].X, vertices[n - 1].Y, 0.0)
+                                : new Point3d(p1.X - 20.0, p1.Y, 0.0);
+                            Point3d angularPoint = new Point3d(
+                                center.X + nx * sign * effectiveOffset + 30.0,
+                                center.Y + ny * sign * effectiveOffset + 30.0,
+                                0.0);
+                            CreateAngularDimWithLayer(
+                                ms,
+                                tr,
+                                db,
+                                layerId,
+                                center,
+                                firstRay,
+                                secondRay,
+                                angularPoint,
+                                scaleFactor);
+                        }
+                    }
+                }
+
+                tr.Commit();
+                ed.Regen();
+                ed.WriteMessage($"\nDPA_DimAutoPline: đã tạo {createdCount} dim.");
+            }
+        }
+
+        private static int NormalizeVertexIndex(int index, int vertexCount)
+        {
+            if (index < 0)
+            {
+                return -1;
+            }
+
+            if (index == 0)
+            {
+                return 0;
+            }
+
+            if (index >= 1 && index <= vertexCount)
+            {
+                return index - 1;
+            }
+
+            if (index >= 0 && index < vertexCount)
+            {
+                return index;
+            }
+
+            return -1;
+        }
+
+        private static ObjectId GetCurrentLayerId(Transaction tr, Database db)
+        {
+            try
+            {
+                if (db == null || tr == null)
+                {
+                    return ObjectId.Null;
+                }
+
+                return db.Clayer;
+            }
+            catch
+            {
+                return ObjectId.Null;
+            }
+        }
+
+        private static bool TryShowDpaSettingsDialog(DpaDimAutoPlineSettings settings, out DpaDimAutoPlineSettings result)
+        {
+            result = settings ?? new DpaDimAutoPlineSettings();
+
+            WF.Form dialog = new WF.Form
+            {
+                Text = "DPA Dim Auto Pline",
+                Width = 420,
+                Height = 340,
+                StartPosition = WF.FormStartPosition.CenterScreen,
+                FormBorderStyle = WF.FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false
+            };
+
+            WF.Label scaleLabel = new WF.Label { Text = "Scale factor:", AutoSize = true, Top = 12, Left = 12 };
+            WF.TextBox scaleBox = new WF.TextBox { Text = result.ScaleFactor.ToString("0.######", CultureInfo.InvariantCulture), Top = 8, Left = 180, Width = 120 };
+
+            WF.Label offsetLabel = new WF.Label { Text = "Offset mul:", AutoSize = true, Top = 42, Left = 12 };
+            WF.TextBox offsetBox = new WF.TextBox { Text = result.OffsetMul.ToString("0.######", CultureInfo.InvariantCulture), Top = 38, Left = 180, Width = 120 };
+
+            WF.Label dimOffsetLabel = new WF.Label { Text = "Dim offset mul:", AutoSize = true, Top = 72, Left = 12 };
+            WF.TextBox dimOffsetBox = new WF.TextBox { Text = result.DimOffsetMul.ToString("0.######", CultureInfo.InvariantCulture), Top = 68, Left = 180, Width = 120 };
+
+            WF.Label orientLabel = new WF.Label { Text = "Polyline orientation:", AutoSize = true, Top = 102, Left = 12 };
+            WF.ComboBox orientBox = new WF.ComboBox { DropDownStyle = WF.ComboBoxStyle.DropDownList, Top = 98, Left = 180, Width = 180 };
+            orientBox.Items.Add("Keep current");
+            orientBox.Items.Add("Counterclockwise");
+            orientBox.Items.Add("Clockwise");
+            orientBox.SelectedItem = string.IsNullOrWhiteSpace(result.Orientation) ? "Keep current" : result.Orientation;
+
+            WF.CheckBox angularBox = new WF.CheckBox { Text = "Create angular dim", Checked = result.CreateAngular, Top = 132, Left = 180, AutoSize = true };
+
+            WF.Button okButton = new WF.Button { Text = "OK", DialogResult = WF.DialogResult.OK, Top = 168, Left = 180, Width = 80 };
+            WF.Button cancelButton = new WF.Button { Text = "Cancel", DialogResult = WF.DialogResult.Cancel, Top = 168, Left = 270, Width = 80 };
+            dialog.Controls.Add(scaleLabel);
+            dialog.Controls.Add(scaleBox);
+            dialog.Controls.Add(offsetLabel);
+            dialog.Controls.Add(offsetBox);
+            dialog.Controls.Add(dimOffsetLabel);
+            dialog.Controls.Add(dimOffsetBox);
+            dialog.Controls.Add(orientLabel);
+            dialog.Controls.Add(orientBox);
+            dialog.Controls.Add(angularBox);
+            dialog.Controls.Add(okButton);
+            dialog.Controls.Add(cancelButton);
+
+            dialog.AcceptButton = okButton;
+            dialog.CancelButton = cancelButton;
+
+            WF.DialogResult dialogResult = dialog.ShowDialog();
+            if (dialogResult != WF.DialogResult.OK)
+            {
+                return false;
+            }
+
+            try
+            {
+                result.ScaleFactor = double.Parse(scaleBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture);
+                result.OffsetMul = double.Parse(offsetBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture);
+                result.DimOffsetMul = double.Parse(dimOffsetBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture);
+                result.Orientation = orientBox.SelectedItem?.ToString() ?? "Keep current";
+                result.CreateAngular = angularBox.Checked;
+            }
+            catch
+            {
+                result = settings ?? new DpaDimAutoPlineSettings();
+            }
+
+            return true;
+        }
+
+        private static double GetPolylineSignedArea(Autodesk.AutoCAD.DatabaseServices.Polyline polyline)
+        {
+            if (polyline == null || polyline.NumberOfVertices < 3)
+            {
+                return 0.0;
+            }
+
+            double area = 0.0;
+            int count = polyline.NumberOfVertices;
+            for (int i = 0; i < count; i++)
+            {
+                Point2d current = polyline.GetPoint2dAt(i);
+                Point2d next = polyline.GetPoint2dAt((i + 1) % count);
+                area += current.X * next.Y - next.X * current.Y;
+            }
+
+            return area / 2.0;
+        }
+
+        private static double GetPolylineSignedArea(IList<Point2d> vertices)
+        {
+            if (vertices == null || vertices.Count < 3)
+            {
+                return 0.0;
+            }
+
+            double area = 0.0;
+            int count = vertices.Count;
+            for (int i = 0; i < count; i++)
+            {
+                Point2d current = vertices[i];
+                Point2d next = vertices[(i + 1) % count];
+                area += current.X * next.Y - next.X * current.Y;
+            }
+
+            return area / 2.0;
+        }
+
+        private sealed class DpaDimAutoPlineSettings
+        {
+            public double ScaleFactor { get; set; } = 1.0;
+            public double OffsetMul { get; set; } = 1.0;
+            public double DimOffsetMul { get; set; } = 1.0;
+            public string Orientation { get; set; } = "Keep current";
+            public bool CreateAngular { get; set; } = false;
+
+            private static string FilePath =>
+                Path.Combine(
+                    Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
+                    "dpa_dim_auto_pline_settings.tsv");
+
+            public static DpaDimAutoPlineSettings Load()
+            {
+                DpaDimAutoPlineSettings settings = new DpaDimAutoPlineSettings();
+                if (!File.Exists(FilePath))
+                {
+                    return settings;
+                }
+
+                try
+                {
+                    string[] parts = File.ReadAllText(FilePath, Encoding.UTF8).Split('\t');
+                    if (parts.Length >= 1 && double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double scale))
+                    {
+                        settings.ScaleFactor = scale;
+                    }
+
+                    if (parts.Length >= 2 && double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double offset))
+                    {
+                        settings.OffsetMul = offset;
+                    }
+
+                    if (parts.Length >= 3 && double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out double dimOffset))
+                    {
+                        settings.DimOffsetMul = dimOffset;
+                    }
+
+                    if (parts.Length >= 4 && !string.IsNullOrWhiteSpace(parts[3]))
+                    {
+                        settings.Orientation = parts[3];
+                    }
+
+                    if (parts.Length >= 5 && bool.TryParse(parts[4], out bool createAngular))
+                    {
+                        settings.CreateAngular = createAngular;
+                    }
+                }
+                catch
+                {
+                    return new DpaDimAutoPlineSettings();
+                }
+
+                return settings;
+            }
+
+            public void Save()
+            {
+                try
+                {
+                    string content = string.Join("\t", new[]
+                    {
+                        ScaleFactor.ToString("0.######", CultureInfo.InvariantCulture),
+                        OffsetMul.ToString("0.######", CultureInfo.InvariantCulture),
+                        DimOffsetMul.ToString("0.######", CultureInfo.InvariantCulture),
+                        Orientation ?? "Keep current",
+                        CreateAngular.ToString()
+                    });
+                    File.WriteAllText(FilePath, content, Encoding.UTF8);
+                }
+                catch
+                {
+                }
+            }
+        }
+
         // ======================================================
         // HÀM TẠO DIM
         // ======================================================
@@ -599,6 +1033,124 @@ namespace AUTOCAD_COMMANDS
                 dimPoint,
                 string.Empty,
                 db.Dimstyle);
+            ConfigureDimension(dim, layerId, db, 1.0);
+
+            ms.AppendEntity(dim);
+            tr.AddNewlyCreatedDBObject(dim, true);
+        }
+
+        private void CreateRotatedDimWithLayer(
+            BlockTableRecord ms,
+            Transaction tr,
+            Database db,
+            ObjectId layerId,
+            double angle,
+            Point3d p1,
+            Point3d p2,
+            Point3d dimPoint,
+            double scaleFactor)
+        {
+            RotatedDimension dim = new RotatedDimension(
+                angle,
+                p1,
+                p2,
+                dimPoint,
+                string.Empty,
+                db.Dimstyle);
+            ConfigureDimension(dim, layerId, db, scaleFactor);
+
+            ms.AppendEntity(dim);
+            tr.AddNewlyCreatedDBObject(dim, true);
+        }
+
+        private void CreateAlignedDimWithLayer(
+            BlockTableRecord ms,
+            Transaction tr,
+            Database db,
+            ObjectId layerId,
+            Point3d p1,
+            Point3d p2,
+            Point3d dimPoint,
+            double scaleFactor)
+        {
+            AlignedDimension dim = new AlignedDimension(
+                p1,
+                p2,
+                dimPoint,
+                string.Empty,
+                db.Dimstyle);
+            ConfigureDimension(dim, layerId, db, scaleFactor);
+
+            ms.AppendEntity(dim);
+            tr.AddNewlyCreatedDBObject(dim, true);
+        }
+
+        private void CreateAngularDimWithLayer(
+            BlockTableRecord ms,
+            Transaction tr,
+            Database db,
+            ObjectId layerId,
+            Point3d center,
+            Point3d firstLine,
+            Point3d secondLine,
+            Point3d dimPoint,
+            double scaleFactor)
+        {
+            try
+            {
+                Type angularType = Type.GetType("Autodesk.AutoCAD.DatabaseServices.AngularDimension, acdbmgd", false);
+                if (angularType == null)
+                {
+                    return;
+                }
+
+                ConstructorInfo constructor = angularType.GetConstructor(
+                    new[]
+                    {
+                        typeof(Point3d),
+                        typeof(Point3d),
+                        typeof(Point3d),
+                        typeof(Point3d),
+                        typeof(string),
+                        typeof(ObjectId)
+                    });
+
+                if (constructor == null)
+                {
+                    return;
+                }
+
+                object dimObject = constructor.Invoke(
+                    new object[]
+                    {
+                        center,
+                        firstLine,
+                        secondLine,
+                        dimPoint,
+                        string.Empty,
+                        db.Dimstyle
+                    });
+
+                if (dimObject is Dimension dimension)
+                {
+                    ConfigureDimension(dimension, layerId, db, scaleFactor);
+                    ms.AppendEntity(dimension);
+                    tr.AddNewlyCreatedDBObject(dimension, true);
+                }
+            }
+            catch (System.Exception)
+            {
+                // Nếu API không có AngularDimension trên máy build hiện tại thì bỏ qua để giữ lệnh còn chạy.
+            }
+        }
+
+        private void ConfigureDimension(Dimension dim, ObjectId layerId)
+        {
+            ConfigureDimension(dim, layerId, null, 1.0);
+        }
+
+        private void ConfigureDimension(Dimension dim, ObjectId layerId, Database db, double scaleFactor)
+        {
             if (!layerId.IsNull)
             {
                 dim.LayerId = layerId;
@@ -608,8 +1160,66 @@ namespace AUTOCAD_COMMANDS
                 dim.Layer = "_mss.kichthuoc";
             }
 
-            ms.AppendEntity(dim);
-            tr.AddNewlyCreatedDBObject(dim, true);
+            if (scaleFactor > 0.0)
+            {
+                dim.Dimscale = scaleFactor;
+            }
+
+            ApplyCurrentDimStyleTextSettings(dim, db);
+        }
+
+        private static void ApplyCurrentDimStyleTextSettings(Dimension dim, Database db)
+        {
+            if (dim == null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (db != null)
+                {
+                    double textHeight = db.Dimasz;
+                    if (textHeight > 1e-9)
+                    {
+                        PropertyInfo textHeightProperty = dim.GetType().GetProperty("TextHeight");
+                        if (textHeightProperty != null && textHeightProperty.CanWrite)
+                        {
+                            textHeightProperty.SetValue(dim, textHeight);
+                        }
+
+                        PropertyInfo dimensionTextHeightProperty = dim.GetType().GetProperty("DimensionTextHeight");
+                        if (dimensionTextHeightProperty != null && dimensionTextHeightProperty.CanWrite)
+                        {
+                            dimensionTextHeightProperty.SetValue(dim, textHeight);
+                        }
+
+                        PropertyInfo textHeightOverrideProperty = dim.GetType().GetProperty("TextHeightOverride");
+                        if (textHeightOverrideProperty != null && textHeightOverrideProperty.CanWrite)
+                        {
+                            textHeightOverrideProperty.SetValue(dim, textHeight);
+                        }
+                    }
+
+                    if (!db.Textstyle.IsNull)
+                    {
+                        PropertyInfo textStyleProperty = dim.GetType().GetProperty("TextStyleId");
+                        if (textStyleProperty != null && textStyleProperty.CanWrite)
+                        {
+                            textStyleProperty.SetValue(dim, db.Textstyle);
+                        }
+
+                        PropertyInfo textStylePropertyAlt = dim.GetType().GetProperty("TextStyle");
+                        if (textStylePropertyAlt != null && textStylePropertyAlt.CanWrite)
+                        {
+                            textStylePropertyAlt.SetValue(dim, db.Textstyle);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
         }
 
         private static string BuildDddMismatchWarning(
