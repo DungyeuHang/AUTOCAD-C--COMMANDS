@@ -1923,7 +1923,34 @@ namespace AUTOCAD_COMMANDS
                 return false;
             }
 
-            return TryGetDddObjectKind(entity, out DddObjectKind kind) && kind == targetFilter.Kind;
+            if (!TryGetDddObjectKind(entity, out DddObjectKind kind) || kind != targetFilter.Kind)
+            {
+                return false;
+            }
+
+            if (targetFilter.IsClosed.HasValue && kind == DddObjectKind.Polyline)
+            {
+                bool? entityIsClosed = null;
+                if (entity is Autodesk.AutoCAD.DatabaseServices.Polyline pl)
+                {
+                    entityIsClosed = pl.Closed;
+                }
+                else if (entity is Polyline2d p2d)
+                {
+                    entityIsClosed = p2d.Closed;
+                }
+                else if (entity is Polyline3d p3d)
+                {
+                    entityIsClosed = p3d.Closed;
+                }
+
+                if (entityIsClosed != targetFilter.IsClosed)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private bool PromptForDddTargetFilter(
@@ -2018,11 +2045,25 @@ namespace AUTOCAD_COMMANDS
                 return false;
             }
 
-            targetFilter = new DddTargetFilter
+            targetFilter = new DddTargetFilter()
             {
                 Kind = kind,
                 LayerName = entity.Layer
             };
+
+            if (entity is Autodesk.AutoCAD.DatabaseServices.Polyline pl)
+            {
+                targetFilter.IsClosed = pl.Closed;
+            }
+            else if (entity is Polyline2d p2d)
+            {
+                targetFilter.IsClosed = p2d.Closed;
+            }
+            else if (entity is Polyline3d p3d)
+            {
+                targetFilter.IsClosed = p3d.Closed;
+            }
+
             return true;
         }
 
@@ -2102,10 +2143,17 @@ namespace AUTOCAD_COMMANDS
         {
             public DddObjectKind Kind { get; set; }
             public string LayerName { get; set; }
+            public bool? IsClosed { get; set; }
 
             public string ToDisplayText()
             {
-                return $"{Kind} | {LayerName}";
+                string text = $"{Kind} | {LayerName}";
+                if (IsClosed.HasValue)
+                {
+                    text += $" | Closed={IsClosed.Value}";
+                }
+
+                return text;
             }
         }
 
@@ -2148,11 +2196,18 @@ namespace AUTOCAD_COMMANDS
                         return null;
                     }
 
-                    return new DddTargetFilter
+                    var filter = new DddTargetFilter
                     {
                         Kind = kind,
                         LayerName = layerName
                     };
+
+                    if (parts.Length >= 3 && bool.TryParse(parts[2].Trim(), out bool isClosed))
+                    {
+                        filter.IsClosed = isClosed;
+                    }
+
+                    return filter;
                 }
                 catch
                 {
@@ -2174,9 +2229,11 @@ namespace AUTOCAD_COMMANDS
                         return;
                     }
 
+                    string isClosedString = filter.IsClosed.HasValue ? $"\t{filter.IsClosed.Value}" : string.Empty;
                     File.WriteAllText(
                         FilePath,
-                        filter.Kind + "\t" + (filter.LayerName ?? string.Empty),
+                        filter.Kind + "\t" + (filter.LayerName ?? string.Empty) +
+                        isClosedString,
                         Encoding.UTF8);
                 }
                 catch
