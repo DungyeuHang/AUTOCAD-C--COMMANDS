@@ -31,12 +31,11 @@ namespace AUTOCAD_COMMANDS
     internal sealed class PaletteToolbarButton : WF.Button
     {
         private static readonly Color ForeColorNormal = Color.FromArgb(242, 242, 244);
-        private static readonly Color DefaultTopColor = Color.FromArgb(50, 52, 58);
-        private static readonly Color DefaultBottomColor = Color.FromArgb(22, 24, 28);
-        private static readonly Color DefaultBorderColor = Color.FromArgb(84, 86, 92);
-        private static readonly Color PrimaryTopColor = Color.FromArgb(88, 144, 212);
-        private static readonly Color PrimaryBottomColor = Color.FromArgb(28, 72, 124);
-        private static readonly Color PrimaryBorderColor = Color.FromArgb(102, 164, 232);
+        private static readonly Color NormalBgColor = Color.FromArgb(40, 46, 58);
+        private static readonly Color HoverBgColor = Color.FromArgb(80, 90, 112);
+        private static readonly Color DisabledBgColor = Color.FromArgb(34, 34, 36);
+        private static readonly Color DisabledForeColor = Color.FromArgb(132, 132, 136);
+        private static readonly Color ShadowColor = Color.Black;
         private bool _hovered;
         private bool _pressed;
 
@@ -62,8 +61,6 @@ namespace AUTOCAD_COMMANDS
             BackColor = Color.Transparent;
             UseVisualStyleBackColor = false;
         }
-
-        public bool IsPrimary { get; set; }
 
         protected override void OnMouseEnter(EventArgs e)
         {
@@ -106,70 +103,50 @@ namespace AUTOCAD_COMMANDS
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
-            Rectangle shadowBounds = new Rectangle(1, 2, Math.Max(1, Width - 3), Math.Max(1, Height - 4));
-            if (!_pressed)
+            Color backColor;
+            Color foreColor = Enabled ? ForeColorNormal : DisabledForeColor;
+            const int shadowOffset = 2;
+            bool drawShadow = false;
+
+            Rectangle buttonBounds = new Rectangle(0, 0, Math.Max(1, Width - shadowOffset), Math.Max(1, Height - shadowOffset));
+            Rectangle textBounds = buttonBounds;
+
+            if (!Enabled)
             {
-                using (GraphicsPath shadowPath = CreateRoundedPath(shadowBounds, 6))
-                using (SolidBrush shadowBrush = new SolidBrush(Color.FromArgb(85, 0, 0, 0)))
+                backColor = DisabledBgColor;
+            }
+            else if (_pressed)
+            {
+                backColor = HoverBgColor;
+                buttonBounds.Offset(shadowOffset, shadowOffset);
+                textBounds.Offset(shadowOffset, shadowOffset);
+            }
+            else if (_hovered)
+            {
+                backColor = HoverBgColor;
+                drawShadow = true;
+            }
+            else
+            {
+                backColor = NormalBgColor;
+                drawShadow = true;
+            }
+
+            if (drawShadow)
+            {
+                Rectangle shadowBounds = buttonBounds;
+                shadowBounds.Offset(shadowOffset, shadowOffset);
+                using (GraphicsPath shadowPath = CreateRoundedPath(shadowBounds, 5))
+                using (SolidBrush shadowBrush = new SolidBrush(ShadowColor))
                 {
                     e.Graphics.FillPath(shadowBrush, shadowPath);
                 }
             }
 
-            Rectangle buttonBounds = new Rectangle(0, 0, Math.Max(1, Width - 2), Math.Max(1, Height - 3));
-            if (_pressed)
-            {
-                buttonBounds.Offset(0, 1);
-            }
-
-            (Color topColor, Color bottomColor, Color borderColor) = GetColors();
-            using (GraphicsPath buttonPath = CreateRoundedPath(buttonBounds, 6))
-            using (LinearGradientBrush fillBrush = new LinearGradientBrush(
-                buttonBounds,
-                topColor,
-                bottomColor,
-                LinearGradientMode.Vertical))
-            using (Pen borderPen = new Pen(borderColor))
-            using (Pen innerPen = new Pen(Color.FromArgb(60, 255, 255, 255)))
+            using (GraphicsPath buttonPath = CreateRoundedPath(buttonBounds, 5))
+            using (SolidBrush fillBrush = new SolidBrush(backColor))
             {
                 e.Graphics.FillPath(fillBrush, buttonPath);
-
-                Rectangle glossBounds = new Rectangle(
-                    buttonBounds.X + 1,
-                    buttonBounds.Y + 1,
-                    Math.Max(1, buttonBounds.Width - 2),
-                    Math.Max(8, (buttonBounds.Height / 2) - 1));
-                GraphicsState state = e.Graphics.Save();
-                e.Graphics.SetClip(buttonPath);
-                using (LinearGradientBrush glossBrush = new LinearGradientBrush(
-                    glossBounds,
-                    Color.FromArgb(IsPrimary ? 64 : 46, 255, 255, 255),
-                    Color.FromArgb(0, 255, 255, 255),
-                    LinearGradientMode.Vertical))
-                {
-                    e.Graphics.FillRectangle(glossBrush, glossBounds);
-                }
-
-                e.Graphics.Restore(state);
-                e.Graphics.DrawPath(borderPen, buttonPath);
-                e.Graphics.DrawPath(innerPen, buttonPath);
-            }
-
-            if (_hovered && !_pressed)
-            {
-                using (GraphicsPath hoverPath = CreateRoundedPath(buttonBounds, 6))
-                using (Pen hoverPen = new Pen(IsPrimary
-                    ? Color.FromArgb(176, 214, 255)
-                    : Color.FromArgb(132, 146, 168)))
-                {
-                    e.Graphics.DrawPath(hoverPen, hoverPath);
-                }
-            }
-
-            Rectangle textBounds = Rectangle.Inflate(buttonBounds, -12, -2);
-            if (_pressed)
-            {
-                textBounds.Offset(0, 1);
             }
 
             WF.TextRenderer.DrawText(
@@ -177,61 +154,11 @@ namespace AUTOCAD_COMMANDS
                 Text,
                 Font,
                 textBounds,
-                Enabled ? ForeColorNormal : Color.FromArgb(132, 132, 136),
+                foreColor,
                 WF.TextFormatFlags.HorizontalCenter |
                 WF.TextFormatFlags.VerticalCenter |
                 WF.TextFormatFlags.EndEllipsis |
                 WF.TextFormatFlags.NoPadding);
-        }
-
-        private (Color topColor, Color bottomColor, Color borderColor) GetColors()
-        {
-            if (!Enabled)
-            {
-                return (
-                    Color.FromArgb(34, 34, 36),
-                    Color.FromArgb(20, 20, 22),
-                    Color.FromArgb(64, 64, 68));
-            }
-
-            if (IsPrimary)
-            {
-                if (_pressed)
-                {
-                    return (
-                        Color.FromArgb(52, 102, 166),
-                        Color.FromArgb(20, 58, 104),
-                        Color.FromArgb(126, 186, 248));
-                }
-
-                if (_hovered)
-                {
-                    return (
-                        Color.FromArgb(112, 168, 232),
-                        Color.FromArgb(36, 86, 142),
-                        Color.FromArgb(146, 208, 255));
-                }
-
-                return (PrimaryTopColor, PrimaryBottomColor, PrimaryBorderColor);
-            }
-
-            if (_pressed)
-            {
-                return (
-                    Color.FromArgb(36, 38, 42),
-                    Color.FromArgb(18, 18, 20),
-                    Color.FromArgb(94, 96, 104));
-            }
-
-            if (_hovered)
-            {
-                return (
-                    Color.FromArgb(66, 70, 78),
-                    Color.FromArgb(28, 30, 34),
-                    Color.FromArgb(118, 124, 136));
-            }
-
-            return (DefaultTopColor, DefaultBottomColor, DefaultBorderColor);
         }
 
         private static GraphicsPath CreateRoundedPath(Rectangle bounds, int radius)

@@ -1,4 +1,4 @@
-﻿using Autodesk.AutoCAD.ApplicationServices;
+﻿﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.GraphicsInterface;
@@ -37,19 +37,22 @@ namespace AUTOCAD_COMMANDS
     // ======================================================
     internal sealed class DungXPaletteControl : WF.UserControl
     {
-        private static readonly Color BackgroundColor = Color.FromArgb(12, 12, 12);
-        private static readonly Color PanelColor = Color.FromArgb(18, 18, 18);
-        private static readonly Color BorderColor = Color.FromArgb(42, 42, 42);
+        private static readonly Color BackgroundColor = Color.FromArgb(59, 68, 83);
+        private static readonly Color PanelColor = Color.FromArgb(59, 68, 83);
+        private static readonly Color BorderColor = Color.FromArgb(80, 90, 105);
         private static readonly Color ForegroundColor = Color.FromArgb(241, 241, 241);
-        private static readonly Color AccentColor = Color.FromArgb(94, 94, 94);
-        private static readonly Color SelectionColor = Color.FromArgb(28, 28, 28);
-        private static readonly Color CardColor = Color.FromArgb(20, 20, 20);
-        private static readonly Color CardBorderColor = Color.FromArgb(58, 58, 58);
-        private static readonly Color CardShadowColor = Color.FromArgb(8, 8, 8);
-        private static readonly Color HeaderAccentColor = Color.FromArgb(72, 72, 72);
-        private static readonly Color MutedBadgeColor = Color.FromArgb(40, 40, 40);
+        private static readonly Color AccentColor = Color.FromArgb(120, 130, 145);
+        private static readonly Color SelectionColor = Color.FromArgb(46, 52, 64);
+        private static readonly Color CardColor = Color.FromArgb(46, 52, 64);
+        private static readonly Color CardBorderColor = Color.FromArgb(96, 107, 133);
+        private static readonly Color CardShadowColor = Color.FromArgb(34, 41, 51);
+        private static readonly Color HeaderAccentColor = Color.FromArgb(96, 107, 133);
+        private static readonly Color MutedBadgeColor = Color.FromArgb(80, 90, 105);
         private static readonly Color FavoriteOnColor = Color.FromArgb(255, 204, 64);
         private static readonly Color FavoriteOffColor = Color.FromArgb(112, 112, 112);
+        private static readonly Color CommandButtonNormalBgColor = Color.FromArgb(40, 46, 58);
+        private static readonly Color CommandButtonHoverBgColor = Color.FromArgb(80, 90, 112);
+        private static readonly Color CommandButtonShadowColor = Color.Black;
 
         private readonly WF.TextBox _searchBox;
         private readonly WF.TableLayoutPanel _filterPanel;
@@ -499,18 +502,20 @@ namespace AUTOCAD_COMMANDS
             if (_commandGrid.Rows.Count > 0)
             {
                 _commandGrid.ClearSelection();
-                WF.DataGridViewRow selectedRow =
+                WF.DataGridViewRow rowToSelect =
                     _commandGrid.Rows
                         .Cast<WF.DataGridViewRow>()
                         .FirstOrDefault(row =>
                             string.Equals(
                                 (row.Tag as PaletteCommandItem)?.CommandName,
                                 preferredCommandName,
-                                StringComparison.OrdinalIgnoreCase))
-                    ?? _commandGrid.Rows[0];
+                                StringComparison.OrdinalIgnoreCase));
 
-                selectedRow.Selected = true;
-                _commandGrid.CurrentCell = selectedRow.Cells["Command"];
+                if (rowToSelect != null)
+                {
+                    rowToSelect.Selected = true;
+                    _commandGrid.CurrentCell = rowToSelect.Cells["Command"];
+                }
             }
         }
 
@@ -657,12 +662,11 @@ namespace AUTOCAD_COMMANDS
             };
         }
 
-        private static WF.Button CreateButton(string text, EventHandler onClick, bool primary = true)
+        private static WF.Button CreateButton(string text, EventHandler onClick)
         {
             PaletteToolbarButton button = new PaletteToolbarButton
             {
                 Text = text,
-                IsPrimary = primary,
                 Font = new System.Drawing.Font(
                     "Segoe UI",
                     8.5F,
@@ -1127,18 +1131,26 @@ namespace AUTOCAD_COMMANDS
             PaletteCommandItem item = _commandGrid.Rows[e.RowIndex].Tag as PaletteCommandItem;
             if (item == null)
             {
+                e.Handled = true;
+                PaintRowBackground(e);
                 return;
             }
 
             if (string.Equals(columnName, "Command", StringComparison.OrdinalIgnoreCase))
             {
                 PaintCommandButtonCell(e, item);
-                return;
             }
-
-            if (string.Equals(columnName, "Favorite", StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(columnName, "Favorite", StringComparison.OrdinalIgnoreCase))
             {
                 PaintFavoriteCell(e, item);
+            }
+            else if (string.Equals(columnName, "Used", StringComparison.OrdinalIgnoreCase))
+            {
+                PaintUsageBadgeCell(e, item);
+            }
+            else
+            {
+                PaintGenericCell(e);
             }
         }
 
@@ -1172,80 +1184,82 @@ namespace AUTOCAD_COMMANDS
                 WF.TextFormatFlags.Left | WF.TextFormatFlags.VerticalCenter | WF.TextFormatFlags.EndEllipsis);
         }
 
+        private void PaintGenericCell(WF.DataGridViewCellPaintingEventArgs e)
+        {
+            e.Handled = true;
+            PaintRowBackground(e);
+
+            if (e.Value == null)
+            {
+                return;
+            }
+
+            WF.TextFormatFlags flags = WF.TextFormatFlags.Left | WF.TextFormatFlags.VerticalCenter | WF.TextFormatFlags.EndEllipsis;
+            Rectangle textBounds = Rectangle.Inflate(e.CellBounds, -4, -2);
+
+            WF.TextRenderer.DrawText(
+                e.Graphics,
+                e.Value.ToString(),
+                e.CellStyle.Font,
+                textBounds,
+                ForegroundColor,
+                flags);
+        }
+
         private void PaintCommandButtonCell(WF.DataGridViewCellPaintingEventArgs e, PaletteCommandItem item)
         {
             e.Handled = true;
             PaintRowBackground(e);
 
-            bool selected = e.State.HasFlag(WF.DataGridViewElementStates.Selected);
             bool hovered = e.RowIndex == _hoveredCommandRowIndex;
             bool pressed = e.RowIndex == _pressedCommandRowIndex;
-            (Color topColor, Color bottomColor, Color borderColor) = GetCommandButtonColors(
-                item,
-                selected,
-                hovered,
-                pressed);
 
-            Rectangle buttonBounds = Rectangle.Inflate(e.CellBounds, -4, -4);
-            Rectangle contentBounds = buttonBounds;
+            Color backColor;
+            bool drawShadow = false;
+            const int shadowOffset = 2;
+
+            Rectangle availableBounds = Rectangle.Inflate(e.CellBounds, -4, -4);
+            Rectangle buttonBounds = new Rectangle(
+                availableBounds.X,
+                availableBounds.Y,
+                Math.Max(1, availableBounds.Width - shadowOffset),
+                Math.Max(1, availableBounds.Height - shadowOffset));
+            Rectangle textBounds = Rectangle.Inflate(buttonBounds, -8, -1);
+
             if (pressed)
             {
-                contentBounds.Offset(0, 1);
+                backColor = CommandButtonHoverBgColor;
+                buttonBounds.Offset(shadowOffset, shadowOffset);
+                textBounds.Offset(shadowOffset, shadowOffset);
+            }
+            else if (hovered)
+            {
+                backColor = CommandButtonHoverBgColor; // Change background on hover
+                drawShadow = true;
+            }
+            else
+            {
+                backColor = CommandButtonNormalBgColor;
+                drawShadow = true;
             }
 
-            if (!pressed)
+            if (drawShadow)
             {
                 Rectangle shadowBounds = buttonBounds;
-                shadowBounds.Offset(0, 1);
-                using (GraphicsPath shadowPath = CreatePaletteRoundedRectangle(shadowBounds, 4))
-                using (SolidBrush shadowBrush = new SolidBrush(Color.FromArgb(90, 0, 0, 0)))
+                shadowBounds.Offset(shadowOffset, shadowOffset);
+                using (GraphicsPath shadowPath = CreatePaletteRoundedRectangle(shadowBounds, 5))
+                using (SolidBrush shadowBrush = new SolidBrush(CommandButtonShadowColor))
                 {
                     e.Graphics.FillPath(shadowBrush, shadowPath);
                 }
             }
 
-            using (GraphicsPath buttonPath = CreatePaletteRoundedRectangle(contentBounds, 4))
-            using (LinearGradientBrush fillBrush = new LinearGradientBrush(
-                contentBounds,
-                topColor,
-                bottomColor,
-                LinearGradientMode.Vertical))
-            using (Pen borderPen = new Pen(borderColor))
-            using (Pen innerBorderPen = new Pen(Color.FromArgb(56, 255, 255, 255)))
+            using (GraphicsPath buttonPath = CreatePaletteRoundedRectangle(buttonBounds, 5))
+            using (SolidBrush fillBrush = new SolidBrush(backColor))
             {
                 e.Graphics.FillPath(fillBrush, buttonPath);
-
-                Rectangle glossBounds = new Rectangle(
-                    contentBounds.X + 1,
-                    contentBounds.Y + 1,
-                    Math.Max(1, contentBounds.Width - 2),
-                    Math.Max(5, (contentBounds.Height / 2) - 1));
-                GraphicsState state = e.Graphics.Save();
-                e.Graphics.SetClip(buttonPath);
-                using (LinearGradientBrush glossBrush = new LinearGradientBrush(
-                    glossBounds,
-                    Color.FromArgb(hovered ? 44 : 34, 255, 255, 255),
-                    Color.FromArgb(0, 255, 255, 255),
-                    LinearGradientMode.Vertical))
-                {
-                    e.Graphics.FillRectangle(glossBrush, glossBounds);
-                }
-                e.Graphics.Restore(state);
-
-                e.Graphics.DrawPath(borderPen, buttonPath);
-                e.Graphics.DrawPath(innerBorderPen, buttonPath);
             }
 
-            if (hovered && !pressed)
-            {
-                using (GraphicsPath hoverPath = CreatePaletteRoundedRectangle(contentBounds, 4))
-                using (Pen hoverPen = new Pen(Color.FromArgb(112, 150, 196)))
-                {
-                    e.Graphics.DrawPath(hoverPen, hoverPath);
-                }
-            }
-
-            Rectangle textBounds = Rectangle.Inflate(contentBounds, -8, -1);
             using (System.Drawing.Font buttonFont = new System.Drawing.Font(
                 "Segoe UI",
                 8.75F,
@@ -1257,7 +1271,7 @@ namespace AUTOCAD_COMMANDS
                     item.CommandName,
                     buttonFont,
                     textBounds,
-                    ForegroundColor,
+                    hovered || pressed ? Color.White : ForegroundColor,
                     WF.TextFormatFlags.Left | WF.TextFormatFlags.VerticalCenter | WF.TextFormatFlags.EndEllipsis);
             }
         }
@@ -1267,7 +1281,6 @@ namespace AUTOCAD_COMMANDS
             e.Handled = true;
             PaintRowBackground(e);
 
-            bool selected = e.State.HasFlag(WF.DataGridViewElementStates.Selected);
             bool hasUsage = item.UsageCount > 0;
 
             Rectangle badgeBounds = new Rectangle(
@@ -1276,12 +1289,8 @@ namespace AUTOCAD_COMMANDS
                 Math.Max(24, e.CellBounds.Width - 20),
                 Math.Max(18, e.CellBounds.Height - 16));
 
-            Color badgeTop = hasUsage
-                ? (selected ? Color.FromArgb(112, 126, 148) : Color.FromArgb(86, 98, 118))
-                : (selected ? Color.FromArgb(124, 128, 138) : MutedBadgeColor);
-            Color badgeBottom = hasUsage
-                ? (selected ? Color.FromArgb(88, 100, 118) : Color.FromArgb(66, 74, 90))
-                : (selected ? Color.FromArgb(96, 100, 108) : Color.FromArgb(60, 64, 72));
+            Color badgeTop = hasUsage ? Color.FromArgb(86, 98, 118) : MutedBadgeColor;
+            Color badgeBottom = hasUsage ? Color.FromArgb(66, 74, 90) : Color.FromArgb(60, 64, 72);
 
             using (LinearGradientBrush badgeBrush = new LinearGradientBrush(
                 badgeBounds,
@@ -1315,6 +1324,12 @@ namespace AUTOCAD_COMMANDS
             e.Handled = true;
             PaintRowBackground(e);
 
+            Rectangle badgeBounds = new Rectangle(
+                e.CellBounds.X,
+                e.CellBounds.Y,
+                e.CellBounds.Width,
+                e.CellBounds.Height);
+
             string starText = item.IsFavorite ? "★" : "☆";
             Color starColor = item.IsFavorite ? FavoriteOnColor : FavoriteOffColor;
             using (System.Drawing.Font starFont = new System.Drawing.Font(
@@ -1329,15 +1344,13 @@ namespace AUTOCAD_COMMANDS
                     starFont,
                     e.CellBounds,
                     starColor,
-                    WF.TextFormatFlags.HorizontalCenter | WF.TextFormatFlags.VerticalCenter | WF.TextFormatFlags.NoPadding);
+                    WF.TextFormatFlags.HorizontalCenter | WF.TextFormatFlags.VerticalCenter);
             }
         }
 
         private void PaintRowBackground(WF.DataGridViewCellPaintingEventArgs e)
         {
-            Color backColor = e.State.HasFlag(WF.DataGridViewElementStates.Selected)
-                ? SelectionColor
-                : PanelColor;
+            Color backColor = PanelColor;
 
             using (SolidBrush backBrush = new SolidBrush(backColor))
             using (Pen separatorPen = new Pen(BorderColor))
@@ -1350,321 +1363,6 @@ namespace AUTOCAD_COMMANDS
                     e.CellBounds.Right,
                     e.CellBounds.Bottom - 1);
             }
-        }
-
-        private void PaintCommandGlyph(Graphics graphics, Rectangle bounds, PaletteCommandItem item, bool selected)
-        {
-            Color chipTop = selected ? Color.FromArgb(255, 255, 255) : Color.FromArgb(240, 244, 250);
-            Color chipBottom = selected ? Color.FromArgb(215, 223, 235) : Color.FromArgb(206, 214, 228);
-            Color stroke = selected ? Color.FromArgb(34, 42, 58) : Color.FromArgb(48, 56, 74);
-
-            using (GraphicsPath chipPath = CreatePaletteRoundedRectangle(bounds, 5))
-            using (LinearGradientBrush chipBrush = new LinearGradientBrush(
-                bounds,
-                chipTop,
-                chipBottom,
-                LinearGradientMode.Vertical))
-            using (Pen borderPen = new Pen(Color.FromArgb(160, 172, 192)))
-            using (Pen iconPen = new Pen(stroke, 1.6f))
-            using (SolidBrush iconBrush = new SolidBrush(stroke))
-            {
-                iconPen.StartCap = LineCap.Round;
-                iconPen.EndCap = LineCap.Round;
-                iconPen.LineJoin = LineJoin.Round;
-
-                graphics.FillPath(chipBrush, chipPath);
-                graphics.DrawPath(borderPen, chipPath);
-
-                Rectangle iconBounds = Rectangle.Inflate(bounds, -3, -3);
-                switch (GetCommandGlyphKind(item))
-                {
-                    case "dim":
-                        DrawDimGlyph(graphics, iconPen, iconBrush, iconBounds);
-                        break;
-                    case "stretch":
-                        DrawStretchGlyph(graphics, iconPen, iconBrush, iconBounds);
-                        break;
-                    case "text":
-                        DrawTextGlyph(graphics, iconPen, iconBrush, iconBounds);
-                        break;
-                    case "block":
-                        DrawBlockGlyph(graphics, iconPen, iconBrush, iconBounds);
-                        break;
-                    case "ui":
-                        DrawUiGlyph(graphics, iconPen, iconBrush, iconBounds);
-                        break;
-                    case "reload":
-                        DrawRefreshGlyph(graphics, iconPen, iconBrush, iconBounds);
-                        break;
-                    default:
-                        DrawCommandGlyph(graphics, iconPen, iconBrush, iconBounds);
-                        break;
-                }
-            }
-        }
-
-        private static string GetCommandGlyphKind(PaletteCommandItem item)
-        {
-            string commandName = item?.CommandName?.ToUpperInvariant() ?? string.Empty;
-            if (commandName.Contains("DIM") || commandName.StartsWith("DAA") || commandName.StartsWith("DDD") || commandName.StartsWith("CDD"))
-            {
-                return "dim";
-            }
-
-            if (commandName.Contains("STRETCH") || commandName.StartsWith("SS"))
-            {
-                return "stretch";
-            }
-
-            if (commandName.Contains("TEXT") || commandName.StartsWith("TT"))
-            {
-                return "text";
-            }
-
-            if (commandName.Contains("BLOCK") || commandName.StartsWith("BBB") || commandName.StartsWith("CCC"))
-            {
-                return "block";
-            }
-
-            if (commandName.Contains("PALETTE") || commandName.Contains("RIBBON"))
-            {
-                return "ui";
-            }
-
-            if (commandName.Contains("RELOAD") || item?.SourceKind == PaletteSourceKind.ActionMacro)
-            {
-                return "reload";
-            }
-
-            return "generic";
-        }
-
-        private static System.Drawing.Bitmap CreatePaletteToolbarIcon(string buttonText, Color iconColor)
-        {
-            System.Drawing.Bitmap bitmap = new System.Drawing.Bitmap(18, 18, PixelFormat.Format32bppArgb);
-            using (Graphics graphics = Graphics.FromImage(bitmap))
-            using (Pen pen = new Pen(iconColor, 1.8f))
-            using (SolidBrush brush = new SolidBrush(iconColor))
-            {
-                graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                pen.StartCap = LineCap.Round;
-                pen.EndCap = LineCap.Round;
-                pen.LineJoin = LineJoin.Round;
-
-                Rectangle bounds = new Rectangle(1, 1, 16, 16);
-                string key = GetToolbarGlyphKind(buttonText);
-                switch (key)
-                {
-                    case "run":
-                        DrawRunGlyph(graphics, pen, brush, bounds);
-                        break;
-                    case "folder":
-                        DrawFolderGlyph(graphics, pen, brush, bounds);
-                        break;
-                    case "add":
-                        DrawAddGlyph(graphics, pen, brush, bounds);
-                        break;
-                    case "remove":
-                        DrawRemoveGlyph(graphics, pen, brush, bounds);
-                        break;
-                    case "refresh":
-                        DrawRefreshGlyph(graphics, pen, brush, bounds);
-                        break;
-                    case "reset":
-                        DrawResetGlyph(graphics, pen, brush, bounds);
-                        break;
-                    default:
-                        DrawUiGlyph(graphics, pen, brush, bounds);
-                        break;
-                }
-            }
-
-            return bitmap;
-        }
-
-        private static string GetToolbarGlyphKind(string buttonText)
-        {
-            string text = (buttonText ?? string.Empty).ToUpperInvariant();
-            if (text.Contains("RUN"))
-            {
-                return "run";
-            }
-
-            if (text.Contains("FOLDER"))
-            {
-                return "folder";
-            }
-
-            if (text.Contains("ADD"))
-            {
-                return "add";
-            }
-
-            if (text.Contains("REMOVE"))
-            {
-                return "remove";
-            }
-
-            if (text.Contains("RESET"))
-            {
-                return "reset";
-            }
-
-            if (text.Contains("REFRESH") || text.Contains("RELOAD"))
-            {
-                return "refresh";
-            }
-
-            return "ui";
-        }
-
-        private static void DrawDimGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
-        {
-            int midY = bounds.Top + bounds.Height / 2;
-            int left = bounds.Left + 2;
-            int right = bounds.Right - 2;
-            graphics.DrawLine(pen, left, bounds.Top + 2, left, bounds.Bottom - 2);
-            graphics.DrawLine(pen, right, bounds.Top + 2, right, bounds.Bottom - 2);
-            graphics.DrawLine(pen, left + 1, midY, right - 1, midY);
-            graphics.FillPolygon(brush, new[]
-            {
-                new Point(left + 1, midY),
-                new Point(left + 5, midY - 3),
-                new Point(left + 5, midY + 3)
-            });
-            graphics.FillPolygon(brush, new[]
-            {
-                new Point(right - 1, midY),
-                new Point(right - 5, midY - 3),
-                new Point(right - 5, midY + 3)
-            });
-        }
-
-        private static void DrawStretchGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
-        {
-            Rectangle rect = new Rectangle(bounds.Left + 1, bounds.Top + 4, bounds.Width - 7, bounds.Height - 8);
-            graphics.DrawRectangle(pen, rect);
-            int arrowX = rect.Right + 1;
-            int arrowY = bounds.Top + bounds.Height / 2;
-            graphics.DrawLine(pen, rect.Right - 1, arrowY, arrowX + 2, arrowY);
-            graphics.FillPolygon(brush, new[]
-            {
-                new Point(arrowX + 2, arrowY),
-                new Point(arrowX - 1, arrowY - 3),
-                new Point(arrowX - 1, arrowY + 3)
-            });
-        }
-
-        private static void DrawTextGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
-        {
-            int top = bounds.Top + 2;
-            int centerX = bounds.Left + bounds.Width / 2;
-            graphics.DrawLine(pen, bounds.Left + 2, top, bounds.Right - 2, top);
-            graphics.DrawLine(pen, centerX, top, centerX, bounds.Bottom - 2);
-            graphics.DrawLine(pen, bounds.Left + 4, bounds.Bottom - 3, bounds.Right - 4, bounds.Bottom - 3);
-        }
-
-        private static void DrawBlockGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
-        {
-            Rectangle back = new Rectangle(bounds.Left + 2, bounds.Top + 2, bounds.Width - 7, bounds.Height - 7);
-            Rectangle front = new Rectangle(bounds.Left + 5, bounds.Top + 5, bounds.Width - 7, bounds.Height - 7);
-            graphics.DrawRectangle(pen, back);
-            graphics.DrawRectangle(pen, front);
-            graphics.FillRectangle(brush, front.Left + 3, front.Top + 3, 3, 3);
-        }
-
-        private static void DrawUiGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
-        {
-            Rectangle panel = new Rectangle(bounds.Left + 1, bounds.Top + 2, bounds.Width - 2, bounds.Height - 4);
-            graphics.DrawRectangle(pen, panel);
-            graphics.DrawLine(pen, panel.Left + 4, panel.Top + 1, panel.Left + 4, panel.Bottom - 1);
-            graphics.FillRectangle(brush, panel.Left + 6, panel.Top + 3, panel.Width - 9, 2);
-            graphics.FillRectangle(brush, panel.Left + 6, panel.Top + 7, panel.Width - 12, 2);
-            graphics.FillRectangle(brush, panel.Left + 6, panel.Top + 11, panel.Width - 10, 2);
-        }
-
-        private static void DrawCommandGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
-        {
-            int midY = bounds.Top + bounds.Height / 2;
-            graphics.DrawLine(pen, bounds.Left + 3, midY, bounds.Left + 7, midY);
-            graphics.DrawLine(pen, bounds.Left + 3, midY, bounds.Left + 6, midY - 3);
-            graphics.DrawLine(pen, bounds.Left + 3, midY, bounds.Left + 6, midY + 3);
-            graphics.DrawLine(pen, bounds.Left + 9, bounds.Bottom - 4, bounds.Right - 3, bounds.Bottom - 4);
-        }
-
-        private static void DrawRefreshGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
-        {
-            Rectangle arc = new Rectangle(bounds.Left + 3, bounds.Top + 3, bounds.Width - 7, bounds.Height - 7);
-            graphics.DrawArc(pen, arc, 30, 260);
-            Point tip = new Point(bounds.Right - 2, bounds.Top + 6);
-            graphics.FillPolygon(brush, new[]
-            {
-                tip,
-                new Point(tip.X - 5, tip.Y - 1),
-                new Point(tip.X - 2, tip.Y + 4)
-            });
-        }
-
-        private static void DrawRunGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
-        {
-            graphics.FillPolygon(brush, new[]
-            {
-                new Point(bounds.Left + 4, bounds.Top + 3),
-                new Point(bounds.Right - 3, bounds.Top + bounds.Height / 2),
-                new Point(bounds.Left + 4, bounds.Bottom - 3)
-            });
-        }
-
-        private static void DrawFolderGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
-        {
-            GraphicsPath path = new GraphicsPath();
-            path.AddLines(new[]
-            {
-                new Point(bounds.Left + 2, bounds.Top + 6),
-                new Point(bounds.Left + 5, bounds.Top + 3),
-                new Point(bounds.Left + 9, bounds.Top + 3),
-                new Point(bounds.Left + 11, bounds.Top + 5),
-                new Point(bounds.Right - 2, bounds.Top + 5),
-                new Point(bounds.Right - 3, bounds.Bottom - 3),
-                new Point(bounds.Left + 2, bounds.Bottom - 3),
-                new Point(bounds.Left + 2, bounds.Top + 6)
-            });
-            graphics.DrawPath(pen, path);
-            path.Dispose();
-        }
-
-        private static void DrawAddGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
-        {
-            DrawFolderGlyph(graphics, pen, brush, bounds);
-            graphics.DrawLine(
-                pen,
-                bounds.Left + bounds.Width / 2,
-                bounds.Top + 6,
-                bounds.Left + bounds.Width / 2,
-                bounds.Bottom - 4);
-            graphics.DrawLine(
-                pen,
-                bounds.Left + 4,
-                bounds.Top + bounds.Height / 2,
-                bounds.Right - 4,
-                bounds.Top + bounds.Height / 2);
-        }
-
-        private static void DrawRemoveGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
-        {
-            graphics.DrawEllipse(pen, bounds.Left + 2, bounds.Top + 2, bounds.Width - 5, bounds.Height - 5);
-            graphics.DrawLine(
-                pen,
-                bounds.Left + 4,
-                bounds.Top + bounds.Height / 2,
-                bounds.Right - 4,
-                bounds.Top + bounds.Height / 2);
-        }
-
-        private static void DrawResetGlyph(Graphics graphics, Pen pen, Brush brush, Rectangle bounds)
-        {
-            DrawRefreshGlyph(graphics, pen, brush, bounds);
-            graphics.DrawLine(pen, bounds.Left + 5, bounds.Bottom - 4, bounds.Right - 5, bounds.Bottom - 4);
         }
 
         private static (Color topColor, Color bottomColor, Color borderColor) GetCommandButtonColors(
