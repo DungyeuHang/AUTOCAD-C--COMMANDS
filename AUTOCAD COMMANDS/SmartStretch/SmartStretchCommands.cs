@@ -16,8 +16,6 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Text;
-using System.Text.RegularExpressions;
 using WF = System.Windows.Forms;
 using Media = System.Windows.Media;
 using Imaging = System.Windows.Media.Imaging;
@@ -39,7 +37,7 @@ namespace AUTOCAD_COMMANDS
 
         // SS:
         // - Dùng ngay L đã lưu từ lần trước.
-        // - Nếu cần đổi L thì gõ keyword Length ngay tại prompt chọn điểm đầu.
+        // - Nếu cần đổi L thì gõ keyword L (Length) hoặc C (Calculator) ngay tại prompt chọn điểm đầu.
         // - Quét một hoặc nhiều crossing window.
         // - Chọn điểm đầu + điểm hướng để quyết định SX+/SX-/SY+/SY-.
         [CommandMethod("SS")]
@@ -78,7 +76,7 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
-            if (!TryPromptStretchLengthFromDimensions(
+            if (!DimensionPrompt.TryPromptStretchLengthFromDimensions(
                 ed,
                 db,
                 halfDifference: false,
@@ -106,7 +104,7 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
-            if (!TryPromptStretchLengthFromDimensions(
+            if (!DimensionPrompt.TryPromptStretchLengthFromDimensions(
                 ed,
                 db,
                 halfDifference: true,
@@ -197,7 +195,11 @@ namespace AUTOCAD_COMMANDS
             bool allowInteractiveLengthOverride)
         {
             SmartStretchSelectionInput selectionInput =
-                GetSmartStretchSelectionInput(ed, ref length, out bool stopRequested);
+                GetSmartStretchSelectionInput(
+                    ed,
+                    ref length,
+                    commandLabel,
+                    out bool stopRequested);
             if (stopRequested)
             {
                 return SmartStretchLoopResult.StopRequested;
@@ -271,9 +273,15 @@ namespace AUTOCAD_COMMANDS
 
             while (true)
             {
-                string message = allowInteractiveLengthOverride
-                    ? $"\nChọn điểm đầu hoặc [Length] <{FormatLength(length)}> để đổi L, Space/Enter để kết thúc: "
-                    : "\nChọn điểm đầu hoặc Space/Enter để kết thúc: ";
+                string message;
+                if (allowInteractiveLengthOverride)
+                {
+                    message = $"\nChọn điểm đầu hoặc [L/C] <{FormatLength(length)}>, Space/Enter để kết thúc: ";
+                }
+                else
+                {
+                    message = "\nChọn điểm đầu hoặc Space/Enter để kết thúc: ";
+                }
 
                 PromptPointOptions startPointOptions = new PromptPointOptions(message);
                 startPointOptions.AllowNone = true;
@@ -281,25 +289,32 @@ namespace AUTOCAD_COMMANDS
                 if (allowInteractiveLengthOverride)
                 {
                     startPointOptions.AppendKeywordsToMessage = false;
-                    startPointOptions.Keywords.Add("Length");
+                    startPointOptions.Keywords.Add("L");
+                    startPointOptions.Keywords.Add("C");
                 }
 
                 PromptPointResult startResult = ed.GetPoint(startPointOptions);
-                if (startResult.Status == PromptStatus.None ||
-                    startResult.Status == PromptStatus.Cancel)
+                if (startResult.Status == PromptStatus.None || startResult.Status == PromptStatus.Cancel)
                 {
                     stopRequested = true;
                     return false;
                 }
 
-                if (startResult.Status == PromptStatus.Keyword &&
-                    string.Equals(startResult.StringResult, "Length", StringComparison.OrdinalIgnoreCase))
+                if (startResult.Status == PromptStatus.Keyword)
                 {
-                    if (TryPromptStretchLength(ed, length, out double updatedLength))
+                    string keyword = startResult.StringResult;
+                    if (string.Equals(keyword, "L", StringComparison.OrdinalIgnoreCase))
                     {
-                        length = updatedLength;
-                        SmartStretchSettingsStore.SaveLength(length);
-                        ed.WriteMessage($"\n{commandLabel}: cập nhật L = {FormatLength(length)}.");
+                        if (TryPromptStretchLength(ed, length, out double updatedLength))
+                        {
+                            length = updatedLength;
+                            SmartStretchSettingsStore.SaveLength(length);
+                            ed.WriteMessage($"\n{commandLabel}: cập nhật L = {FormatLength(length)}.");
+                        }
+                    }
+                    else if (string.Equals(keyword, "C", StringComparison.OrdinalIgnoreCase))
+                    {
+                        TryUseCalculatorLength(ed, ref length, commandLabel);
                     }
 
                     continue;
@@ -351,101 +366,33 @@ namespace AUTOCAD_COMMANDS
             return value.ToString("0.###", CultureInfo.InvariantCulture);
         }
 
-        private static bool TryPromptStretchLengthFromDimensions(
+        private static bool TryUseCalculatorLength(
             Editor ed,
-            Database db,
-            bool halfDifference,
-            out double length)
+            ref double length,
+            string commandLabel)
         {
-            length = 0.0;
-
-            while (true)
+            // C luôn lấy nội dung hiện tại của ô nhập. Không fallback về kết quả
+            // '=' cũ vì người dùng có thể đang khôi phục một phép tính trong history.
+            if (QuickCalculatorState.TryGetCurrentDisplayValue(out double displayValue) &&
+                !double.IsNaN(displayValue) &&
+                !double.IsInfinity(displayValue) &&
+                displayValue > ComparisonTolerance)
             {
-                if (!TryPromptDimensionMeasurement(
-                    ed,
-                    db,
-                    "\nChọn dim gốc: ",
-                    out double baseMeasurement))
-                {
-                    return false;
-                }
-
-                if (!TryPromptDimensionMeasurement(
-                    ed,
-                    db,
-                    "\nChọn dim hiện hành: ",
-                    out double currentMeasurement))
-                {
-                    return false;
-                }
-
-                double difference = Math.Abs(baseMeasurement - currentMeasurement);
-                length = halfDifference ? difference / 2.0 : difference;
-                if (length <= ComparisonTolerance)
-                {
-                    ed.WriteMessage("\nHai dim đang cho chênh lệch bằng 0. Hãy chọn lại.");
-                    continue;
-                }
-
-                if (halfDifference)
-                {
-                    ed.WriteMessage(
-                        $"\nL = (|{baseMeasurement.ToString("0.###", CultureInfo.InvariantCulture)} - {currentMeasurement.ToString("0.###", CultureInfo.InvariantCulture)}|) / 2 = {length.ToString("0.###", CultureInfo.InvariantCulture)}");
-                }
-                else
-                {
-                    ed.WriteMessage(
-                        $"\nL = |{baseMeasurement.ToString("0.###", CultureInfo.InvariantCulture)} - {currentMeasurement.ToString("0.###", CultureInfo.InvariantCulture)}| = {length.ToString("0.###", CultureInfo.InvariantCulture)}");
-                }
+                length = displayValue;
+                SmartStretchSettingsStore.SaveLength(length);
+                ed.WriteMessage($"\n{commandLabel}: đã lấy L = {FormatLength(length)} từ ô nhập liệu của calculator.");
                 return true;
             }
-        }
 
-        private static bool TryPromptDimensionMeasurement(
-            Editor ed,
-            Database db,
-            string message,
-            out double measurement)
-        {
-            measurement = 0.0;
-
-            while (true)
-            {
-                PromptEntityOptions options = new PromptEntityOptions(message);
-                options.SetRejectMessage("\nChỉ hỗ trợ các loại DIM hợp lệ.");
-                options.AddAllowedClass(typeof(Dimension), false);
-
-                PromptEntityResult result = ed.GetEntity(options);
-                if (result.Status != PromptStatus.OK)
-                {
-                    return false;
-                }
-
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    Dimension dimension =
-                        tr.GetObject(result.ObjectId, OpenMode.ForRead) as Dimension;
-                    if (dimension == null)
-                    {
-                        ed.WriteMessage("\nKhông đọc được dim. Hãy chọn lại.");
-                        continue;
-                    }
-
-                    measurement = Math.Abs(dimension.Measurement);
-                    if (measurement <= ComparisonTolerance)
-                    {
-                        ed.WriteMessage("\nDim có giá trị không hợp lệ. Hãy chọn lại.");
-                        continue;
-                    }
-
-                    return true;
-                }
-            }
+            ed.WriteMessage(
+                "\nÔ nhập calculator chưa có giá trị hợp lệ (> 0). Hãy nhập số/phép tính hoặc chọn lại history.");
+            return false;
         }
 
         private static SmartStretchSelectionInput GetSmartStretchSelectionInput(
             Editor ed,
             ref double length,
+            string commandLabel,
             out bool stopRequested)
         {
             // Cho phép quét nhiều crossing window.
@@ -471,22 +418,30 @@ namespace AUTOCAD_COMMANDS
                     PromptPointOptions firstCornerOptions =
                         new PromptPointOptions(
                             windows.Count == 0
-                                ? $"\nChọn góc đầu crossing window hoặc [Length] <{FormatLength(length)}> để đổi L, Space/Enter để thoát: "
-                                : $"\nChọn góc đầu crossing window tiếp theo hoặc [Length] <{FormatLength(length)}> để đổi L, Space/Enter để stretch: ");
+                                ? $"\nChọn góc đầu crossing window hoặc [L/C] <{FormatLength(length)}>, Space/Enter để thoát: "
+                                : $"\nChọn góc đầu crossing window tiếp theo hoặc [L/C] <{FormatLength(length)}>, Space/Enter để stretch: ");
                     firstCornerOptions.AllowNone = true;
                     firstCornerOptions.AppendKeywordsToMessage = false;
-                    firstCornerOptions.Keywords.Add("Length");
+                    firstCornerOptions.Keywords.Add("L");
+                    firstCornerOptions.Keywords.Add("C");
 
                     PromptPointResult firstCornerResult = ed.GetPoint(firstCornerOptions);
-                    if (firstCornerResult.Status == PromptStatus.Keyword &&
-                        string.Equals(firstCornerResult.StringResult, "Length", StringComparison.OrdinalIgnoreCase))
+                    if (firstCornerResult.Status == PromptStatus.Keyword)
                     {
-                        if (TryPromptStretchLength(ed, length, out double updatedLength))
+                        string keyword = firstCornerResult.StringResult;
+                        if (string.Equals(keyword, "L", StringComparison.OrdinalIgnoreCase))
                         {
-                            length = updatedLength;
-                            SmartStretchSettingsStore.SaveLength(length);
-                            ed.WriteMessage(
-                                $"\nSS: cập nhật L hiện tại = {FormatLength(length)}.");
+                            if (TryPromptStretchLength(ed, length, out double updatedLength))
+                            {
+                                length = updatedLength;
+                                SmartStretchSettingsStore.SaveLength(length);
+                                ed.WriteMessage(
+                                    $"\n{commandLabel}: cập nhật L hiện tại = {FormatLength(length)}.");
+                            }
+                        }
+                        else if (string.Equals(keyword, "C", StringComparison.OrdinalIgnoreCase))
+                        {
+                            TryUseCalculatorLength(ed, ref length, commandLabel);
                         }
 
                         continue;

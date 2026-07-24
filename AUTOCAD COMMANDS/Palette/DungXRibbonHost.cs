@@ -40,7 +40,7 @@ namespace AUTOCAD_COMMANDS
 
         // Các command hiện lên panel Stretch.
         private static readonly string[] StretchCommands =
-            { "SS", "SSD", "SSD2_SMART_STRETCH_BY_DIM2" };
+            { "SS", "SSD", "SSD2_SMART_STRETCH_BY_DIM2", "SX", "SY" };
 
         // Các command tiện ích workspace/palette/ribbon.
         private static readonly string[] ToolCommands =
@@ -526,6 +526,24 @@ namespace AUTOCAD_COMMANDS
                     "S2",
                     Color.FromArgb(110, 70, 34),
                     Color.FromArgb(255, 196, 106)),
+                ["SX"] = new RibbonCommandStyle(
+                    "Stretch X Symmetric",
+                    "Stretch\nX",
+                    "Stretch X",
+                    "SX",
+                    "Stretch two selected groups in opposite X directions using L or calculator value.",
+                    "SX",
+                    Color.FromArgb(79, 55, 37),
+                    Color.FromArgb(255, 154, 76)),
+                ["SY"] = new RibbonCommandStyle(
+                    "Stretch Y Symmetric",
+                    "Stretch\nY",
+                    "Stretch Y",
+                    "SY",
+                    "Stretch two selected groups in opposite Y directions using L or calculator value.",
+                    "SY",
+                    Color.FromArgb(70, 55, 45),
+                    Color.FromArgb(255, 180, 92)),
                 ["DXPALETTE"] = new RibbonCommandStyle(
                     "DX Palette",
                     "DX\nPalette",
