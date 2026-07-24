@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -45,9 +46,18 @@ namespace AUTOCAD_COMMANDS
         {
             if (sender is Button button)
             {
-                button.BackColor = Color.FromArgb(98, 98, 98);
-                button.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 80);
-                button.FlatAppearance.MouseOverBackColor = Color.FromArgb(98, 98, 98);
+                if (button == btnDim)
+                {
+                    button.BackColor = Color.FromArgb(80, 170, 255);
+                    button.FlatAppearance.BorderColor = Color.FromArgb(80, 170, 255);
+                    button.FlatAppearance.MouseOverBackColor = Color.FromArgb(80, 170, 255);
+                }
+                else
+                {
+                    button.BackColor = Theme.ButtonHoverBg;
+                    button.FlatAppearance.BorderColor = Theme.ButtonHoverBg;
+                    button.FlatAppearance.MouseOverBackColor = Theme.ButtonHoverBg;
+                }
             }
         }
 
@@ -55,9 +65,38 @@ namespace AUTOCAD_COMMANDS
         {
             if (sender is Button button)
             {
-                button.BackColor = Color.FromArgb(74, 74, 74);
-                button.FlatAppearance.BorderColor = Color.FromArgb(74, 74, 74);
-                button.FlatAppearance.MouseOverBackColor = Color.FromArgb(98, 98, 98);
+                if (button == btnDim)
+                {
+                    button.BackColor = Theme.Accent;
+                    button.FlatAppearance.BorderColor = Theme.Accent;
+                    button.FlatAppearance.MouseOverBackColor = Color.FromArgb(80, 170, 255);
+                }
+                else
+                {
+                    button.BackColor = Theme.ButtonBg;
+                    button.FlatAppearance.BorderColor = Theme.ButtonBg;
+                    button.FlatAppearance.MouseOverBackColor = Theme.ButtonHoverBg;
+                }
+            }
+        }
+
+        private void flowButtons_Paint(object sender, PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            // Draw a subtle drop shadow behind each button so they appear elevated.
+            foreach (Control ctl in flowButtons.Controls)
+            {
+                if (ctl is Button btn)
+                {
+                    Rectangle rect = btn.Bounds;
+                    Rectangle shadowRect = new Rectangle(rect.X + 3, rect.Y + 3, rect.Width, rect.Height);
+                    using (var brush = new SolidBrush(Color.FromArgb(60, 0, 0, 0)))
+                    {
+                        g.FillRectangle(brush, shadowRect);
+                    }
+                }
             }
         }
 
@@ -112,13 +151,14 @@ namespace AUTOCAD_COMMANDS
 
                 txtDisplay.Text = resultString;
                 _isResultShown = true;
-                txtDisplay.SelectAll();
+                txtDisplay.SelectionStart = txtDisplay.Text.Length;
+                txtDisplay.SelectionLength = 0;
                 txtDisplay.Focus();
 
                 QuickCalculatorState.SetLastValue(result);
 
                 string historyEntry = $"{expression} = {resultString}";
-                lstHistory.Items.Insert(0, historyEntry);
+                lstHistory.Items.Add(historyEntry);
             }
             catch (Exception ex)
             {
@@ -166,7 +206,27 @@ namespace AUTOCAD_COMMANDS
 
             if (measurement.HasValue)
             {
-                InsertTextToDisplay(measurement.Value.ToString("0.###", CultureInfo.InvariantCulture));
+                string measurementString = measurement.Value.ToString("0.###", CultureInfo.InvariantCulture);
+
+                // Preserve existing input and insert the measurement at the current caret position.
+                // Avoid calling InsertTextToDisplay here because that method clears the display when
+                // `_isResultShown` is true. We want to keep whatever the user has already typed
+                // (e.g. "500-(") and append/insert the DIM value into that expression.
+                int selectionStart = txtDisplay.SelectionStart;
+                int selectionLength = txtDisplay.SelectionLength;
+
+                string current = txtDisplay.Text ?? string.Empty;
+                if (selectionStart < 0) selectionStart = current.Length;
+                if (selectionStart > current.Length) selectionStart = current.Length;
+
+                string newText = current.Remove(selectionStart, selectionLength).Insert(selectionStart, measurementString);
+                txtDisplay.Text = newText;
+                txtDisplay.SelectionStart = selectionStart + measurementString.Length;
+                txtDisplay.SelectionLength = 0;
+                txtDisplay.Focus();
+
+                // We're now in edit mode (not just showing a result)
+                _isResultShown = false;
             }
         }
 
@@ -178,16 +238,42 @@ namespace AUTOCAD_COMMANDS
             }
 
             string selectedItem = lstHistory.SelectedItem.ToString();
-            // "2 + 2 = 4" -> put the old result 4 into the current input.
-            int separatorIndex = selectedItem.LastIndexOf('=');
-            string currentValue = separatorIndex >= 0
-                ? selectedItem.Substring(separatorIndex + 1).Trim()
-                : selectedItem.Trim();
+            // Behavior:
+            // - By default (double-click), insert the full expression (left side of '=')
+            //   so the user can edit it (e.g. correct mistakes).
+            // - If the user holds Ctrl while double-clicking, insert only the result
+            //   (right side of '=') for quick reuse. This avoids breaking the
+            //   previous quick-result workflow while giving an edit path.
 
-            txtDisplay.Text = currentValue;
-            _isResultShown = true;
-            txtDisplay.SelectAll();
-            txtDisplay.Focus();
+            int separatorIndex = selectedItem.LastIndexOf('=');
+            string left = separatorIndex >= 0
+                ? selectedItem.Substring(0, separatorIndex).Trim()
+                : selectedItem.Trim();
+            string right = separatorIndex >= 0
+                ? selectedItem.Substring(separatorIndex + 1).Trim()
+                : string.Empty;
+
+            bool ctrl = (Control.ModifierKeys & Keys.Control) == Keys.Control;
+
+            if (ctrl && right.Length > 0)
+            {
+                // Insert only the result (old behavior)
+                txtDisplay.Text = right;
+                _isResultShown = true;
+                txtDisplay.SelectionStart = txtDisplay.Text.Length;
+                txtDisplay.SelectionLength = 0;
+                txtDisplay.Focus();
+            }
+            else
+            {
+                // Insert the full expression for editing; preserve result state
+                // by switching to edit mode.
+                txtDisplay.Text = left;
+                _isResultShown = false;
+                txtDisplay.SelectionStart = txtDisplay.Text.Length;
+                txtDisplay.SelectionLength = 0;
+                txtDisplay.Focus();
+            }
         }
 
         internal bool TryGetCurrentDisplayValue(out double value)
