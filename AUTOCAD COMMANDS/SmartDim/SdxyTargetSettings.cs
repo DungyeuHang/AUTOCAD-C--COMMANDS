@@ -98,5 +98,15 @@ namespace AUTOCAD_COMMANDS
 
             return clone;
         }
+
+        public static SdxyTargetSettings LoadFromStore()
+        {
+            return SdxyTargetSettingsStore.Load();
+        }
+
+        public void SaveToStore()
+        {
+            SdxyTargetSettingsStore.Save(this);
+        }
     }
 }

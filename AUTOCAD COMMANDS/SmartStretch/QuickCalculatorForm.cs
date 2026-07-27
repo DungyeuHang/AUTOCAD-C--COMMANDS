@@ -11,12 +11,73 @@ namespace AUTOCAD_COMMANDS
     public partial class QuickCalculatorForm : Form
     {
         private bool _isResultShown;
-        private bool _allowClose;
+        private bool _allowClose; // To distinguish between Hide and actual Close
+        private bool _isUserVisible; // To distinguish between user-intended visibility and shutdown-hiding
+        private bool _isRestoringSavedState;
 
         public QuickCalculatorForm()
         {
             InitializeComponent();
             QuickCalculatorState.RegisterForm(this);
+            this.Move += (s, e) => SaveCurrentState();
+            this.Resize += (s, e) => SaveCurrentState();
+            this.splitMain.SplitterMoved += (s, e) => SaveCurrentState();
+        }
+
+        // Bounds and splitter distance must be restored together.  Applying the
+        // size first raises Resize, which used to save the designer's default
+        // splitter distance and overwrite the user's saved History height.
+        internal void RestoreSavedState()
+        {
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            _isRestoringSavedState = true;
+            try
+            {
+                if (CalculatorWindowStore.TryLoadSize(out Size size) &&
+                    size.Width >= MinimumSize.Width &&
+                    size.Height >= MinimumSize.Height)
+                {
+                    Size = size;
+                }
+
+                if (CalculatorWindowStore.TryLoadLocation(out Point location) &&
+                    IsLocationVisible(location, Size))
+                {
+                    StartPosition = FormStartPosition.Manual;
+                    Location = location;
+                }
+
+                if (CalculatorWindowStore.TryLoadSplitterDistance(out int distance))
+                {
+                    int maximum = splitMain.Height - splitMain.SplitterWidth - splitMain.Panel2MinSize;
+                    if (distance >= splitMain.Panel1MinSize && distance <= maximum)
+                    {
+                        splitMain.SplitterDistance = distance;
+                    }
+                }
+            }
+            finally
+            {
+                _isRestoringSavedState = false;
+            }
+        }
+
+        private static bool IsLocationVisible(Point location, Size size)
+        {
+            Rectangle bounds = new Rectangle(location, size);
+            foreach (Screen screen in Screen.AllScreens)
+            {
+                if (screen.WorkingArea.IntersectsWith(bounds))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void InsertTextToDisplay(string text)
@@ -312,12 +373,31 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
+        public void SetUserVisible(bool visible)
+        {
+            _isUserVisible = visible;
+        }
+
+        public void SaveCurrentState()
+        {
+            if (!_isRestoringSavedState && this.WindowState != FormWindowState.Minimized)
+            {
+                CalculatorWindowStore.SaveState(
+                    _isUserVisible,
+                    this.Location,
+                    this.Size,
+                    this.splitMain.SplitterDistance);
+            }
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             // We are hiding the form instead of closing it to keep it modeless
             // The actual closing is handled by the IExtensionApplication.Terminate
             if (e.CloseReason == CloseReason.UserClosing && !_allowClose)
             {
+                _isUserVisible = false;
+                SaveCurrentState();
                 e.Cancel = true;
                 this.Hide();
                 return;

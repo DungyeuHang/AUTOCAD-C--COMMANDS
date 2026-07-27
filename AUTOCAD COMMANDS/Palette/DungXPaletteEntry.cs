@@ -31,7 +31,7 @@ namespace AUTOCAD_COMMANDS
     // Initialize/Terminate được AutoCAD gọi khi NETLOAD hoặc bundle autoload.
     // Đây cũng là nơi khởi tạo tracker DXPALETTE và Ribbon.
     // ======================================================
-    public class DungXPaletteEntry : IExtensionApplication
+    public class DungXPaletteEntry
     {
         [CommandMethod("DXPALETTE")]
         public void ShowPalette()
@@ -63,16 +63,5 @@ namespace AUTOCAD_COMMANDS
             DungXRibbonHost.ReloadRibbon(true);
         }
 
-        public void Initialize()
-        {
-            DungXPaletteHost.Initialize();
-            DungXRibbonHost.Initialize();
-        }
-
-        public void Terminate()
-        {
-            DungXPaletteHost.Terminate();
-            DungXRibbonHost.Terminate();
-        }
     }
 }

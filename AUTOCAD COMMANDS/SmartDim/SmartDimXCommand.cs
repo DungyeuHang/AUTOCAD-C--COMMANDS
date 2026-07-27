@@ -1,4 +1,4 @@
-﻿using Autodesk.AutoCAD.ApplicationServices;
+﻿﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.GraphicsInterface;
@@ -196,7 +196,15 @@ namespace AUTOCAD_COMMANDS
             Editor ed = doc.Editor;
             Database db = doc.Database;
 
-            SdxyTargetSettings settings = SdxyTargetSettingsStore.Load();
+            SdxyTargetSettings settings;
+            try
+            {
+                settings = SdxyTargetSettings.LoadFromStore();
+            }
+            catch
+            {
+                settings = new SdxyTargetSettings();
+            }
             if (!TryPromptSdxyStartPoint(ed, db, ref settings, out Point3d startPoint))
             {
                 return;
@@ -308,7 +316,15 @@ namespace AUTOCAD_COMMANDS
 
             Editor ed = doc.Editor;
             Database db = doc.Database;
-            SdxyTargetSettings settings = SdxyTargetSettingsStore.Load();
+            SdxyTargetSettings settings;
+            try
+            {
+                settings = SdxyTargetSettings.LoadFromStore();
+            }
+            catch
+            {
+                settings = new SdxyTargetSettings();
+            }
 
             if (PromptForSdxySettings(ed, db, ref settings))
             {
@@ -547,8 +563,8 @@ namespace AUTOCAD_COMMANDS
                     else if (result == WF.DialogResult.OK)
                     {
                         settings = form.ResultSettings;
-                        SdxyTargetSettingsStore.Save(settings);
-                        SdxyNamedFilterStore.SaveCurrentName(form.SelectedNamedFilterName);
+                        settings.SaveToStore();
+                        WorkspaceUiStateStore.SaveValue("sdxy.currentFilterName", form.SelectedNamedFilterName);
                         return true;
                     }
                     else
@@ -2618,5 +2634,6 @@ namespace AUTOCAD_COMMANDS
             tr.AddNewlyCreatedDBObject(layer, true);
             return layerId;
         }
+
     }
 }

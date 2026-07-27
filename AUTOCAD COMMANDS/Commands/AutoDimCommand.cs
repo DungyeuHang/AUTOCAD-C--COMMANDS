@@ -1,4 +1,4 @@
-﻿﻿using Autodesk.AutoCAD.ApplicationServices;
+﻿﻿﻿﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.GraphicsInterface;
@@ -60,7 +60,10 @@ namespace AUTOCAD_COMMANDS
                 // =============================
                 Extents3d baseExt;
                 Point3d baseCenter;
-                DaaBaseMode baseMode = DaaBaseModeStore.Load();
+                Enum.TryParse(WorkspaceUiStateStore.GetValue("daa.baseMode"), true, out DaaBaseMode baseMode);
+                if (!Enum.IsDefined(typeof(DaaBaseMode), baseMode))
+                    baseMode = DaaBaseMode.Object;
+
                 if (!TryPromptDaaBaseReference(
                     ed,
                     tr,
@@ -140,6 +143,8 @@ namespace AUTOCAD_COMMANDS
                 BlockTableRecord ms =
                     tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
 
+                ObjectId dimLayerId = EnsureAutoDimLayer(db, tr);
+
                 // =============================
                 // 3. OFFSET THEO DIMSTYLE
                 // =============================
@@ -156,8 +161,8 @@ namespace AUTOCAD_COMMANDS
                 {
                     Extents3d ext = leftEntity.GeometricExtents;
 
-                    CreateDim(
-                        ms, tr, db,
+                    CreateDimWithLayer(
+                        ms, tr, db, dimLayerId,
                         0,
                         new Point3d(ext.MaxPoint.X, baseExt.MinPoint.Y, 0),
                         new Point3d(baseExt.MinPoint.X, baseExt.MinPoint.Y, 0),
@@ -172,8 +177,8 @@ namespace AUTOCAD_COMMANDS
                 {
                     Extents3d ext = rightEntity.GeometricExtents;
 
-                    CreateDim(
-                        ms, tr, db,
+                    CreateDimWithLayer(
+                        ms, tr, db, dimLayerId,
                         0,
                         new Point3d(baseExt.MaxPoint.X, baseExt.MinPoint.Y, 0),
                         new Point3d(ext.MinPoint.X, baseExt.MinPoint.Y, 0),
@@ -188,8 +193,8 @@ namespace AUTOCAD_COMMANDS
                 {
                     Extents3d ext = topEntity.GeometricExtents;
 
-                    CreateDim(
-                        ms, tr, db,
+                    CreateDimWithLayer(
+                        ms, tr, db, dimLayerId,
                         Math.PI / 2,
                         new Point3d(baseExt.MinPoint.X, baseExt.MaxPoint.Y, 0),
                         new Point3d(baseExt.MinPoint.X, ext.MinPoint.Y, 0),
@@ -204,8 +209,8 @@ namespace AUTOCAD_COMMANDS
                 {
                     Extents3d ext = bottomEntity.GeometricExtents;
 
-                    CreateDim(
-                        ms, tr, db,
+                    CreateDimWithLayer(
+                        ms, tr, db, dimLayerId,
                         Math.PI / 2,
                         new Point3d(baseExt.MinPoint.X, ext.MaxPoint.Y, 0),
                         new Point3d(baseExt.MinPoint.X, baseExt.MinPoint.Y, 0),
@@ -602,14 +607,14 @@ namespace AUTOCAD_COMMANDS
                     return;
                 }
 
-                DpaDimAutoPlineSettings settings = DpaDimAutoPlineSettings.Load();
+                DpaDimAutoPlineSettings settings = DpaDimAutoPlineSettings.LoadFromStore();
                 if (!TryShowDpaSettingsDialog(settings, out DpaDimAutoPlineSettings editedSettings))
                 {
                     return;
                 }
 
                 settings = editedSettings;
-                settings.Save();
+                settings.SaveToStore();
 
                 if (!string.Equals(settings.Orientation, "Keep current", StringComparison.OrdinalIgnoreCase))
                 {
@@ -927,22 +932,22 @@ namespace AUTOCAD_COMMANDS
             public string Orientation { get; set; } = "Keep current";
             public bool CreateAngular { get; set; } = false;
 
-            private static string FilePath =>
-                Path.Combine(
-                    Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
-                    "dpa_dim_auto_pline_settings.tsv");
+            public static DpaDimAutoPlineSettings LoadFromStore()
+            {
+                return LoadFromString(WorkspaceUiStateStore.GetValue("dpa.settings"));
+            }
 
-            public static DpaDimAutoPlineSettings Load()
+            private static DpaDimAutoPlineSettings LoadFromString(string data)
             {
                 DpaDimAutoPlineSettings settings = new DpaDimAutoPlineSettings();
-                if (!File.Exists(FilePath))
+                if (string.IsNullOrWhiteSpace(data))
                 {
                     return settings;
                 }
 
                 try
                 {
-                    string[] parts = File.ReadAllText(FilePath, Encoding.UTF8).Split('\t');
+                    string[] parts = data.Split('\t');
                     if (parts.Length >= 1 && double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double scale))
                     {
                         settings.ScaleFactor = scale;
@@ -976,11 +981,15 @@ namespace AUTOCAD_COMMANDS
                 return settings;
             }
 
-            public void Save()
+            public void SaveToStore()
             {
-                try
-                {
-                    string content = string.Join("\t", new[]
+                WorkspaceUiStateStore.SaveValue("dpa.settings", ToSaveString());
+            }
+
+            private string ToSaveString()
+            {
+                return string.Join("\t",
+                    new[]
                     {
                         ScaleFactor.ToString("0.######", CultureInfo.InvariantCulture),
                         OffsetMul.ToString("0.######", CultureInfo.InvariantCulture),
@@ -988,11 +997,6 @@ namespace AUTOCAD_COMMANDS
                         Orientation ?? "Keep current",
                         CreateAngular.ToString()
                     });
-                    File.WriteAllText(FilePath, content, Encoding.UTF8);
-                }
-                catch
-                {
-                }
             }
         }
 
@@ -1572,7 +1576,7 @@ namespace AUTOCAD_COMMANDS
                 baseMode = parsedMode;
             }
 
-            DaaBaseModeStore.Save(baseMode);
+            WorkspaceUiStateStore.SaveValue("daa.baseMode", baseMode.ToString());
             return true;
         }
         
@@ -2217,28 +2221,16 @@ namespace AUTOCAD_COMMANDS
 
             public static void Save(DddTargetFilter filter)
             {
-                try
+                if (filter == null)
                 {
-                    if (filter == null)
-                    {
-                        if (File.Exists(FilePath))
-                        {
-                            File.Delete(FilePath);
-                        }
-
-                        return;
-                    }
-
-                    string isClosedString = filter.IsClosed.HasValue ? $"\t{filter.IsClosed.Value}" : string.Empty;
-                    File.WriteAllText(
-                        FilePath,
-                        filter.Kind + "\t" + (filter.LayerName ?? string.Empty) +
-                        isClosedString,
-                        Encoding.UTF8);
+                    WorkspaceUiStateStore.SaveValue("ddd.targetFilter", null);
+                    return;
                 }
-                catch
-                {
-                }
+
+                string isClosedString = filter.IsClosed.HasValue ? $"\t{filter.IsClosed.Value}" : string.Empty;
+                string valueToSave = filter.Kind + "\t" + (filter.LayerName ?? string.Empty) + isClosedString;
+
+                WorkspaceUiStateStore.SaveValue("ddd.targetFilter", valueToSave);
             }
         }
 
@@ -2246,45 +2238,6 @@ namespace AUTOCAD_COMMANDS
         {
             Object,
             Point
-        }
-
-        private static class DaaBaseModeStore
-        {
-            private static readonly string FilePath =
-                Path.Combine(
-                    Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
-                    "daa_dim_base_mode.txt");
-
-            public static DaaBaseMode Load()
-            {
-                try
-                {
-                    if (!File.Exists(FilePath))
-                    {
-                        return DaaBaseMode.Object;
-                    }
-
-                    string raw = (File.ReadAllText(FilePath, Encoding.UTF8) ?? string.Empty).Trim();
-                    return Enum.TryParse(raw, true, out DaaBaseMode mode)
-                        ? mode
-                        : DaaBaseMode.Object;
-                }
-                catch
-                {
-                    return DaaBaseMode.Object;
-                }
-            }
-
-            public static void Save(DaaBaseMode mode)
-            {
-                try
-                {
-                    File.WriteAllText(FilePath, mode.ToString(), Encoding.UTF8);
-                }
-                catch
-                {
-                }
-            }
         }
 
         private bool TryPromptDddSourceSelection(

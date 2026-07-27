@@ -1,5 +1,6 @@
 ﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
+using AcCoreApplication = Autodesk.AutoCAD.ApplicationServices.Core.Application;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.GraphicsInterface;
 using Autodesk.AutoCAD.Geometry;
@@ -38,38 +39,92 @@ namespace AUTOCAD_COMMANDS
 
         private static PaletteSet _paletteSet;
         private static DungXPaletteControl _paletteControl;
+        private static bool _idleHooked;
+        private static bool _lastKnownVisible;
+        private static bool _pendingHide;
+        private static bool _visibilityIdleHooked;
+        private static bool _isTerminating;
+        private static bool _quitHooked;
 
         public static void Initialize()
         {
+            _isTerminating = false;
+            HookQuitEvent();
+            _lastKnownVisible = LoadLastVisible();
             EnsurePalette();
             PaletteCommandUsageTracker.Initialize();
-            if (PaletteStartupStore.LoadAutoShow())
+            if (_lastKnownVisible)
             {
-                ReloadPaletteData(false);
-                _paletteSet.Visible = true;
+                try
+                {
+                    RestorePaletteState();
+                    _paletteSet.Visible = true;
+                    _pendingHide = false;
+                    _lastKnownVisible = true;
+                }
+                catch
+                {
+                }
+
+                EnsureIdleHook();
+            }
+            else
+            {
+                _paletteSet.Visible = false;
             }
         }
 
         public static void Terminate()
         {
+            _isTerminating = true;
+            UnhookQuitEvent();
+            RemoveVisibilityIdleHook();
+
+            // Do not read PaletteSet.Visible here: AutoCAD may already have
+            // hidden it as part of shutdown. Use the last user-known state.
+            SavePaletteState(_lastKnownVisible);
+            RemoveIdleHook();
             PaletteCommandUsageTracker.Terminate();
         }
 
         public static void ShowPalette()
         {
             EnsurePalette();
+            RestorePaletteState();
             ReloadPaletteData(false);
             _paletteSet.Visible = true;
+            _lastKnownVisible = true;
+            _pendingHide = false;
+            SavePaletteState(true);
         }
 
         public static bool IsAutoShowEnabled()
         {
-            return PaletteStartupStore.LoadAutoShow();
+            return LoadLastVisible();
         }
 
         public static void SetAutoShowEnabled(bool enabled)
         {
+            _lastKnownVisible = enabled;
+            _pendingHide = false;
             PaletteStartupStore.SaveAutoShow(enabled);
+            WorkspaceUiStateStore.SaveValues(
+                new Dictionary<string, string>
+                {
+                    ["palette.visible"] = enabled ? "1" : "0"
+                });
+
+            if (_paletteSet != null && !_paletteSet.IsDisposed)
+            {
+                if (enabled)
+                {
+                    EnsurePalette();
+                    ReloadPaletteData(false);
+                }
+
+                _paletteSet.Visible = enabled;
+                SavePaletteState(enabled);
+            }
         }
 
         public static void ReloadPaletteData(bool showMessage)
@@ -182,6 +237,270 @@ namespace AUTOCAD_COMMANDS
             };
 
             _paletteSet.Add("Command List", _paletteControl);
+            RestorePaletteState();
+            _paletteSet.PaletteSetMoved += (_, __) => SavePaletteState();
+            _paletteSet.SizeChanged += (_, __) => SavePaletteState();
+            _paletteSet.StateChanged += PaletteSet_StateChanged;
+            _paletteSet.PaletteSetDestroy += PaletteSet_Destroy;
+        }
+
+        private static void PaletteSet_StateChanged(
+            object sender,
+            PaletteSetStateEventArgs e)
+        {
+            if (_isTerminating)
+            {
+                return;
+            }
+
+            if (e.NewState == StateEventIndex.Show)
+            {
+                _pendingHide = false;
+                _lastKnownVisible = true;
+                SavePaletteState(true);
+                return;
+            }
+
+            if (e.NewState == StateEventIndex.Hide)
+            {
+                // A user close is committed on the next idle event. During AutoCAD
+                // shutdown the palette can be hidden before Terminate is called;
+                // deferring the write prevents that shutdown hide from overwriting
+                // the user's last visible state.
+                _pendingHide = true;
+                EnsureVisibilityIdleHook();
+            }
+        }
+
+        private static void PaletteSet_Destroy(object sender, EventArgs e)
+        {
+            _isTerminating = true;
+            _pendingHide = false;
+            RemoveVisibilityIdleHook();
+            SavePaletteState(_lastKnownVisible);
+        }
+
+        private static void HookQuitEvent()
+        {
+            if (_quitHooked)
+            {
+                return;
+            }
+
+            AcCoreApplication.QuitWillStart += OnAutoCadQuitWillStart;
+            _quitHooked = true;
+        }
+
+        private static void UnhookQuitEvent()
+        {
+            if (!_quitHooked)
+            {
+                return;
+            }
+
+            AcCoreApplication.QuitWillStart -= OnAutoCadQuitWillStart;
+            _quitHooked = false;
+        }
+
+        private static void OnAutoCadQuitWillStart(object sender, EventArgs e)
+        {
+            // QuitWillStart occurs before AutoCAD hides/destroys PaletteSet.
+            // Commit a pending user close now; later teardown events are ignored.
+            if (_pendingHide &&
+                _paletteSet != null &&
+                !_paletteSet.IsDisposed &&
+                !_paletteSet.Visible)
+            {
+                _pendingHide = false;
+                _lastKnownVisible = false;
+                SavePaletteState(false);
+            }
+
+            _isTerminating = true;
+            RemoveVisibilityIdleHook();
+            RemoveIdleHook();
+        }
+
+        private static bool LoadLastVisible()
+        {
+            return WorkspaceUiStateStore.TryGetBool("palette.visible", out bool visible)
+                ? visible
+                : PaletteStartupStore.LoadAutoShow();
+        }
+
+        private static void RestorePaletteState()
+        {
+            if (_paletteSet == null || _paletteSet.IsDisposed)
+            {
+                return;
+            }
+
+            if (WorkspaceUiStateStore.TryGetInt("palette.dock", out int dockValue))
+            {
+                try
+                {
+                    _paletteSet.Dock = (DockSides)dockValue;
+                }
+                catch
+                {
+                    // Let AutoCAD use its normal docking state when the saved value is invalid.
+                }
+            }
+
+            if (WorkspaceUiStateStore.TryGetSize("palette", out Size savedSize) &&
+                savedSize.Width >= _paletteSet.MinimumSize.Width &&
+                savedSize.Height >= _paletteSet.MinimumSize.Height)
+            {
+                try
+                {
+                    _paletteSet.Size = savedSize;
+                }
+                catch
+                {
+                    // Ignore an invalid size and keep AutoCAD's default.
+                }
+            }
+
+            if (WorkspaceUiStateStore.TryGetPoint("palette", out Point savedLocation) &&
+                IsLocationUsable(savedLocation))
+            {
+                try
+                {
+                    _paletteSet.Location = savedLocation;
+                }
+                catch
+                {
+                    // Ignore an invalid location and keep AutoCAD's default.
+                }
+            }
+        }
+
+        private static void SavePaletteState(bool? visibleOverride = null)
+        {
+            if (_paletteSet == null || _paletteSet.IsDisposed)
+            {
+                return;
+            }
+
+            try
+            {
+                Point location = _paletteSet.Location;
+                Size size = _paletteSet.Size;
+                WorkspaceUiStateStore.SaveValues(
+                    new Dictionary<string, string>
+                    {
+                        ["palette.visible"] = (visibleOverride ?? _lastKnownVisible) ? "1" : "0",
+                        ["palette.x"] = WorkspaceUiStateStore.ToInvariant(location.X),
+                        ["palette.y"] = WorkspaceUiStateStore.ToInvariant(location.Y),
+                        ["palette.width"] = WorkspaceUiStateStore.ToInvariant(size.Width),
+                        ["palette.height"] = WorkspaceUiStateStore.ToInvariant(size.Height),
+                        ["palette.dock"] = WorkspaceUiStateStore.ToInvariant((int)_paletteSet.Dock)
+                    });
+            }
+            catch
+            {
+                // PaletteSet can be mid-destruction during AutoCAD shutdown.
+            }
+        }
+
+        private static bool IsLocationUsable(Point location)
+        {
+            foreach (WF.Screen screen in WF.Screen.AllScreens)
+            {
+                if (screen.WorkingArea.Contains(location))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static void EnsureVisibilityIdleHook()
+        {
+            if (_visibilityIdleHooked)
+            {
+                return;
+            }
+
+            Application.Idle += OnPaletteVisibilityIdle;
+            _visibilityIdleHooked = true;
+        }
+
+        private static void RemoveVisibilityIdleHook()
+        {
+            if (!_visibilityIdleHooked)
+            {
+                return;
+            }
+
+            Application.Idle -= OnPaletteVisibilityIdle;
+            _visibilityIdleHooked = false;
+        }
+
+        private static void OnPaletteVisibilityIdle(object sender, EventArgs e)
+        {
+            RemoveVisibilityIdleHook();
+
+            if (_isTerminating || !_pendingHide)
+            {
+                return;
+            }
+
+            _pendingHide = false;
+            if (_isTerminating || _paletteSet == null || _paletteSet.IsDisposed || _paletteSet.Visible)
+            {
+                return;
+            }
+
+            _lastKnownVisible = false;
+            SavePaletteState(false);
+        }
+
+        private static void EnsureIdleHook()
+        {
+            if (_idleHooked)
+            {
+                return;
+            }
+
+            Application.Idle += OnApplicationIdle;
+            _idleHooked = true;
+        }
+
+        private static void RemoveIdleHook()
+        {
+            if (!_idleHooked)
+            {
+                return;
+            }
+
+            Application.Idle -= OnApplicationIdle;
+            _idleHooked = false;
+        }
+
+        private static void OnApplicationIdle(object sender, EventArgs e)
+        {
+            try
+            {
+                if (!LoadLastVisible())
+                {
+                    RemoveIdleHook();
+                    return;
+                }
+
+                RestorePaletteState();
+                ReloadPaletteData(false);
+                _paletteSet.Visible = true;
+                _lastKnownVisible = true;
+                _pendingHide = false;
+                SavePaletteState(true);
+                RemoveIdleHook();
+            }
+            catch
+            {
+                // AutoCAD may still be creating its document/UI. Retry on the next idle event.
+            }
         }
     }
 }

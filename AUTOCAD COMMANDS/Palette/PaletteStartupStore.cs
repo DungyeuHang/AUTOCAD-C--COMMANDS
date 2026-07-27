@@ -40,7 +40,9 @@ namespace AUTOCAD_COMMANDS
             {
                 if (!File.Exists(AutoShowFilePath))
                 {
-                    return false;
+                    // Auto-open is enabled by default for a new installation.
+                    // An explicit "0" saved by the user still disables it.
+                    return true;
                 }
 
                 string text = (File.ReadAllText(AutoShowFilePath, Encoding.UTF8) ?? string.Empty).Trim();

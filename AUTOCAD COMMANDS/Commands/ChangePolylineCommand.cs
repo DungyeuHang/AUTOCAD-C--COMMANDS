@@ -1,4 +1,4 @@
-﻿using Autodesk.AutoCAD.ApplicationServices;
+﻿﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.GraphicsInterface;
@@ -57,8 +57,13 @@ namespace AUTOCAD_COMMANDS
             Editor ed = doc.Editor;
             Database db = doc.Database;
 
-            CaaCloseMode closeMode = CaaPolylineSettingsStore.LoadCloseMode();
-            CaaDirectionMode directionMode = CaaPolylineSettingsStore.LoadDirectionMode();
+            Enum.TryParse(WorkspaceUiStateStore.GetValue("caapolyline.closeMode"), true, out CaaCloseMode closeMode);
+            if (!Enum.IsDefined(typeof(CaaCloseMode), closeMode))
+                closeMode = CaaCloseMode.Close;
+
+            Enum.TryParse(WorkspaceUiStateStore.GetValue("caapolyline.directionMode"), true, out CaaDirectionMode directionMode);
+            if (!Enum.IsDefined(typeof(CaaDirectionMode), directionMode))
+                directionMode = CaaDirectionMode.CCW;
 
             if (!TryPromptCaaEntity(
                 ed,
@@ -331,7 +336,7 @@ namespace AUTOCAD_COMMANDS
                 closeMode = parsedCloseMode;
             }
 
-            CaaPolylineSettingsStore.SaveCloseMode(closeMode);
+            WorkspaceUiStateStore.SaveValue("caapolyline.closeMode", closeMode.ToString());
 
             PromptKeywordOptions directionOptions =
                 new PromptKeywordOptions(
@@ -353,7 +358,7 @@ namespace AUTOCAD_COMMANDS
                 directionMode = parsedDirectionMode;
             }
 
-            CaaPolylineSettingsStore.SaveDirectionMode(directionMode);
+            WorkspaceUiStateStore.SaveValue("caapolyline.directionMode", directionMode.ToString());
             return true;
         }
 
@@ -386,81 +391,6 @@ namespace AUTOCAD_COMMANDS
         {
             CCW,
             CW
-        }
-
-        private static class CaaPolylineSettingsStore
-        {
-            private static readonly string CloseModeFilePath =
-                Path.Combine(
-                    Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
-                    "caa_change_pline_settings.txt");
-
-            private static readonly string DirectionModeFilePath =
-                Path.Combine(
-                    Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
-                    "caa_change_pline_direction_mode.txt");
-
-            public static CaaCloseMode LoadCloseMode()
-            {
-                try
-                {
-                    if (!File.Exists(CloseModeFilePath))
-                    {
-                        return CaaCloseMode.Close;
-                    }
-
-                    string raw = File.ReadAllText(CloseModeFilePath, Encoding.UTF8).Trim();
-                    return Enum.TryParse(raw, true, out CaaCloseMode mode)
-                        ? mode
-                        : CaaCloseMode.Close;
-                }
-                catch
-                {
-                    return CaaCloseMode.Close;
-                }
-            }
-
-            public static void SaveCloseMode(CaaCloseMode mode)
-            {
-                try
-                {
-                    File.WriteAllText(CloseModeFilePath, mode.ToString(), Encoding.UTF8);
-                }
-                catch
-                {
-                }
-            }
-
-            public static CaaDirectionMode LoadDirectionMode()
-            {
-                try
-                {
-                    if (!File.Exists(DirectionModeFilePath))
-                    {
-                        return CaaDirectionMode.CCW;
-                    }
-
-                    string raw = File.ReadAllText(DirectionModeFilePath, Encoding.UTF8).Trim();
-                    return Enum.TryParse(raw, true, out CaaDirectionMode mode)
-                        ? mode
-                        : CaaDirectionMode.CCW;
-                }
-                catch
-                {
-                    return CaaDirectionMode.CCW;
-                }
-            }
-
-            public static void SaveDirectionMode(CaaDirectionMode mode)
-            {
-                try
-                {
-                    File.WriteAllText(DirectionModeFilePath, mode.ToString(), Encoding.UTF8);
-                }
-                catch
-                {
-                }
-            }
         }
     }
 }

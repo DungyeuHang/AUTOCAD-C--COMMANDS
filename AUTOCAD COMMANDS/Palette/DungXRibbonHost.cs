@@ -1,5 +1,6 @@
 ﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
+using AcCoreApplication = Autodesk.AutoCAD.ApplicationServices.Core.Application;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.GraphicsInterface;
 using Autodesk.AutoCAD.Geometry;
@@ -33,6 +34,8 @@ namespace AUTOCAD_COMMANDS
     // ======================================================
     internal static class DungXRibbonHost
     {
+        private const int MaxRibbonRestoreAttempts = 30;
+
         private const string TabId = "DUNGX_RIBBON_TAB";
         // Các command hiện lên panel Dimension.
         private static readonly string[] DimensionCommands =
@@ -65,28 +68,85 @@ namespace AUTOCAD_COMMANDS
             new Dictionary<string, Media.ImageSource>(StringComparer.OrdinalIgnoreCase);
 
         private static bool _idleHooked;
+        private static bool _ribbonCommandSent;
+        private static bool _ribbonCloseCommandSent;
+        private static bool _restoreRibbonVisible = true;
+        private static bool _lastKnownRibbonVisible = true;
+        private static bool _pendingRibbonHide;
+        private static bool _ribbonVisibilityIdleHooked;
+        private static bool _isTerminating;
+        private static RibbonControl _observedRibbon;
+        private static bool _quitHooked;
+        private static int _ribbonRestoreAttempts;
+        private static DateTime _nextRibbonRestoreAttemptUtc;
 
         public static void Initialize()
         {
-            EnsureRibbonCreated(false);
+            _isTerminating = false;
+            HookQuitEvent();
+            // The DUNGX tab is a startup surface.  In particular, do not send
+            // RIBBONCLOSE merely because an older session captured AutoCAD's
+            // temporary Ribbon hide while it was shutting down.
+            _restoreRibbonVisible = true;
+            _lastKnownRibbonVisible = true;
+            _isTerminating = false;
+            _ribbonRestoreAttempts = 0;
+            _nextRibbonRestoreAttemptUtc = DateTime.MinValue;
+
+            if (_restoreRibbonVisible)
+            {
+                EnsureRibbonCreated(false);
+                try
+                {
+                    ShowRibbon();
+                }
+                catch
+                {
+                }
+            }
+
+            EnsureIdleHook();
         }
 
         public static void Terminate()
         {
+            _isTerminating = true;
+            UnhookQuitEvent();
+            RemoveRibbonVisibilityIdleHook();
+            SaveRibbonState(_lastKnownRibbonVisible);
+
             if (_idleHooked)
             {
                 Application.Idle -= OnApplicationIdle;
                 _idleHooked = false;
             }
+
+            UnobserveRibbon();
+            _ribbonCommandSent = false;
+            _ribbonCloseCommandSent = false;
         }
 
         public static void ShowRibbon()
         {
-            EnsureRibbonCreated(false);
+            _restoreRibbonVisible = true;
+
+            if (!EnsureRibbonCreated(false))
+            {
+                RequestRibbonCommand();
+                EnsureIdleHook();
+                return;
+            }
 
             RibbonControl ribbon = ComponentManager.Ribbon;
             if (ribbon == null)
             {
+                return;
+            }
+
+            if (!ribbon.IsVisible)
+            {
+                RequestRibbonCommand();
+                EnsureIdleHook();
                 return;
             }
 
@@ -98,10 +158,13 @@ namespace AUTOCAD_COMMANDS
 
             tab.IsVisible = true;
             ribbon.ActiveTab = tab;
+            _ribbonCommandSent = false;
+            SaveRibbonState(true);
         }
 
         public static void ReloadRibbon(bool showMessage)
         {
+            _restoreRibbonVisible = true;
             bool created = EnsureRibbonCreated(true);
             if (created)
             {
@@ -127,13 +190,42 @@ namespace AUTOCAD_COMMANDS
 
         private static void OnApplicationIdle(object sender, EventArgs e)
         {
-            if (!EnsureRibbonCreated(false))
+            // AutoCAD can raise Idle before a drawing document exists.  Keep
+            // waiting instead of exhausting the restore retry count then.
+            if (Application.DocumentManager.MdiActiveDocument == null)
             {
                 return;
             }
 
+            // A burst of early Idle events must not consume all restore
+            // attempts before AutoCAD has processed the queued RIBBON command.
+            if (DateTime.UtcNow < _nextRibbonRestoreAttemptUtc)
+            {
+                return;
+            }
+
+            _nextRibbonRestoreAttemptUtc = DateTime.UtcNow.AddMilliseconds(250);
+
+            _ribbonRestoreAttempts++;
+
+            if (!EnsureRibbonCreated(false))
+            {
+                RequestRibbonCommandForRestore();
+                return;
+            }
+
+            RibbonControl ribbon = ComponentManager.Ribbon;
+            if (ribbon == null || !ribbon.IsVisible)
+            {
+                RequestRibbonCommandForRestore();
+                return;
+            }
+
+            ShowRibbonTab();
+            SaveRibbonState(true);
             Application.Idle -= OnApplicationIdle;
             _idleHooked = false;
+            _ribbonRestoreAttempts = 0;
         }
 
         private static void EnsureIdleHook()
@@ -155,6 +247,8 @@ namespace AUTOCAD_COMMANDS
                 EnsureIdleHook();
                 return false;
             }
+
+            ObserveRibbon(ribbon);
 
             RibbonTab existing = FindRibbonTab(ribbon);
             if (existing != null)
@@ -181,6 +275,261 @@ namespace AUTOCAD_COMMANDS
 
             ribbon.Tabs.Add(tab);
             return true;
+        }
+
+        private static void ShowRibbonTab()
+        {
+            RibbonControl ribbon = ComponentManager.Ribbon;
+            if (ribbon == null)
+            {
+                return;
+            }
+
+            if (!ribbon.IsVisible)
+            {
+                RequestRibbonCommand();
+                EnsureIdleHook();
+                return;
+            }
+
+            RibbonTab tab = FindRibbonTab(ribbon);
+            if (tab == null)
+            {
+                return;
+            }
+
+            tab.IsVisible = true;
+            ribbon.ActiveTab = tab;
+            _ribbonCommandSent = false;
+            SaveRibbonState(true);
+        }
+
+        private static void RequestRibbonCommandForRestore()
+        {
+            if (_ribbonRestoreAttempts >= MaxRibbonRestoreAttempts)
+            {
+                Application.Idle -= OnApplicationIdle;
+                _idleHooked = false;
+                _ribbonRestoreAttempts = 0;
+                _nextRibbonRestoreAttemptUtc = DateTime.MinValue;
+                return;
+            }
+
+            if (_ribbonCommandSent && _ribbonRestoreAttempts % 3 == 0)
+            {
+                _ribbonCommandSent = false;
+            }
+
+            RequestRibbonCommand();
+        }
+
+        private static void RequestRibbonCommand()
+        {
+            if (_ribbonCommandSent)
+            {
+                return;
+            }
+
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            if (doc == null)
+            {
+                return;
+            }
+
+            doc.SendStringToExecute("_.RIBBON ", true, false, false);
+            _ribbonCommandSent = true;
+        }
+
+        private static void RequestRibbonCloseCommand()
+        {
+            if (_ribbonCloseCommandSent)
+            {
+                return;
+            }
+
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            if (doc == null)
+            {
+                return;
+            }
+
+            doc.SendStringToExecute("_.RIBBONCLOSE ", true, false, false);
+            _ribbonCloseCommandSent = true;
+        }
+
+        private static void ObserveRibbon(RibbonControl ribbon)
+        {
+            if (ribbon == null || ReferenceEquals(_observedRibbon, ribbon))
+            {
+                return;
+            }
+
+            UnobserveRibbon();
+            _observedRibbon = ribbon;
+            _observedRibbon.IsVisibleChanged += Ribbon_IsVisibleChanged;
+        }
+
+        private static void UnobserveRibbon()
+        {
+            if (_observedRibbon == null)
+            {
+                return;
+            }
+
+            _observedRibbon.IsVisibleChanged -= Ribbon_IsVisibleChanged;
+            _observedRibbon = null;
+        }
+
+        private static void Ribbon_IsVisibleChanged(
+            object sender,
+            System.Windows.DependencyPropertyChangedEventArgs e)
+        {
+            if (_isTerminating || !(sender is RibbonControl ribbon))
+            {
+                return;
+            }
+
+            if (ribbon.IsVisible)
+            {
+                _pendingRibbonHide = false;
+                _lastKnownRibbonVisible = true;
+                _ribbonCommandSent = false;
+                SaveRibbonState(true);
+                return;
+            }
+
+            // Defer a hide by one idle cycle. AutoCAD also hides/destroys the
+            // Ribbon during shutdown; that transition must not overwrite the
+            // last state chosen by the user.
+            _pendingRibbonHide = true;
+            EnsureRibbonVisibilityIdleHook();
+        }
+
+        private static void EnsureRibbonVisibilityIdleHook()
+        {
+            if (_ribbonVisibilityIdleHooked)
+            {
+                return;
+            }
+
+            Application.Idle += OnRibbonVisibilityIdle;
+            _ribbonVisibilityIdleHooked = true;
+        }
+
+        private static void RemoveRibbonVisibilityIdleHook()
+        {
+            if (!_ribbonVisibilityIdleHooked)
+            {
+                return;
+            }
+
+            Application.Idle -= OnRibbonVisibilityIdle;
+            _ribbonVisibilityIdleHooked = false;
+        }
+
+        private static void OnRibbonVisibilityIdle(object sender, EventArgs e)
+        {
+            RemoveRibbonVisibilityIdleHook();
+
+            if (_isTerminating || !_pendingRibbonHide)
+            {
+                return;
+            }
+
+            _pendingRibbonHide = false;
+            if (_isTerminating || _observedRibbon == null || _observedRibbon.IsVisible)
+            {
+                return;
+            }
+
+            _lastKnownRibbonVisible = false;
+            SaveRibbonState(false);
+        }
+
+        private static void HookQuitEvent()
+        {
+            if (_quitHooked)
+            {
+                return;
+            }
+
+            AcCoreApplication.QuitWillStart += OnAutoCadQuitWillStart;
+            _quitHooked = true;
+        }
+
+        private static void UnhookQuitEvent()
+        {
+            if (!_quitHooked)
+            {
+                return;
+            }
+
+            AcCoreApplication.QuitWillStart -= OnAutoCadQuitWillStart;
+            _quitHooked = false;
+        }
+
+        private static void OnAutoCadQuitWillStart(object sender, EventArgs e)
+        {
+            // Commit a user hide before AutoCAD starts tearing down Ribbon.
+            if (_pendingRibbonHide &&
+                _observedRibbon != null &&
+                !_observedRibbon.IsVisible)
+            {
+                _pendingRibbonHide = false;
+                _lastKnownRibbonVisible = false;
+                SaveRibbonState(false);
+            }
+
+            _isTerminating = true;
+            RemoveRibbonVisibilityIdleHook();
+            if (_idleHooked)
+            {
+                Application.Idle -= OnApplicationIdle;
+                _idleHooked = false;
+            }
+        }
+
+        private static void SaveRibbonState(bool? visibleOverride = null)
+        {
+            if (visibleOverride.HasValue)
+            {
+                _lastKnownRibbonVisible = visibleOverride.Value;
+                WorkspaceUiStateStore.SaveValues(
+                    new Dictionary<string, string>
+                    {
+                        ["ribbon.visible"] = visibleOverride.Value ? "1" : "0"
+                    });
+                return;
+            }
+
+            RibbonControl ribbon = null;
+            try
+            {
+                ribbon = ComponentManager.Ribbon;
+                if (ribbon != null && ribbon.IsVisible)
+                {
+                    _lastKnownRibbonVisible = true;
+                }
+                else if (ribbon != null && !_pendingRibbonHide)
+                {
+                    _lastKnownRibbonVisible = false;
+                }
+            }
+            catch
+            {
+                // During AutoCAD shutdown the Ribbon object may already be gone.
+            }
+
+            if (_ribbonCloseCommandSent)
+            {
+                _lastKnownRibbonVisible = false;
+            }
+
+            WorkspaceUiStateStore.SaveValues(
+                new Dictionary<string, string>
+                {
+                    ["ribbon.visible"] = _lastKnownRibbonVisible ? "1" : "0"
+                });
         }
 
         private static RibbonTab FindRibbonTab(RibbonControl ribbon)

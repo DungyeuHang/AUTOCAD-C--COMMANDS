@@ -67,6 +67,7 @@
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
-    <PostBuildEvent>xcopy /s /y /d "*.dll" "%25Appdata%25\Autodesk\ApplicationPlugins\AUTOCAD_COMMANDS.bundle\Contents\Windows\"</PostBuildEvent>
+    <PostBuildEvent>if exist "$(SolutionDir)AUTOCAD_COMMANDS.bundle\Contents\Win64\" copy /y "$(TargetPath)" "$(SolutionDir)AUTOCAD_COMMANDS.bundle\Contents\Win64\"
+if exist "C:\ProgramData\Autodesk\ApplicationPlugins\AUTOCAD_COMMANDS.bundle\Contents\Win64\" copy /y "$(TargetPath)" "C:\ProgramData\Autodesk\ApplicationPlugins\AUTOCAD_COMMANDS.bundle\Contents\Win64\"</PostBuildEvent>
   </PropertyGroup>
 </Project>
