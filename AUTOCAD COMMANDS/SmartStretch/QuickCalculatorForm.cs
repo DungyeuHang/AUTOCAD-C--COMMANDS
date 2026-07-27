@@ -167,6 +167,14 @@ namespace AUTOCAD_COMMANDS
             {
                 e.SuppressKeyPress = true;
                 btnEquals_Click(this, EventArgs.Empty);
+                return;
+            }
+
+            if (e.KeyCode == Keys.Escape)
+            {
+                btnClear_Click(this, EventArgs.Empty);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
             }
         }
 

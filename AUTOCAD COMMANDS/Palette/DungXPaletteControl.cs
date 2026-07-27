@@ -227,6 +227,7 @@ namespace AUTOCAD_COMMANDS
                 BorderStyle = WF.BorderStyle.FixedSingle
             };
             _searchBox.TextChanged += (_, __) => BindGrid();
+            _searchBox.KeyDown += SearchBox_KeyDown;
             _filterPanel.Controls.Add(_searchBox, 7, 0);
 
             _buttonPanel = new WF.FlowLayoutPanel
@@ -809,6 +810,22 @@ namespace AUTOCAD_COMMANDS
 
         private void CommandGrid_CellDoubleClick(object sender, WF.DataGridViewCellEventArgs e)
         {
+        }
+
+        private void SearchBox_KeyDown(object sender, WF.KeyEventArgs e)
+        {
+            if (e.KeyCode != WF.Keys.Escape)
+            {
+                return;
+            }
+
+            if (_searchBox.TextLength > 0)
+            {
+                _searchBox.Clear();
+            }
+
+            e.Handled = true;
+            e.SuppressKeyPress = true;
         }
 
         private void CommandGrid_KeyDown(object sender, WF.KeyEventArgs e)
