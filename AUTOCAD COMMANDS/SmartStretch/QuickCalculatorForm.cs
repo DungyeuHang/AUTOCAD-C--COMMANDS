@@ -107,7 +107,7 @@ namespace AUTOCAD_COMMANDS
         {
             if (sender is Button button)
             {
-                if (button == btnDim)
+                if (button == btnDim || button == btnInsert)
                 {
                     button.BackColor = Color.FromArgb(80, 170, 255);
                     button.FlatAppearance.BorderColor = Color.FromArgb(80, 170, 255);
@@ -126,7 +126,7 @@ namespace AUTOCAD_COMMANDS
         {
             if (sender is Button button)
             {
-                if (button == btnDim)
+                if (button == btnDim || button == btnInsert)
                 {
                     button.BackColor = Theme.Accent;
                     button.FlatAppearance.BorderColor = Theme.Accent;
@@ -296,6 +296,95 @@ namespace AUTOCAD_COMMANDS
 
                 // We're now in edit mode (not just showing a result)
                 _isResultShown = false;
+            }
+        }
+
+        private void btnInsert_Click(object sender, EventArgs e)
+        {
+            // Get the value to insert (result or evaluated expression)
+            string valueToInsert = GetValueToInsert();
+            if (string.IsNullOrEmpty(valueToInsert))
+            {
+                // If nothing to insert, try to evaluate current expression
+                string expression = txtDisplay.Text;
+                if (string.IsNullOrWhiteSpace(expression))
+                {
+                    // Try last value from calculator state
+                    if (QuickCalculatorState.TryGetLastValue(out double lastVal))
+                    {
+                        valueToInsert = lastVal.ToString("0.###############", CultureInfo.InvariantCulture);
+                    }
+                    else
+                    {
+                        return;
+                    }
+                }
+                else
+                {
+                    try
+                    {
+                        double result = ExpressionEvaluator.Evaluate(expression);
+                        valueToInsert = result.ToString("0.###############", CultureInfo.InvariantCulture);
+                    }
+                    catch
+                    {
+                        // If evaluation fails, insert the raw text
+                        valueToInsert = expression;
+                    }
+                }
+            }
+
+            // Send to AutoCAD command line using SendStringToExecute
+            // This queues the value in the document's command processor so it will be
+            // fed to the active command prompt (e.g. GetPoint, GetDistance, etc.)
+            try
+            {
+                var doc = AcAp.Application.DocumentManager.MdiActiveDocument;
+                if (doc == null)
+                {
+                    MessageBox.Show("No active document.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                // SendStringToExecute queues the string for the document's command processor.
+                // When a command is active and waiting for input (e.g. GetPoint, GetDistance),
+                // the queued string is fed to the active prompt as if typed by the user.
+                // No trailing space is added so the user can edit the value and press
+                // Space/Enter manually to accept it (like AutoCAD's Quick Calculator).
+                // wrapArgsInInvertedCommas is false because we're sending a raw value,
+                // not a command argument.
+                doc.SendStringToExecute(valueToInsert, true, false, false);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error inserting value: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private string GetValueToInsert()
+        {
+            // If the display shows a result (after pressing =), use it directly
+            if (_isResultShown)
+            {
+                return txtDisplay.Text;
+            }
+
+            // Otherwise, try to evaluate the expression
+            string expression = txtDisplay.Text;
+            if (string.IsNullOrWhiteSpace(expression))
+            {
+                return null;
+            }
+
+            try
+            {
+                double result = ExpressionEvaluator.Evaluate(expression);
+                return result.ToString("0.###############", CultureInfo.InvariantCulture);
+            }
+            catch
+            {
+                // If evaluation fails, return the raw text
+                return expression;
             }
         }
 

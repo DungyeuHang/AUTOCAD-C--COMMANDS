@@ -44,6 +44,7 @@
             this.txtDisplay = new System.Windows.Forms.TextBox();
             this.btnClear = new System.Windows.Forms.Button();
             this.btnDim = new System.Windows.Forms.Button();
+            this.btnInsert = new System.Windows.Forms.Button();
             this.lstHistory = new System.Windows.Forms.ListBox();
             this.btnClearHistory = new System.Windows.Forms.Button();
             this.splitMain = new System.Windows.Forms.SplitContainer();
@@ -77,7 +78,7 @@
             this.btnClear.Margin = new System.Windows.Forms.Padding(0, 0, 8, 0);
             this.btnClear.Name = "btnClear";
             this.btnClear.Padding = new System.Windows.Forms.Padding(0, 1, 0, 0);
-            this.btnClear.Size = new System.Drawing.Size(76, 34);
+            this.btnClear.Size = new System.Drawing.Size(56, 34);
             this.btnClear.TabIndex = 17;
             this.btnClear.Text = "C";
             this.btnClear.UseVisualStyleBackColor = false;
@@ -95,13 +96,31 @@
             this.btnDim.Margin = new System.Windows.Forms.Padding(0);
             this.btnDim.Name = "btnDim";
             this.btnDim.Padding = new System.Windows.Forms.Padding(0, 1, 0, 0);
-            this.btnDim.Size = new System.Drawing.Size(76, 34);
+            this.btnDim.Size = new System.Drawing.Size(56, 34);
             this.btnDim.TabIndex = 18;
             this.btnDim.Text = "DIM";
             this.btnDim.UseVisualStyleBackColor = false;
             this.btnDim.Click += new System.EventHandler(this.btnDim_Click);
             this.btnDim.MouseEnter += new System.EventHandler(this.btnAccent_MouseEnter);
             this.btnDim.MouseLeave += new System.EventHandler(this.btnAccent_MouseLeave);
+            // 
+            // btnInsert
+            // Nút Insert - dùng màu xanh Accent để nổi bật, chèn kết quả vào command line
+            this.btnInsert.BackColor = Theme.Accent;
+            this.btnInsert.FlatAppearance.BorderSize = 0;
+            this.btnInsert.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnInsert.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Bold);
+            this.btnInsert.ForeColor = Theme.AccentText;
+            this.btnInsert.Margin = new System.Windows.Forms.Padding(0, 0, 8, 0);
+            this.btnInsert.Name = "btnInsert";
+            this.btnInsert.Padding = new System.Windows.Forms.Padding(0, 1, 0, 0);
+            this.btnInsert.Size = new System.Drawing.Size(72, 34);
+            this.btnInsert.TabIndex = 21;
+            this.btnInsert.Text = "Insert";
+            this.btnInsert.UseVisualStyleBackColor = false;
+            this.btnInsert.Click += new System.EventHandler(this.btnInsert_Click);
+            this.btnInsert.MouseEnter += new System.EventHandler(this.btnAccent_MouseEnter);
+            this.btnInsert.MouseLeave += new System.EventHandler(this.btnAccent_MouseLeave);
             // 
             // lstHistory
             // Cùng tông "chìm" với txtDisplay, chữ hơi mờ hơn để không cạnh tranh với nội dung chính
@@ -128,7 +147,7 @@
             this.btnClearHistory.Margin = new System.Windows.Forms.Padding(0, 0, 8, 0);
             this.btnClearHistory.Name = "btnClearHistory";
             this.btnClearHistory.Padding = new System.Windows.Forms.Padding(0, 1, 0, 0);
-            this.btnClearHistory.Size = new System.Drawing.Size(76, 34);
+            this.btnClearHistory.Size = new System.Drawing.Size(56, 34);
             this.btnClearHistory.TabIndex = 20;
             this.btnClearHistory.Text = "Clear";
             this.btnClearHistory.UseVisualStyleBackColor = false;
@@ -139,6 +158,7 @@
             // flowButtons
             // Tăng khoảng đệm trên/dưới và khoảng cách giữa các nút cho thoáng hơn
             this.flowButtons.AutoSize = false;
+            this.flowButtons.Controls.Add(this.btnInsert);
             this.flowButtons.Controls.Add(this.btnClear);
             this.flowButtons.Controls.Add(this.btnClearHistory);
             this.flowButtons.Controls.Add(this.btnDim);
@@ -223,6 +243,7 @@
         private System.Windows.Forms.TextBox txtDisplay;
         private System.Windows.Forms.Button btnClear;
         private System.Windows.Forms.Button btnDim;
+        private System.Windows.Forms.Button btnInsert;
         private System.Windows.Forms.ListBox lstHistory;
         private System.Windows.Forms.Button btnClearHistory;
         private System.Windows.Forms.SplitContainer splitMain;
