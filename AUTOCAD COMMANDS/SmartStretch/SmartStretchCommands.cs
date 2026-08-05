@@ -1,4 +1,4 @@
-﻿﻿using Autodesk.AutoCAD.ApplicationServices;
+﻿﻿﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.GraphicsInterface;
@@ -52,14 +52,95 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
-            RunSmartStretchLoopWithLength(
-                ed,
-                db,
-                WorkspaceUiStateStore.TryGetDouble("smartstretch.length", out double length)
-                    ? length
-                    : 500.0, // Giá trị mặc định nếu chưa có cấu hình
-                "SS",
-                allowInteractiveLengthOverride: true);
+            double length = WorkspaceUiStateStore.TryGetDouble("smartstretch.length", out double savedLength)
+                ? savedLength
+                : 500.0; // Giá trị mặc định nếu chưa có cấu hình
+
+            // Cho phép nhập số trực tiếp để set L mới, hoặc L/C/Enter như cũ
+            if (!TryPromptSmartStretchLengthSource(ed, "SS", ref length))
+            {
+                return;
+            }
+
+            RunSmartStretchLoopWithLength(ed, db, length, "SS");
+        }
+
+        private static bool TryPromptSmartStretchLengthSource(
+            Editor ed,
+            string commandLabel,
+            ref double length)
+        {
+            while (true)
+            {
+                PromptStringOptions sourceOptions =
+                    new PromptStringOptions(
+                        $"\n{commandLabel}: chọn nguồn L [L/C] <{FormatLength(length)}> " +
+                        "(Enter dùng giá trị đã lưu): ")
+                    {
+                        AllowSpaces = false,
+                        UseDefaultValue = false
+                    };
+                // PromptStringOptions does not support Keywords - parse manually below.
+
+                PromptResult sourceResult = ed.GetString(sourceOptions);
+                if (sourceResult.Status == PromptStatus.Cancel)
+                {
+                    return false;
+                }
+
+                if (sourceResult.Status == PromptStatus.None ||
+                    string.IsNullOrWhiteSpace(sourceResult.StringResult))
+                {
+                    return length > ComparisonTolerance;
+                }
+
+                string input = sourceResult.StringResult.Trim();
+
+                // If user typed a number directly, treat it as new length
+                if (double.TryParse(input, NumberStyles.Float, CultureInfo.InvariantCulture, out double numericLength))
+                {
+                    if (numericLength > ComparisonTolerance)
+                    {
+                        length = numericLength;
+                        WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                        ed.WriteMessage($"\n{commandLabel}: cập nhật L = {FormatLength(length)}.");
+                        return true;
+                    }
+
+                    ed.WriteMessage("\nL phải lớn hơn 0.");
+                    continue;
+                }
+
+                if (string.Equals(input, "L", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (TryPromptStretchLength(ed, length, out double manualLength))
+                    {
+                        length = manualLength;
+                        WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                        ed.WriteMessage($"\n{commandLabel}: cập nhật L = {FormatLength(length)}.");
+                        return true;
+                    }
+
+                    return false;
+                }
+
+                if (string.Equals(input, "C", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (QuickCalculatorState.TryGetCurrentDisplayValue(out double calculatorLength) &&
+                        !double.IsNaN(calculatorLength) &&
+                        !double.IsInfinity(calculatorLength) &&
+                        calculatorLength > ComparisonTolerance)
+                    {
+                        length = calculatorLength;
+                        WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                        ed.WriteMessage($"\n{commandLabel}: lấy L = {FormatLength(length)} từ ô nhập calculator.");
+                        return true;
+                    }
+
+                    ed.WriteMessage(
+                        "\nÔ nhập calculator chưa có giá trị L hợp lệ (> 0). Hãy nhập số/phép tính hoặc chọn lại history.");
+                }
+            }
         }
 
         // SSD:
@@ -213,7 +294,6 @@ namespace AUTOCAD_COMMANDS
             }
 
             ShowSmartStretchSelection(ed, selectionInput.SelectedObjectIds);
-
             if (!TryPromptSmartStretchStartPoint(
                 ed,
                 ref length,
@@ -285,9 +365,7 @@ namespace AUTOCAD_COMMANDS
                     message = "\nChọn điểm đầu hoặc Space/Enter để kết thúc: ";
                 }
 
-                PromptPointOptions startPointOptions = new PromptPointOptions(message);
-                startPointOptions.AllowNone = true;
-
+                PromptPointOptions startPointOptions = new PromptPointOptions(message) { AllowNone = true };
                 if (allowInteractiveLengthOverride)
                 {
                     startPointOptions.AppendKeywordsToMessage = false;
@@ -296,15 +374,10 @@ namespace AUTOCAD_COMMANDS
                 }
 
                 PromptPointResult startResult = ed.GetPoint(startPointOptions);
-                if (startResult.Status == PromptStatus.None || startResult.Status == PromptStatus.Cancel)
-                {
-                    stopRequested = true;
-                    return false;
-                }
-
                 if (startResult.Status == PromptStatus.Keyword)
                 {
                     string keyword = startResult.StringResult;
+
                     if (string.Equals(keyword, "L", StringComparison.OrdinalIgnoreCase))
                     {
                         if (TryPromptStretchLength(ed, length, out double updatedLength))
@@ -320,6 +393,12 @@ namespace AUTOCAD_COMMANDS
                     }
 
                     continue;
+                }
+
+                if (startResult.Status == PromptStatus.None || startResult.Status == PromptStatus.Cancel)
+                {
+                    stopRequested = true;
+                    return false;
                 }
 
                 if (startResult.Status != PromptStatus.OK)
@@ -431,12 +510,13 @@ namespace AUTOCAD_COMMANDS
                     if (firstCornerResult.Status == PromptStatus.Keyword)
                     {
                         string keyword = firstCornerResult.StringResult;
+
                         if (string.Equals(keyword, "L", StringComparison.OrdinalIgnoreCase))
                         {
                             if (TryPromptStretchLength(ed, length, out double updatedLength))
                             {
                                 length = updatedLength;
-                            WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                                WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
                                 ed.WriteMessage(
                                     $"\n{commandLabel}: cập nhật L hiện tại = {FormatLength(length)}.");
                             }

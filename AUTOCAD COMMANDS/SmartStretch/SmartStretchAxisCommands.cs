@@ -124,67 +124,70 @@ namespace AUTOCAD_COMMANDS
         {
             while (true)
             {
-                PromptKeywordOptions sourceOptions =
-                    new PromptKeywordOptions(
+                PromptStringOptions sourceOptions =
+                    new PromptStringOptions(
                         $"\n{commandLabel}: chọn nguồn L [L/C] <{FormatLength(length)}> " +
-                        "(Enter dùng giá trị đã lưu): ");
-                sourceOptions.AllowNone = true;
-                sourceOptions.AppendKeywordsToMessage = false;
-                sourceOptions.Keywords.Add("L");
-                sourceOptions.Keywords.Add("C");
-
-                PromptResult sourceResult = ed.GetKeywords(sourceOptions);
+                        "(Enter dùng giá trị đã lưu): ")
+                    {
+                        AllowSpaces = false,
+                        UseDefaultValue = false
+                    };
+                // PromptStringOptions does not support Keywords - remove them.
+                // The code below already handles "L", "C", and numeric input manually.
+                PromptResult sourceResult = ed.GetString(sourceOptions);
                 if (sourceResult.Status == PromptStatus.Cancel)
                 {
                     return false;
                 }
 
-                if (sourceResult.Status == PromptStatus.None)
+                if (sourceResult.Status == PromptStatus.None || string.IsNullOrWhiteSpace(sourceResult.StringResult))
                 {
                     return IsValidLength(length);
                 }
 
-                if (sourceResult.Status != PromptStatus.Keyword &&
-                    sourceResult.Status != PromptStatus.OK)
+                string input = sourceResult.StringResult.Trim();
+
+                // If user typed a number directly, treat it as new length
+                if (double.TryParse(input, NumberStyles.Float, CultureInfo.InvariantCulture, out double numericLength))
                 {
-                    return false;
+                    if (IsValidLength(numericLength))
+                    {
+                        length = numericLength;
+                        SmartStretchSettingsStore.SaveLength(length);
+                        ed.WriteMessage($"\n{commandLabel}: cập nhật L = {FormatLength(length)}.");
+                        return true;
+                    }
+
+                    ed.WriteMessage("\nL phải khác 0.");
+                    continue;
                 }
 
-                if (string.Equals(
-                    sourceResult.StringResult,
-                    "L",
-                    StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(input, "L", StringComparison.OrdinalIgnoreCase))
                 {
                     if (TryPromptManualLength(ed, length, out double manualLength))
                     {
                         length = manualLength;
                         SmartStretchSettingsStore.SaveLength(length);
-                        ed.WriteMessage(
-                            $"\n{commandLabel}: cập nhật L = {FormatLength(length)}.");
+                        ed.WriteMessage($"\n{commandLabel}: cập nhật L = {FormatLength(length)}.");
                         return true;
                     }
 
                     return false;
                 }
 
-                if (string.Equals(
-                    sourceResult.StringResult,
-                    "C",
-                    StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(input, "C", StringComparison.OrdinalIgnoreCase))
                 {
                     if (QuickCalculatorState.TryGetCurrentDisplayValue(out double calculatorLength) &&
                         IsValidLength(calculatorLength))
                     {
                         length = calculatorLength;
                         SmartStretchSettingsStore.SaveLength(length);
-                        ed.WriteMessage(
-                            $"\n{commandLabel}: lấy L = {FormatLength(length)} từ ô nhập calculator.");
+                        ed.WriteMessage($"\n{commandLabel}: lấy L = {FormatLength(length)} từ ô nhập calculator.");
                         return true;
                     }
 
                     ed.WriteMessage(
-                        "\nÔ nhập calculator chưa có giá trị L hợp lệ (khác 0). " +
-                        "Hãy nhập số/phép tính hoặc chọn lại history.");
+                        "\nÔ nhập calculator chưa có giá trị L hợp lệ (khác 0). Hãy nhập số/phép tính hoặc chọn lại history.");
                 }
             }
         }
