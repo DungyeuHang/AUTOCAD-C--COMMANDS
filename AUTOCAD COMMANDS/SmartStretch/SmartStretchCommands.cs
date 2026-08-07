@@ -1,4 +1,4 @@
-﻿﻿﻿using Autodesk.AutoCAD.ApplicationServices;
+﻿﻿﻿﻿﻿﻿﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.GraphicsInterface;
@@ -74,8 +74,8 @@ namespace AUTOCAD_COMMANDS
             {
                 PromptStringOptions sourceOptions =
                     new PromptStringOptions(
-                        $"\n{commandLabel}: chọn nguồn L [L/C] <{FormatLength(length)}> " +
-                        "(Enter dùng giá trị đã lưu): ")
+                        $"\n{commandLabel}: chọn nguồn L [L/X/C/C2] <{FormatLength(length)}> " +
+                        "(Enter dùng giá trị đã lưu, X=L/2, C2=Calc/2): ")
                     {
                         AllowSpaces = false,
                         UseDefaultValue = false
@@ -124,6 +124,21 @@ namespace AUTOCAD_COMMANDS
                     return false;
                 }
 
+                if (string.Equals(input, "X", StringComparison.OrdinalIgnoreCase))
+                {
+                    double halfLength = length / 2.0;
+                    if (halfLength > ComparisonTolerance)
+                    {
+                        length = halfLength;
+                        WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                        ed.WriteMessage($"\n{commandLabel}: cập nhật L = L/2 = {FormatLength(length)}.");
+                        return true;
+                    }
+
+                    ed.WriteMessage("\nL/2 không hợp lệ (L phải lớn hơn 0).");
+                    continue;
+                }
+
                 if (string.Equals(input, "C", StringComparison.OrdinalIgnoreCase))
                 {
                     if (QuickCalculatorState.TryGetCurrentDisplayValue(out double calculatorLength) &&
@@ -134,6 +149,25 @@ namespace AUTOCAD_COMMANDS
                         length = calculatorLength;
                         WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
                         ed.WriteMessage($"\n{commandLabel}: lấy L = {FormatLength(length)} từ ô nhập calculator.");
+                        return true;
+                    }
+
+                    ed.WriteMessage(
+                        "\nÔ nhập calculator chưa có giá trị L hợp lệ (> 0). Hãy nhập số/phép tính hoặc chọn lại history.");
+                    continue;
+                }
+
+                if (string.Equals(input, "C2", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (QuickCalculatorState.TryGetCurrentDisplayValue(out double calculatorLength) &&
+                        !double.IsNaN(calculatorLength) &&
+                        !double.IsInfinity(calculatorLength) &&
+                        calculatorLength > ComparisonTolerance)
+                    {
+                        double halfCalcLength = calculatorLength / 2.0;
+                        length = halfCalcLength;
+                        WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                        ed.WriteMessage($"\n{commandLabel}: lấy L = Calc/2 = {FormatLength(length)} từ ô nhập calculator.");
                         return true;
                     }
 
@@ -358,7 +392,7 @@ namespace AUTOCAD_COMMANDS
                 string message;
                 if (allowInteractiveLengthOverride)
                 {
-                    message = $"\nChọn điểm đầu hoặc [L/C] <{FormatLength(length)}>, Space/Enter để kết thúc: ";
+                    message = $"\nChọn điểm đầu hoặc [L/X/C/C2] <{FormatLength(length)}>, Space/Enter để kết thúc (X=L/2, C2=Calc/2): ";
                 }
                 else
                 {
@@ -370,7 +404,9 @@ namespace AUTOCAD_COMMANDS
                 {
                     startPointOptions.AppendKeywordsToMessage = false;
                     startPointOptions.Keywords.Add("L");
+                    startPointOptions.Keywords.Add("X");
                     startPointOptions.Keywords.Add("C");
+                    startPointOptions.Keywords.Add("C2");
                 }
 
                 PromptPointResult startResult = ed.GetPoint(startPointOptions);
@@ -387,9 +423,27 @@ namespace AUTOCAD_COMMANDS
                             ed.WriteMessage($"\n{commandLabel}: cập nhật L = {FormatLength(length)}.");
                         }
                     }
+                    else if (string.Equals(keyword, "X", StringComparison.OrdinalIgnoreCase))
+                    {
+                        double halfLength = length / 2.0;
+                        if (halfLength > ComparisonTolerance)
+                        {
+                            length = halfLength;
+                            WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                            ed.WriteMessage($"\n{commandLabel}: cập nhật L = L/2 = {FormatLength(length)}.");
+                        }
+                        else
+                        {
+                            ed.WriteMessage("\nL/2 không hợp lệ (L phải lớn hơn 0).");
+                        }
+                    }
                     else if (string.Equals(keyword, "C", StringComparison.OrdinalIgnoreCase))
                     {
                         TryUseCalculatorLength(ed, ref length, commandLabel);
+                    }
+                    else if (string.Equals(keyword, "C2", StringComparison.OrdinalIgnoreCase))
+                    {
+                        TryUseHalfCalculatorLength(ed, ref length, commandLabel);
                     }
 
                     continue;
@@ -470,6 +524,29 @@ namespace AUTOCAD_COMMANDS
             return false;
         }
 
+        private static bool TryUseHalfCalculatorLength(
+            Editor ed,
+            ref double length,
+            string commandLabel)
+        {
+            // C2 lấy nội dung hiện tại của ô nhập calculator chia 2.
+            if (QuickCalculatorState.TryGetCurrentDisplayValue(out double displayValue) &&
+                !double.IsNaN(displayValue) &&
+                !double.IsInfinity(displayValue) &&
+                displayValue > ComparisonTolerance)
+            {
+                double halfCalcLength = displayValue / 2.0;
+                length = halfCalcLength;
+                WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                ed.WriteMessage($"\n{commandLabel}: đã lấy L = Calc/2 = {FormatLength(length)} từ ô nhập liệu của calculator.");
+                return true;
+            }
+
+            ed.WriteMessage(
+                "\nÔ nhập calculator chưa có giá trị hợp lệ (> 0). Hãy nhập số/phép tính hoặc chọn lại history.");
+            return false;
+        }
+
         private static SmartStretchSelectionInput GetSmartStretchSelectionInput(
             Editor ed,
             ref double length,
@@ -499,12 +576,14 @@ namespace AUTOCAD_COMMANDS
                     PromptPointOptions firstCornerOptions =
                         new PromptPointOptions(
                             windows.Count == 0
-                                ? $"\nChọn góc đầu crossing window hoặc [L/C] <{FormatLength(length)}>, Space/Enter để thoát: "
-                                : $"\nChọn góc đầu crossing window tiếp theo hoặc [L/C] <{FormatLength(length)}>, Space/Enter để stretch: ");
+                                ? $"\nChọn góc đầu crossing window hoặc [L/X/C/C2] <{FormatLength(length)}>, Space/Enter để thoát (X=L/2, C2=Calc/2): "
+                                : $"\nChọn góc đầu crossing window tiếp theo hoặc [L/X/C/C2] <{FormatLength(length)}>, Space/Enter để stretch (X=L/2, C2=Calc/2): ");
                     firstCornerOptions.AllowNone = true;
                     firstCornerOptions.AppendKeywordsToMessage = false;
                     firstCornerOptions.Keywords.Add("L");
+                    firstCornerOptions.Keywords.Add("X");
                     firstCornerOptions.Keywords.Add("C");
+                    firstCornerOptions.Keywords.Add("C2");
 
                     PromptPointResult firstCornerResult = ed.GetPoint(firstCornerOptions);
                     if (firstCornerResult.Status == PromptStatus.Keyword)
@@ -521,9 +600,28 @@ namespace AUTOCAD_COMMANDS
                                     $"\n{commandLabel}: cập nhật L hiện tại = {FormatLength(length)}.");
                             }
                         }
+                        else if (string.Equals(keyword, "X", StringComparison.OrdinalIgnoreCase))
+                        {
+                            double halfLength = length / 2.0;
+                            if (halfLength > ComparisonTolerance)
+                            {
+                                length = halfLength;
+                                WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                                ed.WriteMessage(
+                                    $"\n{commandLabel}: cập nhật L hiện tại = L/2 = {FormatLength(length)}.");
+                            }
+                            else
+                            {
+                                ed.WriteMessage("\nL/2 không hợp lệ (L phải lớn hơn 0).");
+                            }
+                        }
                         else if (string.Equals(keyword, "C", StringComparison.OrdinalIgnoreCase))
                         {
                             TryUseCalculatorLength(ed, ref length, commandLabel);
+                        }
+                        else if (string.Equals(keyword, "C2", StringComparison.OrdinalIgnoreCase))
+                        {
+                            TryUseHalfCalculatorLength(ed, ref length, commandLabel);
                         }
 
                         continue;

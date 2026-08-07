@@ -126,14 +126,14 @@ namespace AUTOCAD_COMMANDS
             {
                 PromptStringOptions sourceOptions =
                     new PromptStringOptions(
-                        $"\n{commandLabel}: chọn nguồn L [L/C] <{FormatLength(length)}> " +
-                        "(Enter dùng giá trị đã lưu): ")
+                        $"\n{commandLabel}: chọn nguồn L [L/X/C/C2] <{FormatLength(length)}> " +
+                        "(Enter dùng giá trị đã lưu, X=L/2, C2=Calc/2): ")
                     {
                         AllowSpaces = false,
                         UseDefaultValue = false
                     };
                 // PromptStringOptions does not support Keywords - remove them.
-                // The code below already handles "L", "C", and numeric input manually.
+                // The code below already handles "L", "X", "C", "C2", and numeric input manually.
                 PromptResult sourceResult = ed.GetString(sourceOptions);
                 if (sourceResult.Status == PromptStatus.Cancel)
                 {
@@ -175,6 +175,21 @@ namespace AUTOCAD_COMMANDS
                     return false;
                 }
 
+                if (string.Equals(input, "X", StringComparison.OrdinalIgnoreCase))
+                {
+                    double halfLength = length / 2.0;
+                    if (IsValidLength(halfLength))
+                    {
+                        length = halfLength;
+                        SmartStretchSettingsStore.SaveLength(length);
+                        ed.WriteMessage($"\n{commandLabel}: cập nhật L = L/2 = {FormatLength(length)}.");
+                        return true;
+                    }
+
+                    ed.WriteMessage("\nL/2 không hợp lệ (L phải khác 0).");
+                    continue;
+                }
+
                 if (string.Equals(input, "C", StringComparison.OrdinalIgnoreCase))
                 {
                     if (QuickCalculatorState.TryGetCurrentDisplayValue(out double calculatorLength) &&
@@ -183,6 +198,23 @@ namespace AUTOCAD_COMMANDS
                         length = calculatorLength;
                         SmartStretchSettingsStore.SaveLength(length);
                         ed.WriteMessage($"\n{commandLabel}: lấy L = {FormatLength(length)} từ ô nhập calculator.");
+                        return true;
+                    }
+
+                    ed.WriteMessage(
+                        "\nÔ nhập calculator chưa có giá trị L hợp lệ (khác 0). Hãy nhập số/phép tính hoặc chọn lại history.");
+                    continue;
+                }
+
+                if (string.Equals(input, "C2", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (QuickCalculatorState.TryGetCurrentDisplayValue(out double calculatorLength) &&
+                        IsValidLength(calculatorLength))
+                    {
+                        double halfCalcLength = calculatorLength / 2.0;
+                        length = halfCalcLength;
+                        SmartStretchSettingsStore.SaveLength(length);
+                        ed.WriteMessage($"\n{commandLabel}: lấy L = Calc/2 = {FormatLength(length)} từ ô nhập calculator.");
                         return true;
                     }
 
