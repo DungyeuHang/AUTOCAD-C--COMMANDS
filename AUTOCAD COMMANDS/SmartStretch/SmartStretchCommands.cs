@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿using Autodesk.AutoCAD.ApplicationServices;
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.GraphicsInterface;
@@ -91,7 +91,7 @@ namespace AUTOCAD_COMMANDS
                 if (sourceResult.Status == PromptStatus.None ||
                     string.IsNullOrWhiteSpace(sourceResult.StringResult))
                 {
-                    return length > ComparisonTolerance;
+                    return Math.Abs(length) > ComparisonTolerance;
                 }
 
                 string input = sourceResult.StringResult.Trim();
@@ -99,7 +99,7 @@ namespace AUTOCAD_COMMANDS
                 // If user typed a number directly, treat it as new length
                 if (double.TryParse(input, NumberStyles.Float, CultureInfo.InvariantCulture, out double numericLength))
                 {
-                    if (numericLength > ComparisonTolerance)
+                    if (Math.Abs(numericLength) > ComparisonTolerance)
                     {
                         length = numericLength;
                         WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
@@ -107,7 +107,7 @@ namespace AUTOCAD_COMMANDS
                         return true;
                     }
 
-                    ed.WriteMessage("\nL phải lớn hơn 0.");
+                    ed.WriteMessage("\nL không được bằng 0.");
                     continue;
                 }
 
@@ -127,7 +127,7 @@ namespace AUTOCAD_COMMANDS
                 if (string.Equals(input, "X", StringComparison.OrdinalIgnoreCase))
                 {
                     double halfLength = length / 2.0;
-                    if (halfLength > ComparisonTolerance)
+                    if (Math.Abs(halfLength) > ComparisonTolerance)
                     {
                         length = halfLength;
                         WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
@@ -135,7 +135,7 @@ namespace AUTOCAD_COMMANDS
                         return true;
                     }
 
-                    ed.WriteMessage("\nL/2 không hợp lệ (L phải lớn hơn 0).");
+                    ed.WriteMessage("\nL/2 không hợp lệ (L không được bằng 0).");
                     continue;
                 }
 
@@ -144,7 +144,7 @@ namespace AUTOCAD_COMMANDS
                     if (QuickCalculatorState.TryGetCurrentDisplayValue(out double calculatorLength) &&
                         !double.IsNaN(calculatorLength) &&
                         !double.IsInfinity(calculatorLength) &&
-                        calculatorLength > ComparisonTolerance)
+                        Math.Abs(calculatorLength) > ComparisonTolerance)
                     {
                         length = calculatorLength;
                         WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
@@ -153,7 +153,7 @@ namespace AUTOCAD_COMMANDS
                     }
 
                     ed.WriteMessage(
-                        "\nÔ nhập calculator chưa có giá trị L hợp lệ (> 0). Hãy nhập số/phép tính hoặc chọn lại history.");
+                        "\nÔ nhập calculator chưa có giá trị L hợp lệ (khác 0). Hãy nhập số/phép tính hoặc chọn lại history.");
                     continue;
                 }
 
@@ -162,7 +162,7 @@ namespace AUTOCAD_COMMANDS
                     if (QuickCalculatorState.TryGetCurrentDisplayValue(out double calculatorLength) &&
                         !double.IsNaN(calculatorLength) &&
                         !double.IsInfinity(calculatorLength) &&
-                        calculatorLength > ComparisonTolerance)
+                        Math.Abs(calculatorLength) > ComparisonTolerance)
                     {
                         double halfCalcLength = calculatorLength / 2.0;
                         length = halfCalcLength;
@@ -172,7 +172,7 @@ namespace AUTOCAD_COMMANDS
                     }
 
                     ed.WriteMessage(
-                        "\nÔ nhập calculator chưa có giá trị L hợp lệ (> 0). Hãy nhập số/phép tính hoặc chọn lại history.");
+                        "\nÔ nhập calculator chưa có giá trị L hợp lệ (khác 0). Hãy nhập số/phép tính hoặc chọn lại history.");
                 }
             }
         }
@@ -371,8 +371,9 @@ namespace AUTOCAD_COMMANDS
             ClearSmartStretchSelection(selectionInput.SelectedObjectIds);
             ExecuteNativeStretch(ed, selectionInput, startPoint, secondPoint);
 
+            SmartStretchDirection actualDirection = length < 0 ? FlipDirection(direction) : direction;
             ed.WriteMessage(
-                $"\n{commandLabel}: đã gọi STRETCH gốc theo {GetDirectionLabel(direction)} với L = {FormatLength(length)}.");
+                $"\n{commandLabel}: đã gọi STRETCH gốc theo {GetDirectionLabel(actualDirection)} với L = {FormatLength(length)}.");
             return SmartStretchLoopResult.Completed;
         }
 
@@ -426,7 +427,7 @@ namespace AUTOCAD_COMMANDS
                     else if (string.Equals(keyword, "X", StringComparison.OrdinalIgnoreCase))
                     {
                         double halfLength = length / 2.0;
-                        if (halfLength > ComparisonTolerance)
+                        if (Math.Abs(halfLength) > ComparisonTolerance)
                         {
                             length = halfLength;
                             WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
@@ -434,7 +435,7 @@ namespace AUTOCAD_COMMANDS
                         }
                         else
                         {
-                            ed.WriteMessage("\nL/2 không hợp lệ (L phải lớn hơn 0).");
+                            ed.WriteMessage("\nL/2 không hợp lệ (L không được bằng 0).");
                         }
                     }
                     else if (string.Equals(keyword, "C", StringComparison.OrdinalIgnoreCase))
@@ -470,7 +471,7 @@ namespace AUTOCAD_COMMANDS
             PromptDoubleOptions lengthOptions =
                 new PromptDoubleOptions(
                     $"\nNhập L cho smart stretch <{defaultLength.ToString("0.###", CultureInfo.InvariantCulture)}>:");
-            lengthOptions.AllowNegative = false;
+            lengthOptions.AllowNegative = true;
             lengthOptions.AllowZero = false;
             lengthOptions.AllowNone = true;
             lengthOptions.DefaultValue = defaultLength;
@@ -487,9 +488,9 @@ namespace AUTOCAD_COMMANDS
                 ? defaultLength
                 : lengthResult.Value;
 
-            if (length <= ComparisonTolerance)
+            if (Math.Abs(length) <= ComparisonTolerance)
             {
-                ed.WriteMessage("\nGiá trị L phải lớn hơn 0.");
+                ed.WriteMessage("\nGiá trị L không được bằng 0.");
                 return false;
             }
 
@@ -511,7 +512,7 @@ namespace AUTOCAD_COMMANDS
             if (QuickCalculatorState.TryGetCurrentDisplayValue(out double displayValue) &&
                 !double.IsNaN(displayValue) &&
                 !double.IsInfinity(displayValue) &&
-                displayValue > ComparisonTolerance)
+                Math.Abs(displayValue) > ComparisonTolerance)
             {
                 length = displayValue;
                 WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
@@ -520,7 +521,7 @@ namespace AUTOCAD_COMMANDS
             }
 
             ed.WriteMessage(
-                "\nÔ nhập calculator chưa có giá trị hợp lệ (> 0). Hãy nhập số/phép tính hoặc chọn lại history.");
+                "\nÔ nhập calculator chưa có giá trị hợp lệ (khác 0). Hãy nhập số/phép tính hoặc chọn lại history.");
             return false;
         }
 
@@ -533,7 +534,7 @@ namespace AUTOCAD_COMMANDS
             if (QuickCalculatorState.TryGetCurrentDisplayValue(out double displayValue) &&
                 !double.IsNaN(displayValue) &&
                 !double.IsInfinity(displayValue) &&
-                displayValue > ComparisonTolerance)
+                Math.Abs(displayValue) > ComparisonTolerance)
             {
                 double halfCalcLength = displayValue / 2.0;
                 length = halfCalcLength;
@@ -543,7 +544,7 @@ namespace AUTOCAD_COMMANDS
             }
 
             ed.WriteMessage(
-                "\nÔ nhập calculator chưa có giá trị hợp lệ (> 0). Hãy nhập số/phép tính hoặc chọn lại history.");
+                "\nÔ nhập calculator chưa có giá trị hợp lệ (khác 0). Hãy nhập số/phép tính hoặc chọn lại history.");
             return false;
         }
 
@@ -603,7 +604,7 @@ namespace AUTOCAD_COMMANDS
                         else if (string.Equals(keyword, "X", StringComparison.OrdinalIgnoreCase))
                         {
                             double halfLength = length / 2.0;
-                            if (halfLength > ComparisonTolerance)
+                            if (Math.Abs(halfLength) > ComparisonTolerance)
                             {
                                 length = halfLength;
                                 WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
@@ -612,7 +613,7 @@ namespace AUTOCAD_COMMANDS
                             }
                             else
                             {
-                                ed.WriteMessage("\nL/2 không hợp lệ (L phải lớn hơn 0).");
+                                ed.WriteMessage("\nL/2 không hợp lệ (L không được bằng 0).");
                             }
                         }
                         else if (string.Equals(keyword, "C", StringComparison.OrdinalIgnoreCase))
@@ -1030,26 +1031,48 @@ namespace AUTOCAD_COMMANDS
                 : SmartStretchDirection.NegativeY;
         }
 
+        private static SmartStretchDirection FlipDirection(SmartStretchDirection direction)
+        {
+            switch (direction)
+            {
+                case SmartStretchDirection.PositiveX:
+                    return SmartStretchDirection.NegativeX;
+                case SmartStretchDirection.NegativeX:
+                    return SmartStretchDirection.PositiveX;
+                case SmartStretchDirection.PositiveY:
+                    return SmartStretchDirection.NegativeY;
+                case SmartStretchDirection.NegativeY:
+                    return SmartStretchDirection.PositiveY;
+                default:
+                    return SmartStretchDirection.None;
+            }
+        }
+
         private static Vector3d GetDisplacementVector(
             SmartStretchDirection direction,
             double length,
             Matrix3d ucs)
         {
+            double absLength = Math.Abs(length);
+            SmartStretchDirection effectiveDirection = length < 0
+                ? FlipDirection(direction)
+                : direction;
+
             Vector3d ucsVector;
 
-            switch (direction)
+            switch (effectiveDirection)
             {
                 case SmartStretchDirection.PositiveX:
-                    ucsVector = new Vector3d(length, 0.0, 0.0);
+                    ucsVector = new Vector3d(absLength, 0.0, 0.0);
                     break;
                 case SmartStretchDirection.NegativeX:
-                    ucsVector = new Vector3d(-length, 0.0, 0.0);
+                    ucsVector = new Vector3d(-absLength, 0.0, 0.0);
                     break;
                 case SmartStretchDirection.PositiveY:
-                    ucsVector = new Vector3d(0.0, length, 0.0);
+                    ucsVector = new Vector3d(0.0, absLength, 0.0);
                     break;
                 case SmartStretchDirection.NegativeY:
-                    ucsVector = new Vector3d(0.0, -length, 0.0);
+                    ucsVector = new Vector3d(0.0, -absLength, 0.0);
                     break;
                 default:
                     return new Vector3d(0.0, 0.0, 0.0);
