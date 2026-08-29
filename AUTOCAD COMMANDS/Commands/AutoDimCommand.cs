@@ -42,6 +42,10 @@ namespace AUTOCAD_COMMANDS
         private const string DaaBaseObjectKeyword = "Object";
         private const string DaaBasePointKeyword = "Point";
 
+        // Đối tượng gốc DDD được chọn gần nhất nhất, để lần chạy sau có thể
+        // nhấn Enter/Space dùng lại thay vì phải pick lại từ đầu.
+        private static ObjectId[] _lastDddSourceIds;
+
         // DAA_Dim_auto:
         // - Chọn mốc gốc là Object hoặc Point.
         // - Sau đó chọn các đường bao đích.
@@ -255,6 +259,8 @@ namespace AUTOCAD_COMMANDS
                     return;
                 }
             }
+
+            _lastDddSourceIds = sourceIds;
 
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
@@ -1619,7 +1625,7 @@ namespace AUTOCAD_COMMANDS
                     return true;
                 }
 
-                if (PromptForDddTargetFilter(ed, db, targetFilter, out DddTargetFilter updatedFilter))
+                if (PromptForDddTargetSample(ed, db, out DddTargetFilter updatedFilter))
                 {
                     targetFilter = updatedFilter;
                     try
@@ -1957,46 +1963,18 @@ namespace AUTOCAD_COMMANDS
             return true;
         }
 
-        private bool PromptForDddTargetFilter(
+        // Được gọi khi PromptForDddFilterMode đã nhận keyword "Pick" - đi thẳng
+        // vào chọn đối tượng mẫu, không hỏi lại Pick/None một lần nữa (thừa và
+        // vô nghĩa vì người dùng vừa chọn Pick xong).
+        private bool PromptForDddTargetSample(
             Editor ed,
             Database db,
-            DddTargetFilter savedFilter,
             out DddTargetFilter targetFilter)
         {
-            // Filter đích của DDD:
-            // - Enter/Space: dùng lại filter đã lưu.
-            // - Pick: click đối tượng mẫu để lấy loại + layer.
-            // - None: bỏ filter, chạy tự do như bản đầu.
+            targetFilter = null;
+
             while (true)
             {
-                string defaultLabel = savedFilter?.ToDisplayText() ?? "None";
-                PromptKeywordOptions options =
-                    new PromptKeywordOptions(
-                        $"\nChọn đối tượng đích [Pick/None] <{defaultLabel}>: ");
-                options.AllowNone = true;
-                options.Keywords.Add("Pick");
-                options.Keywords.Add("None");
-
-                PromptResult result = ed.GetKeywords(options);
-                if (result.Status == PromptStatus.Cancel)
-                {
-                    targetFilter = null;
-                    return false;
-                }
-
-                if (result.Status == PromptStatus.None)
-                {
-                    targetFilter = savedFilter;
-                    return true;
-                }
-
-                if (string.Equals(result.StringResult, "None", StringComparison.OrdinalIgnoreCase))
-                {
-                    targetFilter = null;
-                    DddTargetFilterStore.Save(null);
-                    return true;
-                }
-
                 PromptEntityOptions entityOptions =
                     new PromptEntityOptions("\nChọn Line / Polyline / Block làm mẫu đích: ");
                 entityOptions.SetRejectMessage("\nChỉ hỗ trợ Line, Polyline hoặc BlockReference.");
@@ -2009,7 +1987,6 @@ namespace AUTOCAD_COMMANDS
                 PromptEntityResult entityResult = ed.GetEntity(entityOptions);
                 if (entityResult.Status == PromptStatus.Cancel)
                 {
-                    targetFilter = null;
                     return false;
                 }
 
@@ -2020,14 +1997,6 @@ namespace AUTOCAD_COMMANDS
                     {
                         targetFilter = pickedFilter;
                         DddTargetFilterStore.Save(targetFilter);
-                        try
-                        {
-                            ed.SetImpliedSelection(Array.Empty<ObjectId>());
-                        }
-                        catch
-                        {
-                        }
-
                         return true;
                     }
                 }
@@ -2163,21 +2132,15 @@ namespace AUTOCAD_COMMANDS
 
         private static class DddTargetFilterStore
         {
-            private static readonly string FilePath =
-                Path.Combine(
-                    Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
-                    "ddd_dim_target_filter.tsv");
-
+            // Save() ghi vào WorkspaceUiStateStore (key "ddd.targetFilter") -
+            // Load() phải đọc từ đúng chỗ đó. Trước đây Load() đọc từ một file
+            // .tsv rời rạc, không liên quan gì tới Save(), nên đối tượng mẫu
+            // vừa Pick không bao giờ thực sự được nhớ lại cho lần sau.
             public static DddTargetFilter Load()
             {
-                if (!File.Exists(FilePath))
-                {
-                    return null;
-                }
-
                 try
                 {
-                    string raw = File.ReadAllText(FilePath, Encoding.UTF8);
+                    string raw = WorkspaceUiStateStore.GetValue("ddd.targetFilter");
                     if (string.IsNullOrWhiteSpace(raw))
                     {
                         return null;
@@ -2255,17 +2218,96 @@ namespace AUTOCAD_COMMANDS
                     return false;
                 }
 
-                SelectionSet sourceSelection = PromptForSelection(
+                ObjectId[] savedIds = GetValidLastDddSourceIds(db);
+                string message = savedIds != null
+                    ? "\nChọn đối tượng gốc hoặc nhóm đối tượng (Enter = dùng lựa chọn đã lưu):"
+                    : "\nChọn đối tượng gốc hoặc nhóm đối tượng:";
+
+                SelectionSet sourceSelection = PromptForSelectionOrSaved(
                     ed,
-                    "\nChọn đối tượng gốc hoặc nhóm đối tượng:");
-                if (sourceSelection == null)
+                    message,
+                    savedIds,
+                    out bool useSaved,
+                    out bool cancelled);
+
+                if (cancelled)
                 {
                     return false;
                 }
 
-                sourceIds = sourceSelection.GetObjectIds();
-                return sourceIds != null && sourceIds.Length > 0;
+                sourceIds = useSaved ? savedIds : sourceSelection.GetObjectIds();
+                if (sourceIds != null && sourceIds.Length > 0)
+                {
+                    return true;
+                }
             }
+        }
+
+        // Cho phép nhấn Enter/Space để dùng lại lựa chọn gốc đã lưu từ lần
+        // chạy trước, hoặc pick đối tượng mới như bình thường.
+        private SelectionSet PromptForSelectionOrSaved(
+            Editor ed,
+            string message,
+            ObjectId[] savedIds,
+            out bool useSaved,
+            out bool cancelled)
+        {
+            useSaved = false;
+            cancelled = false;
+
+            while (true)
+            {
+                PromptSelectionOptions options = new PromptSelectionOptions
+                {
+                    MessageForAdding = message
+                };
+
+                PromptSelectionResult result = ed.GetSelection(options);
+                if (result.Status == PromptStatus.OK && result.Value != null && result.Value.Count > 0)
+                {
+                    return result.Value;
+                }
+
+                if (result.Status == PromptStatus.Cancel)
+                {
+                    cancelled = true;
+                    return null;
+                }
+
+                if (savedIds != null && savedIds.Length > 0)
+                {
+                    useSaved = true;
+                    return null;
+                }
+
+                ed.WriteMessage("\nChưa chọn được đối tượng hợp lệ, hãy chọn lại.");
+            }
+        }
+
+        private static ObjectId[] GetValidLastDddSourceIds(Database db)
+        {
+            if (_lastDddSourceIds == null || _lastDddSourceIds.Length == 0)
+            {
+                return null;
+            }
+
+            List<ObjectId> valid = new List<ObjectId>();
+            foreach (ObjectId id in _lastDddSourceIds)
+            {
+                if (id.IsNull || !id.IsValid || id.IsErased)
+                {
+                    continue;
+                }
+
+                if (db != null && id.Database != db)
+                {
+                    continue;
+                }
+
+                valid.Add(id);
+            }
+
+            return valid.Count > 0 ? valid.ToArray() : null;
         }
     }
 }

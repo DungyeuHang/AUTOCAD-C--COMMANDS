@@ -25,6 +25,39 @@ using Imaging = System.Windows.Media.Imaging;
 
 namespace AUTOCAD_COMMANDS
 {
+    // Pictogram drawn for a ribbon button. Each value maps to a small,
+    // purposeful vector glyph in DungXRibbonHost.DrawGlyph rather than a
+    // text-badge monogram, so the icon actually hints at what the command does.
+    internal enum IconGlyph
+    {
+        Generic,
+        DimAuto,
+        Dim4Direction,
+        DimXY,
+        MoveDimPosition,
+        SplitDim,
+        Stretch,
+        StretchByDim,
+        StretchByDim2,
+        StretchX,
+        StretchY,
+        Palette,
+        Refresh,
+        Folder,
+        Ribbon,
+        PointsOnPolyline,
+        BlockToCenter,
+        CopyToCenter,
+        NormalizePolyline,
+        DimAutoPolyline,
+        Calculator,
+        TextSync,
+        SettingsGear,
+        UnfilletCorner,
+        InsertMarkerSingle,
+        InsertMarkerSeries,
+        PointSequence
+    }
 
     internal sealed class RibbonCommandStyle
     {
@@ -36,7 +69,8 @@ namespace AUTOCAD_COMMANDS
             string description,
             string keyTip,
             Color backColor,
-            Color accentColor)
+            Color accentColor,
+            IconGlyph glyph = IconGlyph.Generic)
         {
             Title = title;
             LargeText = largeText;
@@ -46,6 +80,7 @@ namespace AUTOCAD_COMMANDS
             KeyTip = keyTip;
             BackColor = backColor;
             AccentColor = accentColor;
+            Glyph = glyph;
         }
 
         public string Title { get; }
@@ -63,6 +98,8 @@ namespace AUTOCAD_COMMANDS
         public Color BackColor { get; }
 
         public Color AccentColor { get; }
+
+        public IconGlyph Glyph { get; }
 
         public static RibbonCommandStyle CreateDefault(string commandName)
         {
@@ -88,8 +125,22 @@ namespace AUTOCAD_COMMANDS
                 icon,
                 title,
                 icon,
-                Color.FromArgb(58, 62, 70),
-                Color.FromArgb(120, 170, 255));
+                RibbonPalette.NeutralTile,
+                RibbonPalette.NeutralAccent,
+                IconGlyph.Generic);
         }
+    }
+
+    // Shared, minimal color system for the DUNGX ribbon: one flat neutral
+    // tile behind every icon plus a small set of category accents, instead
+    // of a different saturated background per command.
+    internal static class RibbonPalette
+    {
+        public static readonly Color NeutralTile = Color.FromArgb(255, 45, 48, 54);
+        public static readonly Color NeutralAccent = Color.FromArgb(255, 175, 180, 190);
+        public static readonly Color DimensionAccent = Color.FromArgb(255, 96, 165, 255);
+        public static readonly Color StretchAccent = Color.FromArgb(255, 255, 152, 72);
+        public static readonly Color WorkspaceAccent = Color.FromArgb(255, 110, 210, 170);
+        public static readonly Color MoreAccent = Color.FromArgb(255, 190, 195, 205);
     }
 }
