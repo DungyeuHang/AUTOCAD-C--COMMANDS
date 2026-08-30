@@ -18,6 +18,12 @@ namespace AUTOCAD_COMMANDS
         public QuickCalculatorForm()
         {
             InitializeComponent();
+
+            // Viền đen quanh nội dung (đã có Padding=8 từ designer) + logo
+            // DungX làm icon tiêu đề, thay cho icon mặc định của AutoCAD.
+            this.BackColor = Color.Black;
+            this.Icon = DungXLogo.CreateIcon(32);
+
             QuickCalculatorState.RegisterForm(this);
             this.Move += (s, e) => SaveCurrentState();
             this.Resize += (s, e) => SaveCurrentState();

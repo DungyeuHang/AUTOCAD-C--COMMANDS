@@ -35,7 +35,6 @@ namespace AUTOCAD_COMMANDS
         private static readonly Color TitleBorderColor = Color.FromArgb(84, 84, 90);
         private static readonly Color TitleTextColor = Color.FromArgb(236, 236, 238);
         private static readonly Color TitleSubtleColor = Color.FromArgb(164, 164, 170);
-        private static readonly Color LogoBlue = Color.FromArgb(64, 164, 255);
 
         public PaletteTitlePanel()
         {
@@ -95,10 +94,10 @@ namespace AUTOCAD_COMMANDS
                 e.Graphics.Restore(state);
             }
 
-            Rectangle logoBounds = new Rectangle(10, 8, 20, 20);
-            DrawLogo(e.Graphics, logoBounds);
+            Rectangle logoBounds = new Rectangle(10, 8, 24, 24);
+            DungXLogo.Draw(e.Graphics, logoBounds);
 
-            Rectangle titleBounds = new Rectangle(36, 6, Math.Max(60, Width - 110), 24);
+            Rectangle titleBounds = new Rectangle(40, 6, Math.Max(60, Width - 114), 24);
             using (System.Drawing.Font titleFont = new System.Drawing.Font(
                 "Segoe UI",
                 11.25F,
@@ -118,7 +117,7 @@ namespace AUTOCAD_COMMANDS
                     TitleTextColor,
                     WF.TextFormatFlags.Left | WF.TextFormatFlags.VerticalCenter | WF.TextFormatFlags.EndEllipsis);
 
-                Rectangle subBounds = new Rectangle(36, 24, Math.Max(60, Width - 110), 12);
+                Rectangle subBounds = new Rectangle(40, 24, Math.Max(60, Width - 114), 12);
                 WF.TextRenderer.DrawText(
                     e.Graphics,
                     "Custom Command Manager",
@@ -129,41 +128,6 @@ namespace AUTOCAD_COMMANDS
             }
 
             DrawHeaderGlyphs(e.Graphics, Width - 52, 10);
-        }
-
-        private static void DrawLogo(Graphics graphics, Rectangle bounds)
-        {
-            using (SolidBrush blueBrush = new SolidBrush(LogoBlue))
-            using (SolidBrush darkBrush = new SolidBrush(Color.FromArgb(34, 98, 176)))
-            using (SolidBrush lightBrush = new SolidBrush(Color.FromArgb(120, 198, 255)))
-            using (Pen outlinePen = new Pen(Color.FromArgb(180, 10, 24, 42)))
-            {
-                Point[] top = {
-                    new Point(bounds.Left + 6, bounds.Top),
-                    new Point(bounds.Left + 14, bounds.Top + 4),
-                    new Point(bounds.Left + 8, bounds.Top + 8),
-                    new Point(bounds.Left, bounds.Top + 4)
-                };
-                Point[] left = {
-                    new Point(bounds.Left, bounds.Top + 4),
-                    new Point(bounds.Left + 8, bounds.Top + 8),
-                    new Point(bounds.Left + 8, bounds.Top + 16),
-                    new Point(bounds.Left, bounds.Top + 12)
-                };
-                Point[] right = {
-                    new Point(bounds.Left + 8, bounds.Top + 8),
-                    new Point(bounds.Left + 14, bounds.Top + 4),
-                    new Point(bounds.Left + 14, bounds.Top + 12),
-                    new Point(bounds.Left + 8, bounds.Top + 16)
-                };
-
-                graphics.FillPolygon(lightBrush, top);
-                graphics.FillPolygon(blueBrush, left);
-                graphics.FillPolygon(darkBrush, right);
-                graphics.DrawPolygon(outlinePen, top);
-                graphics.DrawPolygon(outlinePen, left);
-                graphics.DrawPolygon(outlinePen, right);
-            }
         }
 
         private static void DrawHeaderGlyphs(Graphics graphics, int x, int y)

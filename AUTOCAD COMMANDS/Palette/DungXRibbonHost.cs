@@ -579,6 +579,8 @@ namespace AUTOCAD_COMMANDS
             {
                 yield return CreatePanel("More", "Other commands discovered from this DLL.", more);
             }
+
+            yield return CreateBrandPanel();
         }
 
         private static List<PaletteCommandItem> PickCommands(
@@ -730,20 +732,115 @@ namespace AUTOCAD_COMMANDS
                 float strokeWidth = size >= 32 ? 1.9f : 1.3f;
                 DrawGlyph(graphics, style.Glyph, glyphRect, style.AccentColor, strokeWidth);
 
-                using (MemoryStream stream = new MemoryStream())
-                {
-                    bitmap.Save(stream, ImageFormat.Png);
-                    stream.Position = 0;
-
-                    Imaging.BitmapImage image = new Imaging.BitmapImage();
-                    image.BeginInit();
-                    image.CacheOption = Imaging.BitmapCacheOption.OnLoad;
-                    image.StreamSource = stream;
-                    image.EndInit();
-                    image.Freeze();
-                    return image;
-                }
+                return ToImageSource(bitmap);
             }
+        }
+
+        private static Media.ImageSource ToImageSource(Bitmap bitmap)
+        {
+            using (MemoryStream stream = new MemoryStream())
+            {
+                bitmap.Save(stream, ImageFormat.Png);
+                stream.Position = 0;
+
+                Imaging.BitmapImage image = new Imaging.BitmapImage();
+                image.BeginInit();
+                image.CacheOption = Imaging.BitmapCacheOption.OnLoad;
+                image.StreamSource = stream;
+                image.EndInit();
+                image.Freeze();
+                return image;
+            }
+        }
+
+        private static Media.ImageSource _brandIconLarge;
+        private static Media.ImageSource _brandIconSmall;
+
+        private static Media.ImageSource GetBrandIcon(bool large)
+        {
+            if (large && _brandIconLarge != null)
+            {
+                return _brandIconLarge;
+            }
+
+            if (!large && _brandIconSmall != null)
+            {
+                return _brandIconSmall;
+            }
+
+            using (Bitmap bitmap = DungXLogo.CreateBitmap(large ? 32 : 16))
+            {
+                Media.ImageSource created = ToImageSource(bitmap);
+                if (large)
+                {
+                    _brandIconLarge = created;
+                }
+                else
+                {
+                    _brandIconSmall = created;
+                }
+
+                return created;
+            }
+        }
+
+        // Panel thương hiệu ở cuối tab: chỉ có logo DungX, bấm vào mở
+        // DungX Palette - vừa làm nhận diện thương hiệu vừa có tác dụng thật.
+        private static RibbonPanel CreateBrandPanel()
+        {
+            RibbonPanelSource source = new RibbonPanelSource
+            {
+                Title = "DungX",
+                Name = "DUNGX_BRAND",
+                Description = "DungX Custom Command Suite"
+            };
+
+            RibbonButton brandButton = new RibbonButton
+            {
+                Id = "DUNGX_BRAND_LOGO",
+                Name = "DungX",
+                Text = "DungX",
+                ShowText = true,
+                ShowImage = true,
+                Image = GetBrandIcon(false),
+                LargeImage = GetBrandIcon(true),
+                Size = RibbonItemSize.Large,
+                Orientation = System.Windows.Controls.Orientation.Vertical,
+                Description = "Mo DungX Palette - trung tam quan ly lenh tuy chinh.",
+                ToolTip = new RibbonToolTip
+                {
+                    Title = "DungX",
+                    Content = "Mo DungX Palette - trung tam quan ly lenh tuy chinh."
+                },
+                CommandHandler = new RelayRibbonCommand(() => DungXPaletteHost.ShowPalette())
+            };
+
+            source.Items.Add(brandButton);
+
+            return new RibbonPanel
+            {
+                Source = source
+            };
+        }
+
+        private sealed class RelayRibbonCommand : System.Windows.Input.ICommand
+        {
+            private readonly Action _action;
+
+            public RelayRibbonCommand(Action action)
+            {
+                _action = action;
+            }
+
+            public event EventHandler CanExecuteChanged
+            {
+                add { }
+                remove { }
+            }
+
+            public bool CanExecute(object parameter) => true;
+
+            public void Execute(object parameter) => _action();
         }
 
         private static void DrawGlyph(Graphics g, IconGlyph glyph, RectangleF r, Color color, float strokeWidth)
