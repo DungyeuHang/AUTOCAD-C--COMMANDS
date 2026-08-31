@@ -44,11 +44,10 @@ namespace AUTOCAD_COMMANDS
         private const int MaxRecentFormats = 6;
 
         // Flow:
-        // 1. Hỏi số bộ gốc, số bộ mới.
-        // 2. Hỏi cấu trúc SL hiện tại và cấu trúc SL mong muốn (dùng {X} làm placeholder số lượng).
-        //    Gợi ý các cấu trúc đã dùng gần đây, cho phép gõ số thứ tự để dùng lại.
-        // 3. Quét chọn đối tượng (chỉ xử lý DBText/MText trong vùng chọn).
-        // 4. Với mỗi text, tìm phần khớp cấu trúc hiện tại, tính lại SL theo tỉ lệ rồi
+        // 1. Hiện bảng nhập: số bộ gốc, số bộ mới, cấu trúc SL hiện tại, cấu trúc SL mong muốn
+        //    (dùng {X} làm placeholder số lượng). ComboBox gợi ý lại các cấu trúc đã dùng gần đây.
+        // 2. Quét chọn đối tượng (chỉ xử lý DBText/MText trong vùng chọn).
+        // 3. Với mỗi text, tìm phần khớp cấu trúc hiện tại, tính lại SL theo tỉ lệ rồi
         //    sinh ra theo cấu trúc mong muốn, ghi trực tiếp vào entity đó.
         [CommandMethod("SLL_CHANGE_SL_BO")]
         public void ChangeSlBo()
@@ -62,33 +61,28 @@ namespace AUTOCAD_COMMANDS
             Editor ed = doc.Editor;
             Database db = doc.Database;
 
-            if (!TryPromptPositiveInteger(ed, "\nSố bộ gốc: ", out int originalBundles))
-            {
-                return;
-            }
-
-            if (!TryPromptPositiveInteger(ed, "\nSố bộ mới: ", out int newBundles))
-            {
-                return;
-            }
-
             List<string> recentFormats = LoadRecentFormats();
-            string currentDefault = recentFormats.Count > 0 ? recentFormats[0] : DefaultFormatPattern;
+            string suggestedFormat = recentFormats.Count > 0 ? recentFormats[0] : DefaultFormatPattern;
 
-            if (!TryPromptFormatPattern(ed, "Cấu trúc SL hiện tại", currentDefault, recentFormats, out string currentPattern))
+            int originalBundles;
+            int newBundles;
+            string currentPattern;
+            string desiredPattern;
+
+            using (SllChangeSlBoForm form = new SllChangeSlBoForm(recentFormats, suggestedFormat))
             {
-                return;
+                if (Application.ShowModalDialog(form) != WF.DialogResult.OK)
+                {
+                    return;
+                }
+
+                originalBundles = form.OriginalBundles;
+                newBundles = form.NewBundles;
+                currentPattern = form.CurrentPattern;
+                desiredPattern = form.DesiredPattern;
             }
 
             RememberFormat(recentFormats, currentPattern);
-
-            string desiredDefault = recentFormats.Count > 0 ? recentFormats[0] : DefaultFormatPattern;
-
-            if (!TryPromptFormatPattern(ed, "Cấu trúc SL mong muốn", desiredDefault, recentFormats, out string desiredPattern))
-            {
-                return;
-            }
-
             RememberFormat(recentFormats, desiredPattern);
 
             Regex currentPatternRegex = BuildPatternRegex(currentPattern);
@@ -271,7 +265,8 @@ namespace AUTOCAD_COMMANDS
 
         // Cấu trúc hợp lệ khi chứa đúng 1 placeholder "{X}" (vd "SL: {X}", "(SL: {X})").
         // Từ chối: không có {X}, có {Y}/{x}, hoặc có nhiều hơn 1 {X}.
-        private static bool TryValidatePattern(string pattern, out string error)
+        // internal: dùng chung với SllChangeSlBoForm để validate ngay trong bảng nhập.
+        internal static bool TryValidatePattern(string pattern, out string error)
         {
             error = null;
 
@@ -302,93 +297,6 @@ namespace AUTOCAD_COMMANDS
                 return false;
             }
 
-            return true;
-        }
-
-        private static bool TryPromptFormatPattern(
-            Editor ed,
-            string label,
-            string defaultPattern,
-            List<string> recentFormats,
-            out string pattern)
-        {
-            pattern = null;
-
-            while (true)
-            {
-                StringBuilder message = new StringBuilder();
-                message.Append('\n').Append(label).Append(" (dùng {X} làm số lượng)");
-
-                if (recentFormats.Count > 0)
-                {
-                    message.Append("\n  Mẫu gần đây: ");
-                    for (int i = 0; i < recentFormats.Count; i++)
-                    {
-                        if (i > 0)
-                        {
-                            message.Append("  ");
-                        }
-
-                        message.Append('[').Append(i + 1).Append("] \"").Append(recentFormats[i]).Append('"');
-                    }
-
-                    message.Append(" - gõ số thứ tự để dùng lại mẫu.");
-                }
-
-                message.Append('\n').Append(label).Append(" <").Append(defaultPattern).Append(">: ");
-
-                PromptStringOptions options = new PromptStringOptions(message.ToString())
-                {
-                    AllowSpaces = true,
-                    UseDefaultValue = false
-                };
-                // PromptStringOptions không hỗ trợ Keywords - tự xử lý số thứ tự mẫu gần đây bên dưới.
-
-                PromptResult result = ed.GetString(options);
-                if (result.Status == PromptStatus.Cancel)
-                {
-                    return false;
-                }
-
-                string raw = result.Status == PromptStatus.None || string.IsNullOrWhiteSpace(result.StringResult)
-                    ? defaultPattern
-                    : result.StringResult.Trim();
-
-                if (int.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out int recentIndex) &&
-                    recentIndex >= 1 && recentIndex <= recentFormats.Count)
-                {
-                    raw = recentFormats[recentIndex - 1];
-                }
-
-                if (!TryValidatePattern(raw, out string error))
-                {
-                    ed.WriteMessage($"\nSLL_CHANGE_SL_BO: {error}");
-                    continue;
-                }
-
-                pattern = raw;
-                return true;
-            }
-        }
-
-        private static bool TryPromptPositiveInteger(Editor ed, string message, out int value)
-        {
-            value = 0;
-
-            PromptIntegerOptions options = new PromptIntegerOptions(message)
-            {
-                AllowNegative = false,
-                AllowZero = false,
-                AllowNone = false
-            };
-
-            PromptIntegerResult result = ed.GetInteger(options);
-            if (result.Status != PromptStatus.OK)
-            {
-                return false;
-            }
-
-            value = result.Value;
             return true;
         }
 
