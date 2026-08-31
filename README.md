@@ -154,10 +154,11 @@
 #### `SLL` (Change SL theo số bộ)
 *   **File:** `Commands/SllChangeSlBoCommands.cs`
 *   **Tên lệnh đầy đủ:** `SLL_CHANGE_SL_BO`
-*   **Chức năng:** Đổi số lượng `SL: X` trong TEXT/MTEXT theo tỉ lệ số bộ gốc -> số bộ mới (`newSL = originalSL / originalBundles * newBundles`).
+*   **Chức năng:** Đổi số lượng trong TEXT/MTEXT theo tỉ lệ số bộ gốc -> số bộ mới (`newSL = originalSL / originalBundles * newBundles`), với cấu trúc chứa số lượng do người dùng tự định nghĩa (không hardcode `SL: X`).
 *   **Cách hoạt động:**
     1.  Nhập "Số bộ gốc" và "Số bộ mới" (số nguyên dương).
-    2.  Quét chọn đối tượng. Chỉ xử lý `DBText`/`MText` trong vùng chọn, các loại khác bị bỏ qua.
-    3.  Với mỗi text, tìm chuỗi `SL:` (ở bất kỳ vị trí nào trong nội dung) và tính lại số ngay sau nó theo tỉ lệ, giữ nguyên toàn bộ phần còn lại.
-    4.  Ghi trực tiếp giá trị mới vào entity đó — không dùng FIND/REPLACE nên không bị cascading (mỗi text luôn tính từ giá trị SL gốc của chính nó).
-*   **Lưu ý:** Nếu SL gốc không chia hết cho số bộ gốc, đối tượng đó bị bỏ qua và lệnh báo lỗi thay vì sửa sai.
+    2.  Nhập "Cấu trúc SL hiện tại" và "Cấu trúc SL mong muốn", dùng `{X}` làm placeholder cho số lượng (vd `SL: {X}`, `SL{X}`, `(SL: {X})`). Lệnh gợi ý lại các cấu trúc đã dùng gần đây (lưu qua `WorkspaceUiStateStore`, key `sll_change_sl_bo.recent_formats`) — có thể gõ số thứ tự để dùng lại thay vì gõ lại toàn bộ. Mặc định là cấu trúc gần nhất đã dùng, hoặc `SL: {X}` nếu chưa có lịch sử.
+    3.  Quét chọn đối tượng. Chỉ xử lý `DBText`/`MText` trong vùng chọn, các loại khác bị bỏ qua.
+    4.  Với mỗi text, tìm phần khớp với cấu trúc hiện tại (ở bất kỳ vị trí nào trong nội dung), tính lại số theo tỉ lệ rồi sinh ra theo cấu trúc mong muốn; toàn bộ phần còn lại của text được giữ nguyên.
+    5.  Ghi trực tiếp giá trị mới vào entity đó — không dùng FIND/REPLACE nên không bị cascading (mỗi text luôn tính từ giá trị SL gốc của chính nó).
+*   **Lưu ý:** Cấu trúc phải chứa đúng 1 placeholder `{X}`, nếu không lệnh sẽ báo lỗi và yêu cầu nhập lại. Nếu SL gốc không chia hết cho số bộ gốc, đối tượng đó bị bỏ qua và lệnh báo lỗi thay vì sửa sai.
