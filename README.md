@@ -150,3 +150,14 @@
     3.  Lệnh sẽ lọc ra các text đích có `Height` hoặc `TextHeight` xấp xỉ 5.0.
     4.  Thay đổi nội dung của các text đã lọc cho giống với text mẫu.
 *   **Lưu ý:** Lệnh cố gắng giữ lại định dạng của `MText` khi sao chép.
+
+#### `SLL` (Change SL theo số bộ)
+*   **File:** `Commands/SllChangeSlBoCommands.cs`
+*   **Tên lệnh đầy đủ:** `SLL_CHANGE_SL_BO`
+*   **Chức năng:** Đổi số lượng `SL: X` trong TEXT/MTEXT theo tỉ lệ số bộ gốc -> số bộ mới (`newSL = originalSL / originalBundles * newBundles`).
+*   **Cách hoạt động:**
+    1.  Nhập "Số bộ gốc" và "Số bộ mới" (số nguyên dương).
+    2.  Quét chọn đối tượng. Chỉ xử lý `DBText`/`MText` trong vùng chọn, các loại khác bị bỏ qua.
+    3.  Với mỗi text, tìm chuỗi `SL:` (ở bất kỳ vị trí nào trong nội dung) và tính lại số ngay sau nó theo tỉ lệ, giữ nguyên toàn bộ phần còn lại.
+    4.  Ghi trực tiếp giá trị mới vào entity đó — không dùng FIND/REPLACE nên không bị cascading (mỗi text luôn tính từ giá trị SL gốc của chính nó).
+*   **Lưu ý:** Nếu SL gốc không chia hết cho số bộ gốc, đối tượng đó bị bỏ qua và lệnh báo lỗi thay vì sửa sai.
