@@ -29,26 +29,28 @@ namespace AUTOCAD_COMMANDS
     // ======================================================
     // SLL_CHANGE_SL_BO
     // Mục đích: đổi số lượng trong TEXT/MTEXT theo tỉ lệ số bộ gốc -> số bộ mới,
-    // với cấu trúc chứa số lượng (vd "SL: {X}") do người dùng nhập, không hardcode.
+    // hỗ trợ NHIỀU cấu trúc đầu vào (vì các phụ kiện khác nguồn có thể ghi SL khác kiểu
+    // nhau trong cùng 1 vùng chọn) và MỘT cấu trúc đầu ra duy nhất.
     // Lưu ý: chỉ đổi phần khớp với cấu trúc, giữ nguyên toàn bộ nội dung còn lại.
     // Mỗi đối tượng được tính lại từ giá trị SL gốc của chính nó (không cascading,
-    // không dùng FIND/REPLACE của AutoCAD).
+    // không dùng FIND/REPLACE của AutoCAD - text mới sinh ra không bị xử lý lại).
     // Các cấu trúc đã nhập được lưu lại (qua WorkspaceUiStateStore) để dùng lại lần sau.
     // ======================================================
     public class SllChangeSlBoCommands
     {
-        private const string PlaceholderToken = "{X}";
-        private const string DefaultFormatPattern = "SL: " + PlaceholderToken;
+        internal const string PlaceholderToken = "{X}";
+        internal const string DefaultFormatPattern = "SL: " + PlaceholderToken;
         private const string RecentFormatsKey = "sll_change_sl_bo.recent_formats";
         private const char RecentFormatsSeparator = (char)0x1F;
-        private const int MaxRecentFormats = 6;
+        private const int MaxRecentFormats = 10;
 
         // Flow:
-        // 1. Hiện bảng nhập: số bộ gốc, số bộ mới, cấu trúc SL hiện tại, cấu trúc SL mong muốn
+        // 1. Hiện bảng nhập: số bộ gốc, số bộ mới, N cấu trúc SL đầu vào và 1 cấu trúc SL đầu ra
         //    (dùng {X} làm placeholder số lượng). ComboBox gợi ý lại các cấu trúc đã dùng gần đây.
         // 2. Quét chọn đối tượng (chỉ xử lý DBText/MText trong vùng chọn).
-        // 3. Với mỗi text, tìm phần khớp cấu trúc hiện tại, tính lại SL theo tỉ lệ rồi
-        //    sinh ra theo cấu trúc mong muốn, ghi trực tiếp vào entity đó.
+        // 3. Với mỗi text, thử từng cấu trúc đầu vào (ưu tiên cấu trúc "cụ thể" hơn - xem
+        //    BuildInputPatternRegexes), tìm phần khớp đầu tiên, tính lại SL theo tỉ lệ rồi
+        //    sinh ra theo cấu trúc đầu ra, ghi trực tiếp vào entity đó.
         [CommandMethod("SLL_CHANGE_SL_BO")]
         public void ChangeSlBo()
         {
@@ -66,8 +68,8 @@ namespace AUTOCAD_COMMANDS
 
             int originalBundles;
             int newBundles;
-            string currentPattern;
-            string desiredPattern;
+            List<string> inputPatterns;
+            string outputPattern;
 
             using (SllChangeSlBoForm form = new SllChangeSlBoForm(recentFormats, suggestedFormat))
             {
@@ -78,14 +80,18 @@ namespace AUTOCAD_COMMANDS
 
                 originalBundles = form.OriginalBundles;
                 newBundles = form.NewBundles;
-                currentPattern = form.CurrentPattern;
-                desiredPattern = form.DesiredPattern;
+                inputPatterns = form.InputPatterns;
+                outputPattern = form.OutputPattern;
             }
 
-            RememberFormat(recentFormats, currentPattern);
-            RememberFormat(recentFormats, desiredPattern);
+            foreach (string inputPattern in inputPatterns)
+            {
+                RememberFormat(recentFormats, inputPattern);
+            }
 
-            Regex currentPatternRegex = BuildPatternRegex(currentPattern);
+            RememberFormat(recentFormats, outputPattern);
+
+            List<Regex> inputPatternRegexes = BuildInputPatternRegexes(inputPatterns);
 
             PromptSelectionOptions selectionOptions = new PromptSelectionOptions
             {
@@ -137,8 +143,8 @@ namespace AUTOCAD_COMMANDS
 
                     if (!TryComputeNewText(
                             originalText,
-                            currentPatternRegex,
-                            desiredPattern,
+                            inputPatternRegexes,
+                            outputPattern,
                             originalBundles,
                             newBundles,
                             out string updatedText,
@@ -174,17 +180,34 @@ namespace AUTOCAD_COMMANDS
                 tr.Commit();
 
                 ed.WriteMessage(
-                    $"\nSLL_CHANGE_SL_BO: đã đổi {changedCount} text (bỏ qua {skippedNoMatchCount} không khớp cấu trúc, {errorCount} lỗi SL không chia hết cho số bộ gốc).");
+                    $"\nSLL_CHANGE_SL_BO: đã đổi {changedCount} text (bỏ qua {skippedNoMatchCount} không khớp cấu trúc nào, {errorCount} lỗi SL không chia hết cho số bộ gốc).");
             }
         }
 
-        // Tìm mọi phần khớp với cấu trúc hiện tại trong text và tính lại SL theo tỉ lệ
-        // originalBundles -> newBundles, sinh ra theo cấu trúc mong muốn.
+        // Sắp xếp các cấu trúc đầu vào theo độ "cụ thể" giảm dần (đo bằng tổng số ký tự literal,
+        // tức chiều dài chuỗi cấu trúc - phần {X} không đổi nên chuỗi dài hơn = nhiều chữ cố định
+        // hơn = cụ thể hơn). Cấu trúc trùng nhau (so sánh y hệt từng ký tự) chỉ giữ lại 1 lần.
+        // Quy tắc xác định khi có nhiều cấu trúc cùng khớp 1 text: với mỗi entity, các cấu trúc
+        // được thử theo thứ tự cụ thể nhất trước, cấu trúc ĐẦU TIÊN khớp được dùng (xem
+        // TryComputeNewText) - cấu trúc dài/cụ thể hơn thắng cấu trúc ngắn/chung chung hơn;
+        // bằng độ dài thì giữ nguyên thứ tự người dùng đã nhập (LINQ OrderBy ổn định - stable sort).
+        private static List<Regex> BuildInputPatternRegexes(IEnumerable<string> patterns)
+        {
+            return patterns
+                .Distinct(StringComparer.Ordinal)
+                .OrderByDescending(pattern => pattern.Length)
+                .Select(BuildPatternRegex)
+                .ToList();
+        }
+
+        // Tìm cấu trúc đầu vào đầu tiên (theo thứ tự đã sắp trong inputPatternRegexes) khớp với
+        // text, rồi tính lại SL theo tỉ lệ originalBundles -> newBundles, sinh ra theo cấu trúc
+        // đầu ra desiredPattern.
         // Trả về false + error khác null nếu có SL không chia hết cho số bộ gốc (không sửa gì cả).
-        // Trả về false + error null nếu text không khớp cấu trúc hiện tại (bỏ qua, không phải lỗi).
+        // Trả về false + error null nếu text không khớp cấu trúc đầu vào nào (bỏ qua, không phải lỗi).
         private static bool TryComputeNewText(
             string originalText,
-            Regex currentPatternRegex,
+            List<Regex> inputPatternRegexes,
             string desiredPattern,
             int originalBundles,
             int newBundles,
@@ -199,14 +222,24 @@ namespace AUTOCAD_COMMANDS
                 return false;
             }
 
-            if (!currentPatternRegex.IsMatch(originalText))
+            Regex matchedRegex = null;
+            foreach (Regex regex in inputPatternRegexes)
+            {
+                if (regex.IsMatch(originalText))
+                {
+                    matchedRegex = regex;
+                    break;
+                }
+            }
+
+            if (matchedRegex == null)
             {
                 return false;
             }
 
             string localError = null;
 
-            string result = currentPatternRegex.Replace(originalText, match =>
+            string result = matchedRegex.Replace(originalText, match =>
             {
                 if (localError != null)
                 {
