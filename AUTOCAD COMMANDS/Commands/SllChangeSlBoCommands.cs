@@ -44,9 +44,16 @@ namespace AUTOCAD_COMMANDS
         private const char RecentFormatsSeparator = (char)0x1F;
         private const int MaxRecentFormats = 10;
 
+        private const string LastOriginalBundlesKey = "sll_change_sl_bo.last_original_bundles";
+        private const string LastNewBundlesKey = "sll_change_sl_bo.last_new_bundles";
+        private const string LastInputFormatsKey = "sll_change_sl_bo.last_input_formats";
+        private const string LastOutputFormatKey = "sll_change_sl_bo.last_output_format";
+
         // Flow:
         // 1. Hiện bảng nhập: số bộ gốc, số bộ mới, N cấu trúc SL đầu vào và 1 cấu trúc SL đầu ra
-        //    (dùng {X} làm placeholder số lượng). ComboBox gợi ý lại các cấu trúc đã dùng gần đây.
+        //    (dùng {X} làm placeholder số lượng), tự điền lại theo đúng những gì người dùng đã
+        //    nhập ở lần chạy trước (xem LoadLastSession/SaveLastSession). ComboBox gợi ý lại các
+        //    cấu trúc đã dùng gần đây.
         // 2. Quét chọn đối tượng (chỉ xử lý DBText/MText trong vùng chọn).
         // 3. Với mỗi text, thử từng cấu trúc đầu vào (ưu tiên cấu trúc "cụ thể" hơn - xem
         //    BuildInputPatternRegexes), tìm phần khớp đầu tiên, tính lại SL theo tỉ lệ rồi
@@ -64,14 +71,14 @@ namespace AUTOCAD_COMMANDS
             Database db = doc.Database;
 
             List<string> recentFormats = LoadRecentFormats();
-            string suggestedFormat = recentFormats.Count > 0 ? recentFormats[0] : DefaultFormatPattern;
+            SllChangeSlBoSession lastSession = LoadLastSession();
 
             int originalBundles;
             int newBundles;
             List<string> inputPatterns;
             string outputPattern;
 
-            using (SllChangeSlBoForm form = new SllChangeSlBoForm(recentFormats, suggestedFormat))
+            using (SllChangeSlBoForm form = new SllChangeSlBoForm(recentFormats, lastSession))
             {
                 if (Application.ShowModalDialog(form) != WF.DialogResult.OK)
                 {
@@ -90,6 +97,7 @@ namespace AUTOCAD_COMMANDS
             }
 
             RememberFormat(recentFormats, outputPattern);
+            SaveLastSession(originalBundles, newBundles, inputPatterns, outputPattern);
 
             List<Regex> inputPatternRegexes = BuildInputPatternRegexes(inputPatterns);
 
@@ -359,6 +367,74 @@ namespace AUTOCAD_COMMANDS
             WorkspaceUiStateStore.SaveValue(
                 RecentFormatsKey,
                 string.Join(RecentFormatsSeparator.ToString(), recentFormats));
+        }
+
+        // Toàn bộ trạng thái bảng nhập ở lần chạy gần nhất (khác với "recent formats" ở trên,
+        // vốn chỉ là danh sách gợi ý cho ComboBox) - dùng để tự điền lại bảng y hệt lần trước.
+        private static SllChangeSlBoSession LoadLastSession()
+        {
+            int originalBundles = WorkspaceUiStateStore.TryGetInt(LastOriginalBundlesKey, out int loadedOriginal) && loadedOriginal > 0
+                ? loadedOriginal
+                : 1;
+
+            int newBundles = WorkspaceUiStateStore.TryGetInt(LastNewBundlesKey, out int loadedNew) && loadedNew > 0
+                ? loadedNew
+                : 1;
+
+            List<string> inputPatterns = null;
+            string rawInputPatterns = WorkspaceUiStateStore.GetValue(LastInputFormatsKey);
+            if (!string.IsNullOrEmpty(rawInputPatterns))
+            {
+                inputPatterns = rawInputPatterns
+                    .Split(RecentFormatsSeparator)
+                    .Where(value => !string.IsNullOrEmpty(value))
+                    .ToList();
+            }
+
+            if (inputPatterns == null || inputPatterns.Count == 0)
+            {
+                inputPatterns = new List<string> { DefaultFormatPattern };
+            }
+
+            string outputPattern = WorkspaceUiStateStore.GetValue(LastOutputFormatKey);
+            if (string.IsNullOrEmpty(outputPattern))
+            {
+                outputPattern = DefaultFormatPattern;
+            }
+
+            return new SllChangeSlBoSession
+            {
+                OriginalBundles = originalBundles,
+                NewBundles = newBundles,
+                InputPatterns = inputPatterns,
+                OutputPattern = outputPattern
+            };
+        }
+
+        private static void SaveLastSession(
+            int originalBundles,
+            int newBundles,
+            List<string> inputPatterns,
+            string outputPattern)
+        {
+            WorkspaceUiStateStore.SaveValue(LastOriginalBundlesKey, WorkspaceUiStateStore.ToInvariant(originalBundles));
+            WorkspaceUiStateStore.SaveValue(LastNewBundlesKey, WorkspaceUiStateStore.ToInvariant(newBundles));
+            WorkspaceUiStateStore.SaveValue(
+                LastInputFormatsKey,
+                string.Join(RecentFormatsSeparator.ToString(), inputPatterns));
+            WorkspaceUiStateStore.SaveValue(LastOutputFormatKey, outputPattern);
+        }
+
+        // Gộp toàn bộ giá trị bảng nhập ở lần chạy gần nhất để truyền vào SllChangeSlBoForm.
+        internal sealed class SllChangeSlBoSession
+        {
+            public int OriginalBundles { get; set; }
+
+            public int NewBundles { get; set; }
+
+            public List<string> InputPatterns { get; set; }
+
+            public string OutputPattern { get; set; }
         }
     }
 }

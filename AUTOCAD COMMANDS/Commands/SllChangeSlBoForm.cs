@@ -40,18 +40,21 @@ namespace AUTOCAD_COMMANDS
         private readonly WF.TextBox _newBundlesBox;
         private readonly WF.ComboBox _outputFormatBox;
 
-        public SllChangeSlBoForm(IEnumerable<string> recentFormats, string defaultFormat)
+        public SllChangeSlBoForm(IEnumerable<string> recentFormats, SllChangeSlBoCommands.SllChangeSlBoSession lastSession)
         {
             _recentFormats = recentFormats?.ToList() ?? new List<string>();
-            _defaultFormat = string.IsNullOrEmpty(defaultFormat)
-                ? SllChangeSlBoCommands.DefaultFormatPattern
-                : defaultFormat;
-            _inputFormatValues.Add(_defaultFormat);
+            _defaultFormat = _recentFormats.Count > 0 ? _recentFormats[0] : SllChangeSlBoCommands.DefaultFormatPattern;
+
+            // Tự điền lại y hệt lần chạy trước (nếu có), thay vì luôn bắt đầu từ giá trị mặc định.
+            _inputFormatValues.AddRange(
+                lastSession != null && lastSession.InputPatterns.Count > 0
+                    ? lastSession.InputPatterns
+                    : new List<string> { _defaultFormat });
 
             Text = "SLL_CHANGE_SL_BO - Đổi số lượng SL";
             StartPosition = WF.FormStartPosition.CenterParent;
-            MinimumSize = new Size(480, 420);
-            Size = new Size(520, 480);
+            MinimumSize = new Size(480, 560);
+            Size = new Size(520, 640);
             FormBorderStyle = WF.FormBorderStyle.SizableToolWindow;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -101,10 +104,18 @@ namespace AUTOCAD_COMMANDS
             bundleFields.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
             bundleFields.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
 
-            _originalBundlesBox = new WF.TextBox { Dock = WF.DockStyle.Fill, Text = "1" };
+            _originalBundlesBox = new WF.TextBox
+            {
+                Dock = WF.DockStyle.Fill,
+                Text = (lastSession?.OriginalBundles ?? 1).ToString(CultureInfo.InvariantCulture)
+            };
             AddFieldRow(bundleFields, 0, "Số bộ gốc:", _originalBundlesBox);
 
-            _newBundlesBox = new WF.TextBox { Dock = WF.DockStyle.Fill, Text = "1" };
+            _newBundlesBox = new WF.TextBox
+            {
+                Dock = WF.DockStyle.Fill,
+                Text = (lastSession?.NewBundles ?? 1).ToString(CultureInfo.InvariantCulture)
+            };
             AddFieldRow(bundleFields, 1, "Số bộ mới:", _newBundlesBox);
 
             AddContentRow(content, ref row, bundleFields);
@@ -136,7 +147,7 @@ namespace AUTOCAD_COMMANDS
             AddContentRow(content, ref row, CreateSectionHeader("CẤU TRÚC SL ĐẦU RA (duy nhất)"));
             AddContentRow(content, ref row, CreateSeparator());
 
-            _outputFormatBox = CreateFormatComboBox(_defaultFormat);
+            _outputFormatBox = CreateFormatComboBox(lastSession?.OutputPattern ?? _defaultFormat);
             _outputFormatBox.Margin = new WF.Padding(0, 8, 0, 4);
             AddContentRow(content, ref row, _outputFormatBox);
 
