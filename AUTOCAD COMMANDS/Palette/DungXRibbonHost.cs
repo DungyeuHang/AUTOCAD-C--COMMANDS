@@ -753,39 +753,23 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
-        private static Media.ImageSource _brandIconLarge;
-        private static Media.ImageSource _brandIconSmall;
+        private static Media.ImageSource _brandLogoLarge;
+        private static Media.ImageSource _brandLogoSmall;
 
-        private static Media.ImageSource GetBrandIcon(bool large)
+        private static Media.ImageSource GetBrandLogoIcon(bool large)
         {
-            if (large && _brandIconLarge != null)
-            {
-                return _brandIconLarge;
-            }
-
-            if (!large && _brandIconSmall != null)
-            {
-                return _brandIconSmall;
-            }
+            if (large && _brandLogoLarge != null) { return _brandLogoLarge; }
+            if (!large && _brandLogoSmall != null) { return _brandLogoSmall; }
 
             using (Bitmap bitmap = DungXLogo.CreateBitmap(large ? 32 : 16))
             {
                 Media.ImageSource created = ToImageSource(bitmap);
-                if (large)
-                {
-                    _brandIconLarge = created;
-                }
-                else
-                {
-                    _brandIconSmall = created;
-                }
-
+                if (large) { _brandLogoLarge = created; } else { _brandLogoSmall = created; }
                 return created;
             }
         }
 
-        // Panel thương hiệu ở cuối tab: chỉ có logo DungX, bấm vào mở
-        // DungX Palette - vừa làm nhận diện thương hiệu vừa có tác dụng thật.
+        // Panel thương hiệu ở cuối tab: chỉ logo DungX, bấm vào mở DungX Palette.
         private static RibbonPanel CreateBrandPanel()
         {
             RibbonPanelSource source = new RibbonPanelSource
@@ -802,8 +786,8 @@ namespace AUTOCAD_COMMANDS
                 Text = "DungX",
                 ShowText = true,
                 ShowImage = true,
-                Image = GetBrandIcon(false),
-                LargeImage = GetBrandIcon(true),
+                Image = GetBrandLogoIcon(false),
+                LargeImage = GetBrandLogoIcon(true),
                 Size = RibbonItemSize.Large,
                 Orientation = System.Windows.Controls.Orientation.Vertical,
                 Description = "Mo DungX Palette - trung tam quan ly lenh tuy chinh.",
