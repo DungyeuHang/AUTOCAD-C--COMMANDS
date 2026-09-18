@@ -64,6 +64,7 @@
     <Compile Include="SmartStretch\*.cs" />
     <Compile Include="Palette\*.cs" />
     <Compile Include="Properties\*.cs" />
+    <Compile Include="AutoCut\*.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
