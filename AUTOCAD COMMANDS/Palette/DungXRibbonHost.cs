@@ -53,15 +53,25 @@ namespace AUTOCAD_COMMANDS
         private static readonly string[] ToolCommands =
             { "DXPALETTE", "DXPALETTERELOAD", "DXPALETTESETFOLDER", "DXRIBBONRELOAD" };
 
+        // Các command tôn chấn / dãn phôi.
+        private static readonly string[] SheetMetalCommands =
+            { "DX_FOIL" };
+
         private static readonly string[] HiddenCommands =
-            { 
-                "DXRIBBON", 
-                "ACC", 
+            {
+                "DXRIBBON",
+                "ACC",
                 "ACT",
-                "ACC_AUTO_CUT_SETTINGS", 
-                "ACC_AUTO_CUT_TEST", 
-                "ACC_AUTO_TRIM_OUTSIDE", 
-                "ACC_TRIM_TEST" 
+                "ACC_AUTO_CUT_SETTINGS",
+                "ACC_AUTO_CUT_TEST",
+                "ACC_AUTO_TRIM_OUTSIDE",
+                "ACC_TRIM_TEST",
+                // DX_FOIL chỉ hiện đúng 1 nút trên ribbon. Alias và các lệnh phụ
+                // (cài đặt / hiệu chuẩn / kiểm thử) vẫn gõ được ở dòng lệnh.
+                "DANPHOI",
+                "DX_FOIL_SETTINGS",
+                "DX_FOIL_CALIB",
+                "DX_FOIL_TEST"
             };
 
         private static readonly HashSet<string> KnownCommands =
@@ -70,6 +80,7 @@ namespace AUTOCAD_COMMANDS
                     .Concat(StretchCommands)
                     .Concat(CutTrimCommands)
                     .Concat(ToolCommands)
+                    .Concat(SheetMetalCommands)
                     .Concat(HiddenCommands),
                 StringComparer.OrdinalIgnoreCase);
 
@@ -568,6 +579,7 @@ namespace AUTOCAD_COMMANDS
             List<PaletteCommandItem> dimensions = PickCommands(builtInItems, DimensionCommands);
             List<PaletteCommandItem> stretches = PickCommands(builtInItems, StretchCommands);
             List<PaletteCommandItem> cutTrims = PickCommands(builtInItems, CutTrimCommands);
+            List<PaletteCommandItem> sheetMetal = PickCommands(builtInItems, SheetMetalCommands);
             List<PaletteCommandItem> tools = PickCommands(builtInItems, ToolCommands);
             List<PaletteCommandItem> more = builtInItems
                 .Where(item => !KnownCommands.Contains(item.CommandName))
@@ -587,6 +599,11 @@ namespace AUTOCAD_COMMANDS
             if (cutTrims.Count > 0)
             {
                 yield return CreatePanel("Cut / Trim", "Tự động cắt và trim theo đường mốc.", cutTrims);
+            }
+
+            if (sheetMetal.Count > 0)
+            {
+                yield return CreatePanel("Tôn chấn", "Dãn phôi tôn chấn từ polyline biên dạng.", sheetMetal);
             }
 
             if (tools.Count > 0)
@@ -1467,6 +1484,15 @@ namespace AUTOCAD_COMMANDS
                     "Configure target parameters used by Smart Dim XY.",
                     "XS",
                     tile, more, IconGlyph.SettingsGear),
+                ["DX_FOIL"] = new RibbonCommandStyle(
+                    "Dãn Phôi Tôn Chấn",
+                    "Dãn\nPhôi",
+                    "Dãn Phôi",
+                    "DP",
+                    "Dãn phôi tôn chấn từ polyline biên dạng: tính chiều rộng triển khai, " +
+                    "vẽ phôi, đường chấn và hình các bước chấn.",
+                    "DF",
+                    tile, Color.FromArgb(124, 77, 255), IconGlyph.UnfilletCorner),
                 ["UFF"] = new RibbonCommandStyle(
                     "Un-Fillet Polyline",
                     "Un-Fillet\nPolyline",

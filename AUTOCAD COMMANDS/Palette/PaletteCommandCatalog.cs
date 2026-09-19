@@ -42,7 +42,12 @@ namespace AUTOCAD_COMMANDS
             "ACC_AUTO_CUT_SETTINGS",
             "ACC_AUTO_CUT_TEST",
             "ACC_AUTO_TRIM_OUTSIDE",
-            "ACC_TRIM_TEST"
+            "ACC_TRIM_TEST",
+            // DX_FOIL chỉ hiện đúng 1 mục. Alias và các lệnh phụ vẫn gõ được ở dòng lệnh.
+            "DANPHOI",
+            "DX_FOIL_SETTINGS",
+            "DX_FOIL_CALIB",
+            "DX_FOIL_TEST"
         };
 
         public static List<PaletteCommandItem> BuildItems()
