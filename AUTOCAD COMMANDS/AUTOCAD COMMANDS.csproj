@@ -65,6 +65,7 @@
     <Compile Include="Palette\*.cs" />
     <Compile Include="Properties\*.cs" />
     <Compile Include="AutoCut\*.cs" />
+    <Compile Include="AutoTrim\*.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
