@@ -1,4 +1,4 @@
-﻿using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using AcCoreApplication = Autodesk.AutoCAD.ApplicationServices.Core.Application;
 using Autodesk.AutoCAD.EditorInput;
@@ -45,17 +45,30 @@ namespace AUTOCAD_COMMANDS
         private static readonly string[] StretchCommands =
             { "SS", "SSD", "SSD2_SMART_STRETCH_BY_DIM2", "SX", "SY" };
 
+        // Các command hiện lên panel Cut / Trim.
+        private static readonly string[] CutTrimCommands =
+            { "ACC_AUTO_CUT", "ACC_TRIM_OUTSIDE", "ACC_TRIM_INSIDE" };
+
         // Các command tiện ích workspace/palette/ribbon.
         private static readonly string[] ToolCommands =
             { "DXPALETTE", "DXPALETTERELOAD", "DXPALETTESETFOLDER", "DXRIBBONRELOAD" };
 
         private static readonly string[] HiddenCommands =
-            { "DXRIBBON" };
+            { 
+                "DXRIBBON", 
+                "ACC", 
+                "ACT",
+                "ACC_AUTO_CUT_SETTINGS", 
+                "ACC_AUTO_CUT_TEST", 
+                "ACC_AUTO_TRIM_OUTSIDE", 
+                "ACC_TRIM_TEST" 
+            };
 
         private static readonly HashSet<string> KnownCommands =
             new HashSet<string>(
                 DimensionCommands
                     .Concat(StretchCommands)
+                    .Concat(CutTrimCommands)
                     .Concat(ToolCommands)
                     .Concat(HiddenCommands),
                 StringComparer.OrdinalIgnoreCase);
@@ -554,6 +567,7 @@ namespace AUTOCAD_COMMANDS
 
             List<PaletteCommandItem> dimensions = PickCommands(builtInItems, DimensionCommands);
             List<PaletteCommandItem> stretches = PickCommands(builtInItems, StretchCommands);
+            List<PaletteCommandItem> cutTrims = PickCommands(builtInItems, CutTrimCommands);
             List<PaletteCommandItem> tools = PickCommands(builtInItems, ToolCommands);
             List<PaletteCommandItem> more = builtInItems
                 .Where(item => !KnownCommands.Contains(item.CommandName))
@@ -568,6 +582,11 @@ namespace AUTOCAD_COMMANDS
             if (stretches.Count > 0)
             {
                 yield return CreatePanel("Stretch", "Native-like smart stretch workflow.", stretches);
+            }
+
+            if (cutTrims.Count > 0)
+            {
+                yield return CreatePanel("Cut / Trim", "Tự động cắt và trim theo đường mốc.", cutTrims);
             }
 
             if (tools.Count > 0)
@@ -1247,6 +1266,30 @@ namespace AUTOCAD_COMMANDS
 
             return new Dictionary<string, RibbonCommandStyle>(StringComparer.OrdinalIgnoreCase)
             {
+                ["ACC_AUTO_CUT"] = new RibbonCommandStyle(
+                    "ACC Auto Cut",
+                    "Auto\nCut",
+                    "Auto Cut",
+                    "ACC",
+                    "Tự động cắt đối tượng (Line, Pline, Arc...) theo dao cắt.",
+                    "AC",
+                    tile, Color.FromArgb(230, 81, 0), IconGlyph.SplitDim),
+                ["ACC_TRIM_OUTSIDE"] = new RibbonCommandStyle(
+                    "Trim Outside",
+                    "Trim\nOutside",
+                    "Trim Out",
+                    "OUT",
+                    "Tự động cắt sạch các hình thò ra ngoài đường mốc PLINE.",
+                    "TO",
+                    tile, Color.FromArgb(0, 150, 136), IconGlyph.UnfilletCorner),
+                ["ACC_TRIM_INSIDE"] = new RibbonCommandStyle(
+                    "Trim Inside",
+                    "Trim\nInside",
+                    "Trim In",
+                    "IN",
+                    "Tự động cắt sạch các hình nằm bên trong đường mốc PLINE.",
+                    "TI",
+                    tile, Color.FromArgb(0, 150, 136), IconGlyph.UnfilletCorner),
                 ["DAA_Dim_auto"] = new RibbonCommandStyle(
                     "DAA Auto Dim",
                     "DAA\nAuto",

@@ -1,4 +1,4 @@
-﻿using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.GraphicsInterface;
@@ -34,6 +34,17 @@ namespace AUTOCAD_COMMANDS
         private static readonly Regex BinaryCommandRegex =
             new Regex(@"(?i)(?:\(\s*defun\s+c:|c:)(?<name>[a-z0-9_\-$]+)", RegexOptions.Compiled);
 
+        private static readonly HashSet<string> HiddenCommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "DXRIBBON",
+            "ACC",
+            "ACT",
+            "ACC_AUTO_CUT_SETTINGS",
+            "ACC_AUTO_CUT_TEST",
+            "ACC_AUTO_TRIM_OUTSIDE",
+            "ACC_TRIM_TEST"
+        };
+
         public static List<PaletteCommandItem> BuildItems()
         {
             Dictionary<string, string> savedDescriptions = PaletteDescriptionStore.Load();
@@ -47,6 +58,7 @@ namespace AUTOCAD_COMMANDS
                 Assembly.GetExecutingAssembly().Location,
                 PaletteSourceKind.BuiltInDll))
             {
+                if (HiddenCommands.Contains(item.CommandName)) continue;
                 AddOrReplace(result, unique, item, savedDescriptions);
             }
 

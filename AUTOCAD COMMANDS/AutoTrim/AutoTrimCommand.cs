@@ -13,6 +13,7 @@ namespace AUTOCAD_COMMANDS
     {
         [CommandMethod("ACC_TRIM_OUTSIDE", CommandFlags.UsePickSet)]
         [CommandMethod("ACC_AUTO_TRIM_OUTSIDE", CommandFlags.UsePickSet)]
+        [CommandMethod("ACT", CommandFlags.UsePickSet)]
         public void TrimOutsideCommand()
         {
             ExecuteTrimWorkflow(AutoTrimMode.TrimOutside);
@@ -85,22 +86,16 @@ namespace AUTOCAD_COMMANDS
                 boundaryCurve.Highlight();
 
                 // =======================================================
-                // BƯỚC 2: CHỌN CÁC ĐỐI TƯỢNG CẦN TRIM (SHAPES TO TRIM)
+                // BƯỚC 2: TỰ ĐỘNG TÌM CÁC ĐỐI TƯỢNG CẮT QUA ĐƯỜNG MỐC
+                // (Không bắt người dùng bấm ENTER thêm 1 bước thừa thãi)
                 // =======================================================
                 string modeDesc = mode == AutoTrimMode.TrimOutside ? "bên ngoài" : "bên trong";
-                PromptSelectionOptions pso = new PromptSelectionOptions
-                {
-                    MessageForAdding = $"\n[{cmdName}] Quét chọn các đối tượng cần cắt qua đường mốc (hoặc nhấn ENTER để TỰ ĐỘNG tìm): ",
-                    RejectObjectsFromNonCurrentSpace = true,
-                    AllowDuplicates = false
-                };
-
-                PromptSelectionResult psr = ed.GetSelection(pso);
                 List<ObjectId> candidateIds = new List<ObjectId>();
 
+                // Kiểm tra xem trước khi gọi lệnh user có quét chọn trước đối tượng không (PickFirst)
+                PromptSelectionResult psr = ed.SelectImplied();
                 if (psr.Status == PromptStatus.OK && psr.Value != null && psr.Value.Count > 0)
                 {
-                    // Lấy các đối tượng người dùng quét chọn
                     foreach (SelectedObject so in psr.Value)
                     {
                         if (so != null && so.ObjectId.IsValid && so.ObjectId != boundaryId)
@@ -113,15 +108,15 @@ namespace AUTOCAD_COMMANDS
                         }
                     }
                 }
-                else
+
+                // Nếu không có đối tượng chọn trước -> Tự động quét không gian mô hình gần đường mốc
+                if (candidateIds.Count == 0)
                 {
-                    // Người dùng bấm ENTER -> Tự động tìm CHỈ các đối tượng giao cắt qua Boundary
-                    ed.WriteMessage($"\n[{cmdName}] Đang tự động tìm các đối tượng cắt qua đường mốc...");
                     BlockTableRecord currentSpace = tr.GetObject(db.CurrentSpaceId, OpenMode.ForRead) as BlockTableRecord;
                     if (currentSpace != null && boundaryCurve.Bounds.HasValue)
                     {
                         Extents3d bExt = boundaryCurve.Bounds.Value;
-                        double margin = 1.0; // Dung sai mở rộng bounding box
+                        double margin = 2.0;
 
                         foreach (ObjectId entId in currentSpace)
                         {
@@ -132,7 +127,7 @@ namespace AUTOCAD_COMMANDS
                                 if (ent.Bounds.HasValue)
                                 {
                                     Extents3d cExt = ent.Bounds.Value;
-                                    // Bỏ qua ngay lập tức bất kỳ đối tượng nào nằm hoàn toàn ngoài Bounding Box của đường mốc
+                                    // Loại bỏ các đối tượng hoàn toàn ngoài vùng bao
                                     if (cExt.MaxPoint.X < bExt.MinPoint.X - margin || cExt.MinPoint.X > bExt.MaxPoint.X + margin ||
                                         cExt.MaxPoint.Y < bExt.MinPoint.Y - margin || cExt.MinPoint.Y > bExt.MaxPoint.Y + margin)
                                     {
@@ -178,7 +173,8 @@ namespace AUTOCAD_COMMANDS
                         }
 
                         // =======================================================
-                        // BƯỚC 5: THÔNG BÁO & HỎI XÁC NHẬN
+                        // BƯỚC 5: THÔNG BÁO & HỎI XÁC NHẬN ĐA PHƯƠNG THỨC
+                        // (Hỗ trợ: Click chuột trái, Chuột phải, Enter, Phím cách, Gõ Y, Gõ C)
                         // =======================================================
                         ed.WriteMessage($"\n=======================================================");
                         ed.WriteMessage($"\n[{cmdName}] KẾT QUẢ PHÂN TÍCH TỰ ĐỘNG:");
@@ -189,20 +185,47 @@ namespace AUTOCAD_COMMANDS
                         ed.WriteMessage($"\n- Đường mốc & Mọi đối tượng khác trong bản vẽ: BẢO TOÀN NGUYÊN VẸN 100%");
                         ed.WriteMessage($"\n=======================================================");
 
-                        bool proceed = true;
+                        bool proceed = false;
                         if (settings.ConfirmBeforeCommit)
                         {
-                            PromptKeywordOptions pko = new PromptKeywordOptions(
-                                $"\nThực hiện cắt sạch tất cả phần bên {modeDesc}? [Có (Y)/Không (N)] <Có>: ");
-                            pko.Keywords.Add("Yes", "Y", "Có (Y)");
-                            pko.Keywords.Add("No", "N", "Không (N)");
-                            pko.Keywords.Default = "Yes";
+                            PromptPointOptions ppo = new PromptPointOptions(
+                                $"\nClick chuột bất kỳ hoặc gõ Y/Enter để Cắt sạch {modeDesc} [Có(Y)/Không(N)] <Có>: ");
+                            ppo.Keywords.Add("Yes", "Y", "Có(Y)");
+                            ppo.Keywords.Add("No", "N", "Không(N)");
+                            ppo.Keywords.Add("Co", "C", "Có(C)");
+                            ppo.Keywords.Add("Khong", "K", "Không(K)");
+                            ppo.Keywords.Default = "Yes";
+                            ppo.AllowNone = true; // Enter, Phím cách, Chuột phải
+                            ppo.AllowArbitraryInput = true;
 
-                            PromptResult pr = ed.GetKeywords(pko);
-                            if (pr.Status != PromptStatus.OK || pr.StringResult == "No")
+                            PromptPointResult ppr = ed.GetPoint(ppo);
+
+                            if (ppr.Status == PromptStatus.OK)
                             {
-                                proceed = false;
+                                // Click chuột trái bất kỳ trên màn hình CAD -> CHẤP NHẬN CẮT
+                                proceed = true;
                             }
+                            else if (ppr.Status == PromptStatus.None)
+                            {
+                                // Bấm phím ENTER hoặc Phím cách hoặc Chuột phải -> CHẤP NHẬN CẮT (Default Yes)
+                                proceed = true;
+                            }
+                            else if (ppr.Status == PromptStatus.Keyword)
+                            {
+                                string kw = ppr.StringResult?.Trim()?.ToUpperInvariant() ?? "";
+                                if (kw == "YES" || kw == "Y" || kw == "CO" || kw == "C" || kw == "CÓ" || kw == "OK")
+                                {
+                                    proceed = true;
+                                }
+                                else
+                                {
+                                    proceed = false;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            proceed = true;
                         }
 
                         preview.Clear(ed);
@@ -371,10 +394,6 @@ namespace AUTOCAD_COMMANDS
                     using (var analysis = AutoTrimBoundaryEngine.AnalyzeBoundaryTrim(db, tr, bId, new[] { cLineId }, settings))
                     {
                         var plan = analysis.EntityPlans.FirstOrDefault();
-                        // Phải có 2 giao điểm (X=0, Y=25) và (X=100, Y=25)
-                        // Đoạn 1: X=-20 đến 0 (IsRemove = true)
-                        // Đoạn 2: X=0 đến 100 (IsRemove = false - Giữ lại)
-                        // Đoạn 3: X=100 đến 120 (IsRemove = true)
                         if (plan != null &&
                             plan.Pieces.Count == 3 &&
                             plan.Pieces.Count(p => p.IsRemove) == 2 &&
@@ -457,8 +476,6 @@ namespace AUTOCAD_COMMANDS
                     using (var analysis = AutoTrimBoundaryEngine.AnalyzeBoundaryTrim(db, tr, bId, new[] { cLine2Id }, settings))
                     {
                         var plan = analysis.EntityPlans.FirstOrDefault();
-                        // Ở mode TrimInside: phần bên trong (X=0 đến 100) phải bị xóa (IsRemove = true)
-                        // 2 đoạn bên ngoài (-20..0 và 100..120) phải được giữ lại (IsRemove = false)
                         if (plan != null &&
                             plan.Pieces.Count == 3 &&
                             plan.Pieces.Count(p => p.IsRemove) == 1 &&

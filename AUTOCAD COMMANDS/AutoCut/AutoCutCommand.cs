@@ -13,6 +13,7 @@ namespace AUTOCAD_COMMANDS
     public class AutoCutCommand
     {
         [CommandMethod("ACC_AUTO_CUT", CommandFlags.UsePickSet)]
+        [CommandMethod("ACC", CommandFlags.UsePickSet)]
         public void AutoCut()
         {
             Document doc = Application.DocumentManager.MdiActiveDocument;
