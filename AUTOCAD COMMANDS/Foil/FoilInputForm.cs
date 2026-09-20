@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
@@ -207,7 +207,7 @@ namespace AUTOCAD_COMMANDS
 
             _chkInvertOffsetSide = new CheckBox
             {
-                Text = "     Dao nguoc phia offset  -  tick neu tool khoanh tron NHAM phia",
+                Text = "     Dao nguoc phia offset  -  tick neu tool bu NHAM phia",
                 AutoSize = true
             };
             _chkInvertOffsetSide.CheckedChanged += (s, e) => UpdatePreviewLabels();
@@ -631,7 +631,7 @@ namespace AUTOCAD_COMMANDS
                     Environment.NewLine +
                     "                                canh ve 34 co 2 vong tron = {2:0.###}" +
                     Environment.NewLine +
-                    "Canh chi co goc LOI giu nguyen. Tool tu khoanh tron cac duong da cong.",
+                    "Canh chi co goc LOI giu nguyen.",
                     t,
                     15.0 + t,
                     34.0 + 2.0 * t);

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 namespace AUTOCAD_COMMANDS
 {
@@ -62,7 +62,7 @@ namespace AUTOCAD_COMMANDS
     ///
     /// LUU Y QUAN TRONG: tu MOT polyline HO khong the suy chac chan vat lieu nam phia nao,
     /// nen khong the tu dong biet goc nao la lom. Tuy nhien cac goc lom luon roi tron ve MOT
-    /// PHIA RE. Vi the nguoi dung chon phia nao duoc cong, va tool tu KHOANH TRON dung cac
+    /// PHIA RE. Vi the nguoi dung chon phia nao duoc cong, roi doi chieu ket qua tren cac
     /// duong do de kiem tra bang mat.
     ///
     /// PHAI PHAN BIET VOI FoilSettings.InvertBendDirection:

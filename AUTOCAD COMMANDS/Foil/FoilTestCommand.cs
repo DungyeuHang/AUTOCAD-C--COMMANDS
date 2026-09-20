@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -449,6 +449,45 @@ namespace AUTOCAD_COMMANDS
                     LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
                     Assert(!lt.Has("_mss.buocchan"),
                         "khong duoc tao layer buoc chan khi tuy chon dang tat");
+
+                    tr.Abort();
+                }
+            });
+
+            RunTest("B13: Khong ve entity danh dau tren duong chan", ref passed, ref failed, ed, () =>
+            {
+                using (Database db = new Database(true, true))
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    // Bien dang hem: co goc LOM nen chac chan co duong chan duoc cong be day.
+                    Polyline pl = CreatePolyline(db, tr, false,
+                        new Point2d(0, 0), new Point2d(0, 60), new Point2d(100, 60),
+                        new Point2d(100, 40), new Point2d(226.4, 40), new Point2d(226.4, 60),
+                        new Point2d(326.4, 60), new Point2d(326.4, 0));
+
+                    FoilSettings s = DefaultSettings();
+                    s.ThicknessCompensation = FoilThicknessCompensationMode.TurnLeft;
+                    s.DrawBendSteps = false;
+
+                    FoilFlatPatternResult result = Calculate(pl, s);
+                    FoilFlatPatternGeometry geometry = FoilFlatPatternGeometry.Build(
+                        result, new FoilPoint2d(0, 0), 0.0);
+
+                    FoilDrawResult draw = FoilDrawingBuilder.Draw(db, tr, result, geometry, 0.0);
+
+                    Assert(draw.CompensatedCount > 0,
+                        "bien dang nay phai co duong chan duoc cong be day (de phep thu co y nghia)");
+
+                    // Duong chan chi duoc ve bang LINE - khong con vong tron danh dau nao.
+                    foreach (ObjectId id in draw.BendLineIds)
+                    {
+                        Entity ent = (Entity)tr.GetObject(id, OpenMode.ForRead);
+                        Assert(ent is Line,
+                            "chi duoc ve Line cho duong chan, khong ve entity danh dau");
+                    }
+
+                    Assert(draw.BendLineIds.Count == result.BendCount,
+                        "so entity phai bang dung so duong chan, khong co entity thua");
 
                     tr.Abort();
                 }

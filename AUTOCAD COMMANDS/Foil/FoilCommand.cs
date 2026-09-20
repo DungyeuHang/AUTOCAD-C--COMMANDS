@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
@@ -321,8 +321,8 @@ namespace AUTOCAD_COMMANDS
             {
                 ed.WriteMessage(string.Format(
                     ci,
-                    "\n Bu be day       : {0} duong chan (goc lom) da duoc cong be day va KHOANH TRON." +
-                    "\n                   Neu khoanh nham phia, chay lai va tick \"Dao nguoc phia offset\".",
+                    "\n Bu be day       : {0} duong chan (goc lom) da duoc cong be day." +
+                    "\n                   Neu bu nham phia, chay lai va tick \"Dao nguoc phia offset\".",
                     drawResult.CompensatedCount));
             }
 

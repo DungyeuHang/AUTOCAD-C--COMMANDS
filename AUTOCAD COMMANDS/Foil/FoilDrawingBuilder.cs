@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.Colors;
+﻿using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using System;
@@ -29,7 +29,7 @@ namespace AUTOCAD_COMMANDS
 
         public int StepCount { get; set; }
 
-        /// <summary>So duong chan duoc cong be day (goc lom) - moi duong duoc khoanh 1 vong tron.</summary>
+        /// <summary>So duong chan duoc cong be day (goc lom). Chi de bao cao, khong ve danh dau.</summary>
         public int CompensatedCount { get; set; }
 
         public List<string> Warnings { get; private set; } = new List<string>();
@@ -152,23 +152,10 @@ namespace AUTOCAD_COMMANDS
                     drawResult.DownCount++;
                 }
 
-                // Duong chan duoc CONG BE DAY (goc lom) duoc khoanh mot vong tron ngay tren
-                // phoi - dung quy uoc danh dau tay cua xuong, de kiem tra bang mat.
+                // Duong chan duoc CONG BE DAY (goc lom) chi duoc DEM de bao cao ra dong lenh,
+                // KHONG ve them entity danh dau nao tren phoi.
                 if (bendLine.Bend.IsThicknessCompensated && !bendLine.IsTangentLine)
                 {
-                    Point3d center = new Point3d(
-                        (bendLine.Start.X + bendLine.End.X) * 0.5,
-                        (bendLine.Start.Y + bendLine.End.Y) * 0.5,
-                        elevation);
-
-                    Circle mark = new Circle(center, Vector3d.ZAxis, MarkRadius(result, settings));
-                    mark.SetDatabaseDefaults(db);
-                    mark.LayerId = bendLayerId;
-                    ApplyBendColor(mark, bendLine.Bend.Direction, settings);
-
-                    space.AppendEntity(mark);
-                    tr.AddNewlyCreatedDBObject(mark, true);
-                    drawResult.BendLineIds.Add(mark.ObjectId);
                     drawResult.CompensatedCount++;
                 }
             }
@@ -289,17 +276,6 @@ namespace AUTOCAD_COMMANDS
             if (index > 256) index = 256;
 
             entity.Color = Color.FromColorIndex(ColorMethod.ByAci, (short)index);
-        }
-
-        /// <summary>
-        /// Ban kinh vong tron danh dau duong chan duoc cong be day.
-        /// Lay theo chieu rong phoi de luon nhin thay duoc o moi co chi tiet.
-        /// </summary>
-        private static double MarkRadius(FoilFlatPatternResult result, FoilSettings settings)
-        {
-            double radius = result.BlankWidth * 0.02;
-            double minimum = Math.Max(settings.Thickness * 1.5, 1e-3);
-            return radius < minimum ? minimum : radius;
         }
 
         /// <summary>
