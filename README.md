@@ -96,12 +96,25 @@
 *   **Lưu ý:** Sử dụng Reflection để tương thích với nhiều loại dimension khác nhau (`RotatedDimension`, `AlignedDimension`...).
 
 #### `DPA` (Dim Auto Pline)
-*   **Tên lệnh đầy đủ:** `DPA_DimAutoPline`
-*   **Chức năng:** Tự động tạo dimension cho các cạnh của một Polyline.
+*   **File:** `AutoDimPline/` (module riêng, tách hẳn khỏi `Commands/AutoDimCommand.cs`)
+*   **Tên lệnh đầy đủ:** `DPA_DimAutoPline` — kèm `DPA_DEBUG` (in bản bố trí ra dòng lệnh, không tạo gì) và `DPA_TEST` (bộ kiểm thử).
+*   **Chức năng:** Tự động tạo dimension cho một Polyline **và tự bố trí sao cho sạch, không chồng chéo**.
+*   **Kiến trúc:** `ANALYZE → PLAN → CREATE` — toàn bộ va chạm và xếp chồng được giải quyết trong bộ nhớ **trước khi** tạo entity đầu tiên. Lớp phân tích + bố trí (`DimPline*.cs`) không tham chiếu AutoCAD nên test được ngoài AutoCAD.
 *   **Cách hoạt động:**
-    1.  Chọn một `Polyline`.
-    2.  Một Form cài đặt hiện ra cho phép tùy chỉnh: `Scale factor`, `Offset mul`, `Dim offset mul`, `Orientation` (hướng polyline), và có tạo `Angular dim` hay không. Cài đặt được lưu lại.
-    3.  Lệnh tạo các dimension (Rotated, Aligned, Angular) cho các segment của polyline theo cài đặt.
+    1.  Bảng cài đặt hiện ra trước: `Linear scale (DIMLFAC)`, `Dim layer`, `Distance from PL`, `Dim spacing`, `Min segment`, `Auto layout`, `Create overall dimensions`, `Dim sát feature`, `Side preference`, `Arc segments`, `Skew segments`. Cài đặt được lưu ở AppData.
+    2.  Chọn một `Polyline` (2D, mặt phẳng XY). Hỗ trợ cả kín và hở; polyline "kín bằng mắt" (đỉnh cuối trùng đỉnh đầu) được nhận là kín thật.
+    3.  `DimPlineAnalyzer` gộp các đoạn thẳng hàng, loại đoạn dài 0, phân loại ngang/dọc/xiên theo **ngưỡng góc** (không phải ngưỡng toạ độ), tính pháp tuyến hướng ra ngoài (biên dạng kín) và bao hình chính xác kể cả cung.
+    4.  `DimPlinePlanner` chấm điểm cả hai phía khả dĩ cho từng đoạn (chiều dài đường gióng + số lần cắt qua nét vẽ + pháp tuyến ngoài + cân bằng hai phía), rồi:
+        *   feature sát mép ngoài → xếp vào **băng** ngoài bao hình, chia hàng bằng thuật toán xếp khoảng: dim nối tiếp nhau (dạng chuỗi) vẫn chung một hàng như dim tay, dim chồng lấn nhau bị đẩy ra hàng ngoài;
+        *   feature sâu bên trong → dim **ngay cạnh feature** nếu kiểm tra thấy đường kích thước và cả hai đường gióng không cắt nét vẽ và text không chạm dim khác; không đạt thì tự động quay về băng ngoài.
+    5.  Dim bao tổng thể X/Y luôn nằm ở hàng **ngoài cùng** của phía nó, cách tầng feature một khoảng hở riêng.
+    6.  Dim trùng lặp (cùng phương, cùng khoảng đo) bị loại — hình chữ nhật chỉ sinh ra 2 dim chứ không phải 4.
+*   **Lưu ý:**
+    *   `DIMLFAC` chỉ đổi **giá trị hiển thị**; mọi phép tính vị trí vẫn dùng drawing unit thực (không nhầm với `DIMSCALE`).
+    *   Khoảng cách / bước xếp hàng được nâng lên theo `DIMTXT * DIMSCALE` thực tế nếu người dùng nhập quá nhỏ, nên text không bao giờ đè nhau vì cấu hình sai.
+    *   Đoạn cung mặc định **bị bỏ qua và báo lại số lượng** (không bao giờ biến hình cong thành dim thẳng sai nghĩa); có thể bật sang `Radius dimension`. Đoạn xiên mặc định tạo `Aligned dimension`.
+    *   Lệnh **không sửa polyline gốc** (không đảo chiều) và **không sửa DIMSTYLE** của bản vẽ — chỉ `DIMLFAC` được ghi đè riêng trên từng dim mới tạo.
+    *   Mọi dim nằm trong 1 transaction: lỗi giữa đường → không commit → bản vẽ không còn dim rác.
 
 ---
 
