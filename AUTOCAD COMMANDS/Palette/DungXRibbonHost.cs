@@ -1051,12 +1051,15 @@ namespace AUTOCAD_COMMANDS
 
                     case IconGlyph.DimAutoPolyline:
                         {
-                            PointF a = new PointF(x0, y1);
-                            PointF b = new PointF(xm, y0 + r.Height * 0.2f);
-                            PointF c = new PointF(x1, y1);
+                            // Polyline 2 doan, moi doan co duong dim rieng dat song song phia ngoai.
+                            PointF a = new PointF(x0 + r.Width * 0.12f, y1);
+                            PointF b = new PointF(xm, y0 + r.Height * 0.32f);
+                            PointF c = new PointF(x1 - r.Width * 0.1f, y1 - r.Height * 0.18f);
                             g.DrawLines(pen, new[] { a, b, c });
-                            DrawTick(g, pen, a, b);
-                            DrawTick(g, pen, b, c);
+
+                            float offset = Math.Min(r.Width, r.Height) * 0.24f;
+                            DrawSegmentDim(g, pen, brush, a, b, offset, aw * 0.45f, ah * 0.45f);
+                            DrawSegmentDim(g, pen, brush, b, c, offset, aw * 0.45f, ah * 0.45f);
                             break;
                         }
 
@@ -1152,6 +1155,82 @@ namespace AUTOCAD_COMMANDS
                             break;
                         }
 
+                    case IconGlyph.AutoCut:
+                        {
+                            // Net ve nam ngang bi dao cat (net dut) cat dut -> chua khe ho tai cho cat,
+                            // hai dau cat danh dau bang gach vuong goc cho ro la mat cat.
+                            float gap = r.Width * 0.17f;
+                            float capH = r.Height * 0.11f;
+                            g.DrawLine(pen, x0, ym, xm - gap, ym);
+                            g.DrawLine(pen, xm + gap, ym, x1, ym);
+                            g.DrawLine(pen, xm - gap, ym - capH, xm - gap, ym + capH);
+                            g.DrawLine(pen, xm + gap, ym - capH, xm + gap, ym + capH);
+
+                            using (Pen cutter = CreateCutPen(color, strokeWidth))
+                            {
+                                g.DrawLine(cutter, x0 + r.Width * 0.22f, y1, x1 - r.Width * 0.22f, y0);
+                            }
+                            break;
+                        }
+
+                    case IconGlyph.TrimOutside:
+                        {
+                            // Bien PLINE net lien; phan doi tuong NAM NGOAI bien la net dut = se bi cat bo.
+                            RectangleF box = CreateTrimBoundary(r);
+                            g.DrawRectangle(pen, box.X, box.Y, box.Width, box.Height);
+
+                            float yTop = box.Y + box.Height * 0.3f;
+                            float yBottom = box.Bottom - box.Height * 0.3f;
+                            g.DrawLine(pen, box.X + box.Width * 0.3f, yTop, box.Right, yTop);
+                            g.DrawLine(pen, box.X, yBottom, box.Right - box.Width * 0.3f, yBottom);
+
+                            using (Pen cut = CreateCutPen(color, strokeWidth))
+                            {
+                                g.DrawLine(cut, box.Right, yTop, x1, yTop);
+                                g.DrawLine(cut, x0, yBottom, box.X, yBottom);
+                            }
+                            break;
+                        }
+
+                    case IconGlyph.TrimInside:
+                        {
+                            // Anh guong cua TrimOutside: phan NAM TRONG bien la net dut = se bi cat bo.
+                            RectangleF box = CreateTrimBoundary(r);
+                            g.DrawRectangle(pen, box.X, box.Y, box.Width, box.Height);
+
+                            float yTop = box.Y + box.Height * 0.3f;
+                            float yBottom = box.Bottom - box.Height * 0.3f;
+                            g.DrawLine(pen, box.Right, yTop, x1, yTop);
+                            g.DrawLine(pen, x0, yBottom, box.X, yBottom);
+
+                            using (Pen cut = CreateCutPen(color, strokeWidth))
+                            {
+                                g.DrawLine(cut, box.X + box.Width * 0.3f, yTop, box.Right, yTop);
+                                g.DrawLine(cut, box.X, yBottom, box.Right - box.Width * 0.3f, yBottom);
+                            }
+                            break;
+                        }
+
+                    case IconGlyph.SheetMetalUnfold:
+                        {
+                            // Tiet dien ton da chan, co ban kinh uon (tren) -> mui ten -> dai phoi
+                            // phang da dan (duoi).
+                            float bendRadius = r.Width * 0.18f;
+                            float legY = y0 + r.Height * 0.46f;
+                            float cx = x0 + r.Width * 0.54f;
+                            float cy = legY - bendRadius;
+                            g.DrawLine(pen, x0, legY, cx, legY);
+                            g.DrawArc(pen, cx - bendRadius, cy - bendRadius, bendRadius * 2f, bendRadius * 2f, 0f, 90f);
+                            g.DrawLine(pen, cx + bendRadius, cy, cx + bendRadius, y0);
+
+                            g.DrawLine(pen, xm, y0 + r.Height * 0.6f, xm, y0 + r.Height * 0.73f);
+                            DrawArrowHead(g, brush, new PointF(xm, y0 + r.Height * 0.79f), -1f, aw * 0.7f, ah * 0.7f, true);
+
+                            float blankH = r.Height * 0.13f;
+                            g.DrawRectangle(pen, x0, y1 - blankH, r.Width, blankH);
+                            break;
+                        }
+
                     default:
                         {
                             float d = Math.Min(r.Width, r.Height) * 0.16f;
@@ -1172,20 +1251,53 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
-        private static void DrawTick(Graphics g, Pen pen, PointF from, PointF to)
+        // Net dut dung chung cho phan "se bi cat bo" va cho duong dao cat. Dash ngan de o
+        // co 16px van con doc ra la net dut chu khong dinh lai thanh net lien.
+        private static Pen CreateCutPen(Color color, float strokeWidth)
         {
-            PointF mid = new PointF((from.X + to.X) / 2, (from.Y + to.Y) / 2);
-            float dx = to.X - from.X;
-            float dy = to.Y - from.Y;
+            return new Pen(color, strokeWidth)
+            {
+                DashStyle = DashStyle.Custom,
+                DashPattern = new[] { 1.6f, 1.3f }
+            };
+        }
+
+        // Khung bien PLINE dung chung cho cap icon Trim Outside / Trim Inside, de hai nut
+        // doc ra la mot cap doi xung chu khong phai hai hinh khac nhau.
+        private static RectangleF CreateTrimBoundary(RectangleF r)
+        {
+            return new RectangleF(
+                r.X + r.Width * 0.22f,
+                r.Y + r.Height * 0.16f,
+                r.Width * 0.56f,
+                r.Height * 0.68f);
+        }
+
+        // Duong dim song song voi doan a->b, dat lech ve phia phap tuyen trai cua huong di,
+        // kem hai mui ten va hai duong giong ngan.
+        private static void DrawSegmentDim(
+            Graphics g, Pen pen, Brush brush, PointF a, PointF b, float offset, float halfWidth, float length)
+        {
+            float dx = b.X - a.X;
+            float dy = b.Y - a.Y;
             float len = (float)Math.Sqrt(dx * dx + dy * dy);
             if (len < 0.001f)
             {
                 return;
             }
 
-            float nx = -dy / len * (len * 0.16f);
-            float ny = dx / len * (len * 0.16f);
-            g.DrawLine(pen, mid.X - nx, mid.Y - ny, mid.X + nx, mid.Y + ny);
+            float nx = dy / len * offset;
+            float ny = -dx / len * offset;
+            PointF a2 = new PointF(a.X + nx, a.Y + ny);
+            PointF b2 = new PointF(b.X + nx, b.Y + ny);
+
+            g.DrawLine(pen, a2, b2);
+            g.DrawLine(pen, a.X + nx * 0.55f, a.Y + ny * 0.55f, a2.X, a2.Y);
+            g.DrawLine(pen, b.X + nx * 0.55f, b.Y + ny * 0.55f, b2.X, b2.Y);
+
+            double tangent = Math.Atan2(dy, dx);
+            DrawArrowHeadAt(g, brush, a2, tangent + Math.PI, halfWidth, length);
+            DrawArrowHeadAt(g, brush, b2, tangent, halfWidth, length);
         }
 
         private static void DrawTextLines(Graphics g, Pen pen, RectangleF box)
@@ -1290,7 +1402,7 @@ namespace AUTOCAD_COMMANDS
                     "ACC",
                     "Tự động cắt đối tượng (Line, Pline, Arc...) theo dao cắt.",
                     "AC",
-                    tile, Color.FromArgb(230, 81, 0), IconGlyph.SplitDim),
+                    tile, Color.FromArgb(230, 81, 0), IconGlyph.AutoCut),
                 ["ACC_TRIM_OUTSIDE"] = new RibbonCommandStyle(
                     "Trim Outside",
                     "Trim\nOutside",
@@ -1298,7 +1410,7 @@ namespace AUTOCAD_COMMANDS
                     "OUT",
                     "Tự động cắt sạch các hình thò ra ngoài đường mốc PLINE.",
                     "TO",
-                    tile, Color.FromArgb(0, 150, 136), IconGlyph.UnfilletCorner),
+                    tile, Color.FromArgb(0, 150, 136), IconGlyph.TrimOutside),
                 ["ACC_TRIM_INSIDE"] = new RibbonCommandStyle(
                     "Trim Inside",
                     "Trim\nInside",
@@ -1306,7 +1418,7 @@ namespace AUTOCAD_COMMANDS
                     "IN",
                     "Tự động cắt sạch các hình nằm bên trong đường mốc PLINE.",
                     "TI",
-                    tile, Color.FromArgb(0, 150, 136), IconGlyph.UnfilletCorner),
+                    tile, Color.FromArgb(0, 150, 136), IconGlyph.TrimInside),
                 ["DAA_Dim_auto"] = new RibbonCommandStyle(
                     "DAA Auto Dim",
                     "DAA\nAuto",
@@ -1492,7 +1604,7 @@ namespace AUTOCAD_COMMANDS
                     "Dãn phôi tôn chấn từ polyline biên dạng: tính chiều rộng triển khai, " +
                     "vẽ phôi, đường chấn và hình các bước chấn.",
                     "DF",
-                    tile, Color.FromArgb(124, 77, 255), IconGlyph.UnfilletCorner),
+                    tile, Color.FromArgb(124, 77, 255), IconGlyph.SheetMetalUnfold),
                 ["UFF"] = new RibbonCommandStyle(
                     "Un-Fillet Polyline",
                     "Un-Fillet\nPolyline",

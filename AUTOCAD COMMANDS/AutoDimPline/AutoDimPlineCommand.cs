@@ -27,20 +27,10 @@ namespace AUTOCAD_COMMANDS
         [CommandMethod("DPA_DimAutoPline")]
         public void DimAutoPline()
         {
-            Run(false);
+            Run();
         }
 
-        /// <summary>
-        /// Che do debug: chay het duong ong phan tich + bo tri roi IN ban ke hoach ra dong lenh,
-        /// KHONG tao entity nao. Dung de kiem tra phan loai doan, phia chon, hang, diem cham.
-        /// </summary>
-        [CommandMethod("DPA_DEBUG")]
-        public void DimAutoPlineDebug()
-        {
-            Run(true);
-        }
-
-        private void Run(bool debugOnly)
+        private void Run()
         {
             Document doc = Application.DocumentManager.MdiActiveDocument;
             if (doc == null)
@@ -50,7 +40,7 @@ namespace AUTOCAD_COMMANDS
 
             Editor ed = doc.Editor;
             Database db = doc.Database;
-            string commandName = debugOnly ? "DPA_DEBUG" : "DPA_DimAutoPline";
+            const string commandName = "DPA_DimAutoPline";
 
             AutoDimPlineSettings settings = AutoDimPlineSettingsStore.Load();
 
@@ -108,19 +98,6 @@ namespace AUTOCAD_COMMANDS
                         return;
                     }
 
-                    if (debugOnly)
-                    {
-                        ed.WriteMessage("\n===== DPA DEBUG: BAN KE HOACH BO TRI =====");
-                        foreach (string line in plan.Report)
-                        {
-                            ed.WriteMessage("\n" + line);
-                        }
-
-                        ed.WriteMessage("\n" + BuildSummary(plan, settings, 0, true));
-                        ed.WriteMessage("\n(che do debug - khong tao dim nao)");
-                        return;
-                    }
-
                     if (plan.Placements.Count == 0)
                     {
                         ed.WriteMessage("\n" + commandName + ": khong co kich thuoc nao can tao. " +
@@ -151,8 +128,8 @@ namespace AUTOCAD_COMMANDS
 
                     tr.Commit();
 
-                    // Che do debug noi bo: khong co trong UI, bat bang cach dat Verbose true
-                    // trong file cai dat (autodimpline_settings.tsv).
+                    // Dat Verbose = true trong file cai dat (autodimpline_settings.tsv)
+                    // de in them ban ke hoach bo tri ra dong lenh.
                     if (settings.Verbose)
                     {
                         foreach (string line in plan.Report)
@@ -161,7 +138,7 @@ namespace AUTOCAD_COMMANDS
                         }
                     }
 
-                    ed.WriteMessage("\n" + BuildSummary(plan, settings, created.CreatedIds.Count, false));
+                    ed.WriteMessage("\n" + BuildSummary(plan, settings, created.CreatedIds.Count));
                 }
                 catch (System.Exception ex)
                 {
@@ -183,21 +160,12 @@ namespace AUTOCAD_COMMANDS
         private static string BuildSummary(
             DimPlinePlan plan,
             AutoDimPlineSettings settings,
-            int createdCount,
-            bool debugOnly)
+            int createdCount)
         {
             StringBuilder sb = new StringBuilder();
             sb.Append("DPA: ");
-
-            if (debugOnly)
-            {
-                sb.Append(plan.Placements.Count).Append(" dim se duoc tao");
-            }
-            else
-            {
-                sb.Append("da tao ").Append(createdCount).Append(" dim tren layer '")
-                  .Append(settings.DimensionLayer).Append("'");
-            }
+            sb.Append("da tao ").Append(createdCount).Append(" dim tren layer '")
+              .Append(settings.DimensionLayer).Append("'");
 
             sb.Append(" (").Append(plan.NearFeatureCount).Append(" dat sat feature, ")
               .Append(plan.Placements.Count - plan.NearFeatureCount).Append(" o bang ngoai)");

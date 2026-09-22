@@ -56,7 +56,11 @@ namespace AUTOCAD_COMMANDS
         UnfilletCorner,
         InsertMarkerSingle,
         InsertMarkerSeries,
-        PointSequence
+        PointSequence,
+        AutoCut,
+        TrimOutside,
+        TrimInside,
+        SheetMetalUnfold
     }
 
     internal sealed class RibbonCommandStyle

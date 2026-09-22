@@ -8,9 +8,8 @@ namespace AUTOCAD_COMMANDS
     // AUTO DIM PLINE - LOP HINH HOC THUAN
     // ------------------------------------------------------------------------------------------
     // File nay (va cac file DimPline*.cs khac tru DimPlineCad*.cs) KHONG tham chieu AutoCAD.
-    // Nho vay toan bo engine phan tich + bo tri dim chay duoc o 2 noi:
-    //   1. Trong AutoCAD qua lenh DPA_TEST.
-    //   2. Ngoai AutoCAD, bien thanh console exe de chay test khi phat trien.
+    // Nho vay toan bo engine phan tich + bo tri dim co the bien thanh console exe
+    // de chay thu ngoai AutoCAD khi phat trien.
     // Quy uoc quan trong: moi don vi o day deu la DRAWING UNIT THAT. DIMLFAC (linear scale) chi
     // anh huong den CHUOI TEXT hien thi, khong bao gio duoc dung de tinh toa do.
     // ==========================================================================================

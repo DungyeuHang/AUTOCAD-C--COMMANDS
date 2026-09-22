@@ -97,7 +97,7 @@
 
 #### `DPA` (Dim Auto Pline)
 *   **File:** `AutoDimPline/` (module riêng, tách hẳn khỏi `Commands/AutoDimCommand.cs`)
-*   **Tên lệnh đầy đủ:** `DPA_DimAutoPline` — kèm `DPA_DEBUG` (in bản bố trí ra dòng lệnh, không tạo gì) và `DPA_TEST` (bộ kiểm thử).
+*   **Tên lệnh đầy đủ:** `DPA_DimAutoPline`. Muốn xem bản bố trí in ra dòng lệnh thì đặt `Verbose = true` trong file cài đặt `autodimpline_settings.tsv`.
 *   **Chức năng:** Tự động tạo dimension cho một Polyline **và tự bố trí sao cho sạch, không chồng chéo**.
 *   **Kiến trúc:** `ANALYZE → PLAN → CREATE` — toàn bộ va chạm và xếp chồng được giải quyết trong bộ nhớ **trước khi** tạo entity đầu tiên. Lớp phân tích + bố trí (`DimPline*.cs`) không tham chiếu AutoCAD nên test được ngoài AutoCAD.
 *   **Cách hoạt động:**
