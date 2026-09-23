@@ -396,23 +396,41 @@ namespace AUTOCAD_COMMANDS
                     LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
                     Assert(lt.Has("_mss.buocchan"), "layer hinh buoc chan phai duoc tao");
 
-                    int polylines = 0;
+                    Assert(lt.Has("_mss.dungcu"), "layer dung cu (coi + dao) phai duoc tao");
+
+                    int shapes = 0;
+                    int toolShapes = 0;
                     int markers = 0;
                     int labels = 0;
                     foreach (ObjectId id in draw.StepIds)
                     {
                         Entity ent = (Entity)tr.GetObject(id, OpenMode.ForRead);
-                        Assert(ent.Layer == "_mss.buocchan",
+                        Assert(ent.Layer == "_mss.buocchan" || ent.Layer == "_mss.dungcu",
                             "entity cua buoc chan phai nam tren layer rieng, khong lan sang _mss.dut");
 
-                        if (ent is Polyline) polylines++;
-                        else if (ent is Circle) markers++;
-                        else if (ent is DBText) labels++;
+                        bool isTool = ent.Layer == "_mss.dungcu";
+                        if (ent is Polyline)
+                        {
+                            if (isTool) toolShapes++; else shapes++;
+                        }
+                        else if (ent is Circle)
+                        {
+                            markers++;
+                        }
+                        else if (ent is DBText)
+                        {
+                            labels++;
+                        }
                     }
 
-                    Assert(polylines == 3, "moi buoc phai co 1 duong gap khuc");
-                    Assert(markers == 2, "chi 2 buoc co chan moi co vong tron danh dau (B0 khong co)");
-                    Assert(labels == 3, "moi buoc phai co 1 dong chu");
+                    Assert(shapes == 3, "moi buoc phai co 1 duong gap khuc cua chi tiet");
+
+                    // Moi buoc ve 1 hinh coi; rieng buoc co chan ve them 1 hinh dao.
+                    Assert(toolShapes == 5, "3 hinh coi + 2 hinh dao");
+                    Assert(markers == 2, "chi 2 buoc co chan moi co dau danh dau (B0 khong co)");
+
+                    // Buoc co chan co them dong chu phu ve thong so ga dat.
+                    Assert(labels == 5, "3 dong chu chinh + 2 dong chu phu");
 
                     // Duong chan van phai nam dung layer cua no.
                     foreach (ObjectId id in draw.BendLineIds)
@@ -449,6 +467,8 @@ namespace AUTOCAD_COMMANDS
                     LayerTable lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
                     Assert(!lt.Has("_mss.buocchan"),
                         "khong duoc tao layer buoc chan khi tuy chon dang tat");
+                    Assert(!lt.Has("_mss.dungcu"),
+                        "khong duoc tao layer dung cu khi tuy chon dang tat");
 
                     tr.Abort();
                 }

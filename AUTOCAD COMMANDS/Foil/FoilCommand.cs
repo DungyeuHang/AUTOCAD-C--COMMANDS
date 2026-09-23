@@ -241,7 +241,7 @@ namespace AUTOCAD_COMMANDS
             }
 
             // ---- BUOC 8: Bao cao + zoom ----
-            ReportSuccess(ed, result, drawResult, settings);
+            ReportSuccess(ed, result, drawResult, settings, geometry);
 
             if (settings.ZoomToResult && drawResult != null)
             {
@@ -296,7 +296,11 @@ namespace AUTOCAD_COMMANDS
         }
 
         private static void ReportSuccess(
-            Editor ed, FoilFlatPatternResult result, FoilDrawResult drawResult, FoilSettings settings)
+            Editor ed,
+            FoilFlatPatternResult result,
+            FoilDrawResult drawResult,
+            FoilSettings settings,
+            FoilFlatPatternGeometry geometry)
         {
             CultureInfo ci = CultureInfo.InvariantCulture;
             string f = settings.DisplayFormat;
@@ -333,6 +337,45 @@ namespace AUTOCAD_COMMANDS
                     "\n Hinh buoc chan  : {0} buoc (B0 = phoi phang) tren layer \"{1}\"",
                     drawResult.StepCount - 1,
                     settings.StepLayerName));
+
+                FoilBendPlan plan = geometry != null ? geometry.Plan : null;
+                if (plan != null && plan.Order.Count > 0)
+                {
+                    List<string> names = new List<string>();
+                    foreach (int index in plan.Order)
+                    {
+                        names.Add("#" + index.ToString(ci));
+                    }
+
+                    ed.WriteMessage(string.Format(
+                        ci,
+                        "\n Thu tu chan     : {0}   ({1})",
+                        string.Join(" > ", names.ToArray()),
+                        plan.OrderDescription));
+
+                    ed.WriteMessage(string.Format(
+                        ci,
+                        "\n Lat ton         : {0} lan{1}",
+                        plan.FlipCount,
+                        plan.AllFeasible
+                            ? string.Empty
+                            : "   -- CO BUOC MO HINH MAY BAO KHONG CHAN DUOC"));
+
+                    if (plan.Tooling != null)
+                    {
+                        ed.WriteMessage(string.Format(
+                            ci,
+                            "\n Dung cu         : coi V{0:0.##}  dao {1:0.#} do  canh nho nhat {2:0.##} mm",
+                            plan.Tooling.DieOpening,
+                            plan.Tooling.PunchIncludedAngleDeg,
+                            plan.Tooling.MinFlangeLength));
+                    }
+
+                    foreach (string warning in plan.Warnings)
+                    {
+                        ed.WriteMessage("\n  (!) " + warning);
+                    }
+                }
             }
 
             foreach (string note in result.Notes)

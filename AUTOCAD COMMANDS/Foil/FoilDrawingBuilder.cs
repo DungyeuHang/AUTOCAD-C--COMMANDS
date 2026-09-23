@@ -170,9 +170,13 @@ namespace AUTOCAD_COMMANDS
         }
 
         /// <summary>
-        /// Ve day hinh trinh tu chan: moi buoc la mot polyline ho mo ta mat cat sau lan chan do,
-        /// kem mot vong tron danh dau dung duong chan vua thuc hien (mau theo huong UP/DOWN)
-        /// va mot dong chu mo ta buoc.
+        /// Ve luoi hinh trinh tu chan. Moi o gom:
+        ///   * hinh COI (die) va CHAY DAO - cho tho biet dat phoi theo chieu nao tren may,
+        ///   * mat cat chi tiet SAU lan chan do, ve trong HE TOA DO MAY,
+        ///   * dau cham tai dinh goc vua chan,
+        ///   * hai dong chu: ten buoc va thong so ga dat.
+        ///
+        /// Hinh coi / dao nam tren LAYER RIENG de tat di cho de nhin khi can.
         /// </summary>
         private static void DrawBendSteps(
             Database db,
@@ -194,35 +198,38 @@ namespace AUTOCAD_COMMANDS
                     "Khong tao/tim duoc layer \"" + layerName + "\" cho hinh cac buoc chan.");
             }
 
+            ObjectId toolLayerId = stepLayerId;
+            if (settings.DrawTooling)
+            {
+                string toolLayerName = string.IsNullOrWhiteSpace(settings.ToolingLayerName)
+                    ? "_mss.dungcu"
+                    : settings.ToolingLayerName.Trim();
+
+                ObjectId id = CadLayerHelper.EnsureLayer(db, tr, toolLayerName);
+                if (!id.IsNull)
+                {
+                    toolLayerId = id;
+                }
+            }
+
             double textHeight = geometry.StepTextHeight > 0.0 ? geometry.StepTextHeight : 1.0;
 
             foreach (FoilBendStepGeometry step in geometry.Steps)
             {
-                if (step.Points.Count >= 2)
-                {
-                    Polyline outline = new Polyline(step.Points.Count);
-                    outline.SetDatabaseDefaults(db);
-                    for (int i = 0; i < step.Points.Count; i++)
-                    {
-                        outline.AddVertexAt(i, new Point2d(step.Points[i].X, step.Points[i].Y), 0.0, 0.0, 0.0);
-                    }
+                // ---- Dung cu truoc, de nam duoi hinh chi tiet ----
+                AddPolyline(db, tr, space, step.DiePoints, toolLayerId, elevation, false, drawResult);
+                AddPolyline(db, tr, space, step.PunchPoints, toolLayerId, elevation, false, drawResult);
 
-                    outline.Closed = false;
-                    outline.Elevation = elevation;
-                    outline.LayerId = stepLayerId;
+                // ---- Mat cat chi tiet ----
+                AddPolyline(db, tr, space, step.Points, stepLayerId, elevation, false, drawResult);
 
-                    space.AppendEntity(outline);
-                    tr.AddNewlyCreatedDBObject(outline, true);
-                    drawResult.StepIds.Add(outline.ObjectId);
-                }
-
-                // Danh dau duong chan vua thuc hien, mau theo huong chan.
-                if (step.HasMarker && step.Step.FormedBend != null)
+                // ---- Dau cham tai dinh goc vua chan ----
+                if (step.HasMarker && step.Step != null && step.Step.FormedBend != null)
                 {
                     Circle marker = new Circle(
                         new Point3d(step.Marker.X, step.Marker.Y, elevation),
                         Vector3d.ZAxis,
-                        textHeight * 0.45);
+                        textHeight * 0.3);
                     marker.SetDatabaseDefaults(db);
                     marker.LayerId = stepLayerId;
                     ApplyBendColor(marker, step.Step.FormedBend.Direction, settings);
@@ -232,24 +239,74 @@ namespace AUTOCAD_COMMANDS
                     drawResult.StepIds.Add(marker.ObjectId);
                 }
 
-                if (!string.IsNullOrEmpty(step.Label))
-                {
-                    DBText label = new DBText
-                    {
-                        Position = new Point3d(step.LabelPosition.X, step.LabelPosition.Y, elevation),
-                        Height = textHeight,
-                        TextString = step.Label
-                    };
-                    label.SetDatabaseDefaults(db);
-                    label.LayerId = stepLayerId;
-
-                    space.AppendEntity(label);
-                    tr.AddNewlyCreatedDBObject(label, true);
-                    drawResult.StepIds.Add(label.ObjectId);
-                }
+                AddText(db, tr, space, step.Label, step.LabelPosition, stepLayerId,
+                    textHeight, elevation, drawResult);
+                AddText(db, tr, space, step.Detail, step.DetailPosition, stepLayerId,
+                    textHeight * 0.8, elevation, drawResult);
 
                 drawResult.StepCount++;
             }
+        }
+
+        private static void AddPolyline(
+            Database db,
+            Transaction tr,
+            BlockTableRecord space,
+            List<FoilPoint2d> points,
+            ObjectId layerId,
+            double elevation,
+            bool closed,
+            FoilDrawResult drawResult)
+        {
+            if (points == null || points.Count < 2)
+            {
+                return;
+            }
+
+            Polyline pl = new Polyline(points.Count);
+            pl.SetDatabaseDefaults(db);
+            for (int i = 0; i < points.Count; i++)
+            {
+                pl.AddVertexAt(i, new Point2d(points[i].X, points[i].Y), 0.0, 0.0, 0.0);
+            }
+
+            pl.Closed = closed;
+            pl.Elevation = elevation;
+            pl.LayerId = layerId;
+
+            space.AppendEntity(pl);
+            tr.AddNewlyCreatedDBObject(pl, true);
+            drawResult.StepIds.Add(pl.ObjectId);
+        }
+
+        private static void AddText(
+            Database db,
+            Transaction tr,
+            BlockTableRecord space,
+            string content,
+            FoilPoint2d position,
+            ObjectId layerId,
+            double height,
+            double elevation,
+            FoilDrawResult drawResult)
+        {
+            if (string.IsNullOrEmpty(content) || height <= 0.0)
+            {
+                return;
+            }
+
+            DBText text = new DBText
+            {
+                Position = new Point3d(position.X, position.Y, elevation),
+                Height = height,
+                TextString = content
+            };
+            text.SetDatabaseDefaults(db);
+            text.LayerId = layerId;
+
+            space.AppendEntity(text);
+            tr.AddNewlyCreatedDBObject(text, true);
+            drawResult.StepIds.Add(text.ObjectId);
         }
 
         /// <summary>

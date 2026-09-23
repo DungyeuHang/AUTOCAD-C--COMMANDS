@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace AUTOCAD_COMMANDS
@@ -46,13 +46,24 @@ namespace AUTOCAD_COMMANDS
         /// <summary>Duong gap khuc cua buoc, da dat vao vi tri trong WCS.</summary>
         public List<FoilPoint2d> Points { get; private set; } = new List<FoilPoint2d>();
 
+        /// <summary>Duong bao coi (die) cua o nay trong WCS. Rong neu khong ve dung cu.</summary>
+        public List<FoilPoint2d> DiePoints { get; private set; } = new List<FoilPoint2d>();
+
+        /// <summary>Duong bao chay dao cua o nay trong WCS. Rong neu khong ve dung cu.</summary>
+        public List<FoilPoint2d> PunchPoints { get; private set; } = new List<FoilPoint2d>();
+
         /// <summary>Vi tri dinh vua chan, trong WCS.</summary>
         public FoilPoint2d Marker { get; set; }
 
-        /// <summary>Goc trai-duoi cua dong chu nhan, trong WCS.</summary>
+        /// <summary>Goc trai-duoi cua dong chu nhan chinh, trong WCS.</summary>
         public FoilPoint2d LabelPosition { get; set; }
 
+        /// <summary>Goc trai-duoi cua dong chu phu, trong WCS.</summary>
+        public FoilPoint2d DetailPosition { get; set; }
+
         public string Label { get; set; } = string.Empty;
+
+        public string Detail { get; set; } = string.Empty;
 
         public bool HasMarker { get; set; }
     }
@@ -71,6 +82,9 @@ namespace AUTOCAD_COMMANDS
 
         /// <summary>Chieu cao chu dung cho nhan cac buoc (da quy doi ra don vi ban ve).</summary>
         public double StepTextHeight { get; set; }
+
+        /// <summary>Phuong an chan da lap (thu tu + canh bao cong nghe). Null neu khong ve buoc.</summary>
+        public FoilBendPlan Plan { get; set; }
 
         public List<string> Warnings { get; private set; } = new List<string>();
 
@@ -133,8 +147,16 @@ namespace AUTOCAD_COMMANDS
         }
 
         /// <summary>
-        /// Xep day hinh cac buoc chan thanh MOT HANG ngay ben duoi phoi, trong he (U,V) roi
-        /// transform ve WCS cung mot khung voi phoi. Nho vay ca cum di theo goc xoay cua phoi.
+        /// Xep cac hinh buoc chan thanh mot LUOI ben duoi phoi.
+        ///
+        /// Ba nguyen tac chong chong hinh:
+        ///   1. O luoi duoc tinh theo HOP BAO CHUNG cua ca hinh chi tiet LAN hinh dung cu,
+        ///      nen hinh nao cung nam gon trong o cua no.
+        ///   2. Be rong o con phai du chua DONG CHU - truoc day chieu cao chu duoc suy tu
+        ///      chieu cao hinh, nen voi bien dang cao thi chu dai gap may lan o va de len nhau.
+        ///   3. Khi mot hang dai hon chieu dai phoi thi TU DONG XUONG DONG.
+        ///
+        /// Cac o deu duoc neo theo MAT COI (y = 0 cua he toa do may) nen ca day nhin thang hang.
         /// </summary>
         private static void AddBendSteps(
             FoilFlatPatternGeometry geometry,
@@ -144,66 +166,162 @@ namespace AUTOCAD_COMMANDS
             double blankLength,
             double blankWidth)
         {
-            List<FoilBendStep> steps = FoilBendSequenceBuilder.Build(result, settings.BendSequenceOrder);
+            FoilBendPlan plan = FoilBendSequenceBuilder.Plan(result, settings);
+            geometry.Plan = plan;
+
+            List<FoilBendStep> steps = plan.Steps;
             if (steps.Count == 0)
             {
                 return;
             }
 
-            double maxWidth = 0.0;
-            double maxHeight = 0.0;
-            foreach (FoilBendStep step in steps)
+            foreach (string warning in plan.Warnings)
             {
-                if (step.Width > maxWidth) maxWidth = step.Width;
-                if (step.Height > maxHeight) maxHeight = step.Height;
+                geometry.Warnings.Add(warning);
             }
 
-            if (maxWidth <= FoilMath.LengthTolerance)
+            bool drawTooling = settings.DrawTooling;
+            FoilToolingGeometry tooling = plan.Tooling ?? FoilToolingGeometry.Resolve(settings);
+
+            List<FoilPoint2d> dieOutline = drawTooling
+                ? FoilPressBrakeModel.BuildDieOutline(tooling)
+                : new List<FoilPoint2d>();
+
+            // ---- 1. Hinh cua tung o, trong he toa do may ----
+            List<List<FoilPoint2d>> shapes = new List<List<FoilPoint2d>>();
+            List<List<FoilPoint2d>> punches = new List<List<FoilPoint2d>>();
+
+            double left = 0.0, right = 0.0, down = 0.0, up = 0.0;
+
+            for (int i = 0; i < steps.Count; i++)
+            {
+                List<FoilPoint2d> shape = FoilBendSequenceBuilder.Simplify(steps[i].MachinePoints);
+                shapes.Add(shape);
+
+                double partHeight = 0.0;
+                foreach (FoilPoint2d p in shape)
+                {
+                    if (p.Y > partHeight) partHeight = p.Y;
+                }
+
+                List<FoilPoint2d> punch = (drawTooling && steps[i].FormedBend != null)
+                    ? FoilPressBrakeModel.BuildPunchOutline(
+                        tooling, steps[i].FormedBend.BendAngleRad, partHeight)
+                    : new List<FoilPoint2d>();
+                punches.Add(punch);
+
+                Measure(shape, ref left, ref right, ref down, ref up);
+                Measure(dieOutline, ref left, ref right, ref down, ref up);
+                Measure(punch, ref left, ref right, ref down, ref up);
+            }
+
+            double cellWidth = left + right;
+            double cellHeight = down + up;
+
+            if (cellWidth <= FoilMath.LengthTolerance)
             {
                 return;
             }
 
-            double gapFactor = settings.StepGapFactor > 0.0 ? settings.StepGapFactor : 0.25;
-            double gap = maxWidth * gapFactor;
-            double pitch = maxWidth + gap;
-
+            // ---- 2. Chieu cao chu: theo KICH THUOC O, khong theo chieu cao hinh ----
             double textHeight = settings.StepTextHeight > 0.0
                 ? settings.StepTextHeight
-                : Math.Max(maxHeight, maxWidth * 0.08) * 0.18;
+                : Math.Max(cellWidth, cellHeight) * 0.045;
+
+            if (textHeight <= FoilMath.LengthTolerance)
+            {
+                textHeight = Math.Max(blankWidth * 0.02, 1.0);
+            }
+
             geometry.StepTextHeight = textHeight;
 
-            // Hang buoc chan nam duoi canh duoi cua phoi (V = 0), cach ra mot khoang.
-            double rowTop = -Math.Max(blankWidth * 0.15, maxHeight * 0.6);
-            double labelV = rowTop - maxHeight - textHeight * 1.6;
+            // ---- 3. O phai du rong cho dong chu dai nhat ----
+            int longest = 0;
+            foreach (FoilBendStep step in steps)
+            {
+                if (step.Caption != null && step.Caption.Length > longest) longest = step.Caption.Length;
+                if (step.Detail != null && step.Detail.Length > longest) longest = step.Detail.Length;
+            }
+
+            // Be rong trung binh cua mot ky tu chu SHX/TTF mac dinh ~ 0.62 lan chieu cao.
+            double labelWidth = longest * textHeight * 0.62;
+            if (labelWidth > cellWidth)
+            {
+                cellWidth = labelWidth;
+            }
+
+            double gapFactor = settings.StepGapFactor > 0.0 ? settings.StepGapFactor : 0.25;
+            double pitchX = cellWidth * (1.0 + gapFactor);
+            double labelBlock = textHeight * 3.4;
+            double pitchY = cellHeight + labelBlock + cellHeight * gapFactor + textHeight;
+
+            // ---- 4. So cot: xuong dong khi vuot chieu dai phoi ----
+            int columns = settings.StepColumns > 0
+                ? settings.StepColumns
+                : (int)Math.Floor(blankLength / pitchX);
+
+            if (columns < 1) columns = 1;
+            if (columns > steps.Count) columns = steps.Count;
+
+            // ---- 5. Dat tung o ----
+            double rowGap = Math.Max(blankWidth * 0.12, cellHeight * 0.35);
+            double firstRowDieLine = -rowGap - up;   // mat coi cua hang dau
 
             for (int i = 0; i < steps.Count; i++)
             {
-                FoilBendStep step = steps[i];
+                int column = i % columns;
+                int row = i / columns;
+
+                double originU = column * pitchX + left;
+                double originV = firstRowDieLine - row * pitchY;
+
                 FoilBendStepGeometry placed = new FoilBendStepGeometry
                 {
-                    Step = step,
-                    Label = step.Caption
+                    Step = steps[i],
+                    Label = steps[i].Caption,
+                    Detail = steps[i].Detail
                 };
 
-                // Dat sao cho moi buoc thang hang theo day (V) va cach deu theo (U).
-                double offsetU = i * pitch - step.MinX;
-                double offsetV = rowTop - maxHeight - step.MinY;
-
-                foreach (FoilPoint2d p in step.Points)
+                foreach (FoilPoint2d p in shapes[i])
                 {
-                    placed.Points.Add(frame.ToWorld(p.X + offsetU, p.Y + offsetV));
+                    placed.Points.Add(frame.ToWorld(p.X + originU, p.Y + originV));
                 }
 
-                if (step.FormedBend != null)
+                foreach (FoilPoint2d p in dieOutline)
                 {
+                    placed.DiePoints.Add(frame.ToWorld(p.X + originU, p.Y + originV));
+                }
+
+                foreach (FoilPoint2d p in punches[i])
+                {
+                    placed.PunchPoints.Add(frame.ToWorld(p.X + originU, p.Y + originV));
+                }
+
+                if (steps[i].FormedBend != null)
+                {
+                    // Trong he toa do may, dinh goc chan luon nam tai goc toa do.
                     placed.HasMarker = true;
-                    placed.Marker = frame.ToWorld(
-                        step.MarkerPoint.X + offsetU,
-                        step.MarkerPoint.Y + offsetV);
+                    placed.Marker = frame.ToWorld(originU, originV);
                 }
 
-                placed.LabelPosition = frame.ToWorld(i * pitch, labelV);
+                double labelU = column * pitchX;
+                double labelV = originV - down - textHeight * 1.6;
+                placed.LabelPosition = frame.ToWorld(labelU, labelV);
+                placed.DetailPosition = frame.ToWorld(labelU, labelV - textHeight * 1.5);
+
                 geometry.Steps.Add(placed);
+            }
+        }
+
+        private static void Measure(
+            List<FoilPoint2d> points, ref double left, ref double right, ref double down, ref double up)
+        {
+            foreach (FoilPoint2d p in points)
+            {
+                if (-p.X > left) left = -p.X;
+                if (p.X > right) right = p.X;
+                if (-p.Y > down) down = -p.Y;
+                if (p.Y > up) up = p.Y;
             }
         }
 

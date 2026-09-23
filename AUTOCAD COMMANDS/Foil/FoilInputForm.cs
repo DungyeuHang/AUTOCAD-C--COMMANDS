@@ -57,6 +57,9 @@ namespace AUTOCAD_COMMANDS
 
         private CheckBox _chkDrawSteps;
         private ComboBox _cboSequenceOrder;
+        private CheckBox _chkDrawTooling;
+        private NumericUpDown _numDieOpening;
+        private NumericUpDown _numPunchAngle;
         private ComboBox _cboStepLayer;
 
         private ComboBox _cboArcInterpretation;
@@ -401,33 +404,56 @@ namespace AUTOCAD_COMMANDS
                 Text = "Ve day hinh trinh tu cac buoc chan ben duoi phoi",
                 AutoSize = true
             };
-            _chkDrawSteps.CheckedChanged += (s, e) =>
-            {
-                _cboSequenceOrder.Enabled = _chkDrawSteps.Checked;
-                _cboStepLayer.Enabled = _chkDrawSteps.Checked;
-            };
+            _chkDrawSteps.CheckedChanged += (s, e) => UpdateStepGroupEnabled();
 
             _cboSequenceOrder = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Dock = DockStyle.Fill
             };
+
+            // Thu tu phai khop dung thu tu khai bao cua FoilBendSequenceOrder.
             _cboSequenceOrder.Items.AddRange(new object[]
             {
-                "Lan luot tu dau (mac dinh)",
+                "Lan luot tu dau bien dang",
                 "Nguoc lai, tu cuoi",
-                "Hai dau vao giua"
+                "Hai dau vao giua",
+                "TU DONG - tim thu tu chan duoc tren may (khuyen dung)"
             });
+
+            _chkDrawTooling = new CheckBox
+            {
+                Text = "Ve hinh COI va CHAY DAO trong tung buoc (layer rieng)",
+                AutoSize = true
+            };
+
+            _numDieOpening = CreateNumeric(0m, 500m, 2, 1m);
+            _numPunchAngle = CreateNumeric(10m, 179m, 1, 1m);
 
             _cboStepLayer = CreateLayerCombo();
 
             panel.Controls.Add(_chkDrawSteps, 0, 0);
             panel.SetColumnSpan(_chkDrawSteps, 3);
-            AddField(panel, 1, "Thu tu chan:", _cboSequenceOrder, "B0 = phoi phang, roi tung buoc");
-            AddField(panel, 2, "Layer hinh cac buoc:", _cboStepLayer, "tu tao neu chua co");
+            AddField(panel, 1, "Thu tu chan:", _cboSequenceOrder,
+                "TU DONG: kiem tra va coi / va dao / cu hau");
+            panel.Controls.Add(_chkDrawTooling, 0, 2);
+            panel.SetColumnSpan(_chkDrawTooling, 3);
+            AddField(panel, 3, "Khau do coi V:", _numDieOpening, "0 = tu dong (8 x be day)");
+            AddField(panel, 4, "Goc chay dao:", _numPunchAngle, "do - quyet dinh goc chan lon nhat");
+            AddField(panel, 5, "Layer hinh cac buoc:", _cboStepLayer, "tu tao neu chua co");
 
             group.Controls.Add(panel);
             return group;
+        }
+
+        private void UpdateStepGroupEnabled()
+        {
+            bool on = _chkDrawSteps.Checked;
+            _cboSequenceOrder.Enabled = on;
+            _cboStepLayer.Enabled = on;
+            _chkDrawTooling.Enabled = on;
+            _numDieOpening.Enabled = on;
+            _numPunchAngle.Enabled = on;
         }
 
         private GroupBox BuildAdvancedGroup()
@@ -515,10 +541,13 @@ namespace AUTOCAD_COMMANDS
                 _settings.BendLineMode == FoilBendLineMode.SingleCenterLine ? 0 : 1;
 
             _chkDrawSteps.Checked = _settings.DrawBendSteps;
-            _cboSequenceOrder.SelectedIndex = (int)_settings.BendSequenceOrder;
+            _cboSequenceOrder.SelectedIndex = Math.Min(
+                (int)_settings.BendSequenceOrder, _cboSequenceOrder.Items.Count - 1);
+            _chkDrawTooling.Checked = _settings.DrawTooling;
+            _numDieOpening.Value = ToDecimal(_settings.DieOpening, _numDieOpening);
+            _numPunchAngle.Value = ToDecimal(_settings.PunchIncludedAngleDeg, _numPunchAngle);
             _cboStepLayer.Text = _settings.StepLayerName;
-            _cboSequenceOrder.Enabled = _chkDrawSteps.Checked;
-            _cboStepLayer.Enabled = _chkDrawSteps.Checked;
+            UpdateStepGroupEnabled();
 
             _cboArcInterpretation.SelectedIndex = (int)_settings.ArcRadiusInterpretation;
             _numBlankRotation.Value = ToDecimal(_settings.BlankRotationDeg, _numBlankRotation);
@@ -579,6 +608,9 @@ namespace AUTOCAD_COMMANDS
             _settings.DrawBendSteps = _chkDrawSteps.Checked;
             _settings.BendSequenceOrder =
                 (FoilBendSequenceOrder)Math.Max(0, _cboSequenceOrder.SelectedIndex);
+            _settings.DrawTooling = _chkDrawTooling.Checked;
+            _settings.DieOpening = (double)_numDieOpening.Value;
+            _settings.PunchIncludedAngleDeg = (double)_numPunchAngle.Value;
             _settings.StepLayerName = string.IsNullOrWhiteSpace(_cboStepLayer.Text)
                 ? "_mss.buocchan"
                 : _cboStepLayer.Text.Trim();

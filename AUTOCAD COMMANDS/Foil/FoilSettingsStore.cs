@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
@@ -157,6 +157,48 @@ namespace AUTOCAD_COMMANDS
                             case "StepGapFactor":
                                 settings.StepGapFactor = ParseDouble(val, settings.StepGapFactor);
                                 break;
+                            case "StepColumns":
+                                if (int.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out int stepCols)) settings.StepColumns = stepCols;
+                                break;
+                            case "DrawTooling":
+                                if (bool.TryParse(val, out bool drawTooling)) settings.DrawTooling = drawTooling;
+                                break;
+                            case "ToolingLayerName":
+                                settings.ToolingLayerName = val;
+                                break;
+                            case "DieOpening":
+                                settings.DieOpening = ParseDouble(val, settings.DieOpening);
+                                break;
+                            case "DieOpeningFactor":
+                                settings.DieOpeningFactor = ParseDouble(val, settings.DieOpeningFactor);
+                                break;
+                            case "DieIncludedAngleDeg":
+                                settings.DieIncludedAngleDeg = ParseDouble(val, settings.DieIncludedAngleDeg);
+                                break;
+                            case "DieBodyHalfWidth":
+                                settings.DieBodyHalfWidth = ParseDouble(val, settings.DieBodyHalfWidth);
+                                break;
+                            case "PunchIncludedAngleDeg":
+                                settings.PunchIncludedAngleDeg = ParseDouble(val, settings.PunchIncludedAngleDeg);
+                                break;
+                            case "PunchTipRadius":
+                                settings.PunchTipRadius = ParseDouble(val, settings.PunchTipRadius);
+                                break;
+                            case "PunchHeight":
+                                settings.PunchHeight = ParseDouble(val, settings.PunchHeight);
+                                break;
+                            case "PunchBladeHalfWidth":
+                                settings.PunchBladeHalfWidth = ParseDouble(val, settings.PunchBladeHalfWidth);
+                                break;
+                            case "MaxPartHeight":
+                                settings.MaxPartHeight = ParseDouble(val, settings.MaxPartHeight);
+                                break;
+                            case "MinGaugeLength":
+                                settings.MinGaugeLength = ParseDouble(val, settings.MinGaugeLength);
+                                break;
+                            case "FlipPenalty":
+                                settings.FlipPenalty = ParseDouble(val, settings.FlipPenalty);
+                                break;
                             case "BlankRotationDeg":
                                 settings.BlankRotationDeg = ParseDouble(val, settings.BlankRotationDeg);
                                 break;
@@ -222,6 +264,20 @@ namespace AUTOCAD_COMMANDS
                     sb.AppendLine("StepLayerName	" + settings.StepLayerName);
                     sb.AppendLine("StepTextHeight	" + settings.StepTextHeight.ToString(ci));
                     sb.AppendLine("StepGapFactor	" + settings.StepGapFactor.ToString(ci));
+                    sb.AppendLine("StepColumns	" + settings.StepColumns.ToString(ci));
+                    sb.AppendLine("DrawTooling	" + settings.DrawTooling);
+                    sb.AppendLine("ToolingLayerName	" + settings.ToolingLayerName);
+                    sb.AppendLine("DieOpening	" + settings.DieOpening.ToString(ci));
+                    sb.AppendLine("DieOpeningFactor	" + settings.DieOpeningFactor.ToString(ci));
+                    sb.AppendLine("DieIncludedAngleDeg	" + settings.DieIncludedAngleDeg.ToString(ci));
+                    sb.AppendLine("DieBodyHalfWidth	" + settings.DieBodyHalfWidth.ToString(ci));
+                    sb.AppendLine("PunchIncludedAngleDeg	" + settings.PunchIncludedAngleDeg.ToString(ci));
+                    sb.AppendLine("PunchTipRadius	" + settings.PunchTipRadius.ToString(ci));
+                    sb.AppendLine("PunchHeight	" + settings.PunchHeight.ToString(ci));
+                    sb.AppendLine("PunchBladeHalfWidth	" + settings.PunchBladeHalfWidth.ToString(ci));
+                    sb.AppendLine("MaxPartHeight	" + settings.MaxPartHeight.ToString(ci));
+                    sb.AppendLine("MinGaugeLength	" + settings.MinGaugeLength.ToString(ci));
+                    sb.AppendLine("FlipPenalty	" + settings.FlipPenalty.ToString(ci));
                     sb.AppendLine("BlankRotationDeg\t" + settings.BlankRotationDeg.ToString(ci));
                     sb.AppendLine("Precision\t" + settings.Precision.ToString(ci));
                     sb.AppendLine("ZoomToResult\t" + settings.ZoomToResult);

@@ -183,15 +183,65 @@ namespace AUTOCAD_COMMANDS
         /// <summary>Co ve day hinh trinh tu cac buoc chan ben duoi phoi hay khong.</summary>
         public bool DrawBendSteps { get; set; } = true;
 
-        public FoilBendSequenceOrder BendSequenceOrder { get; set; } = FoilBendSequenceOrder.ProfileOrder;
+        /// <summary>
+        /// Thu tu chan. Mac dinh AutoFeasible: tu tim thu tu chan duoc tren may, thay vi ap dat
+        /// thu tu ve cua bien dang (thu tu ve hau nhu khong bao gio la thu tu chan that).
+        /// </summary>
+        public FoilBendSequenceOrder BendSequenceOrder { get; set; } = FoilBendSequenceOrder.AutoFeasible;
 
         public string StepLayerName { get; set; } = "_mss.buocchan";
 
         /// <summary>Chieu cao chu cho nhan cac buoc. 0 = tu dong theo kich thuoc bien dang.</summary>
         public double StepTextHeight { get; set; } = 0.0;
 
-        /// <summary>Khoang ho giua cac buoc, tinh theo ty le be rong buoc lon nhat.</summary>
+        /// <summary>Khoang ho giua cac buoc, tinh theo ty le be rong o lon nhat.</summary>
         public double StepGapFactor { get; set; } = 0.25;
+
+        /// <summary>So cot cua luoi hinh buoc chan. 0 = tu dong xep vua be ngang phoi.</summary>
+        public int StepColumns { get; set; } = 0;
+
+        /// <summary>Co ve hinh coi va dao trong tung o buoc chan hay khong.</summary>
+        public bool DrawTooling { get; set; } = true;
+
+        public string ToolingLayerName { get; set; } = "_mss.dungcu";
+
+        // ---------- May chan (dung cu) ----------
+
+        /// <summary>V - khau do coi (mm). 0 = tu dong = DieOpeningFactor * T.</summary>
+        public double DieOpening { get; set; } = 0.0;
+
+        /// <summary>He so chon khau do coi khi DieOpening = 0. Quy tac nghe: 6T..10T.</summary>
+        public double DieOpeningFactor { get; set; } = 8.0;
+
+        /// <summary>Goc long coi (do).</summary>
+        public double DieIncludedAngleDeg { get; set; } = 88.0;
+
+        /// <summary>Nua be rong than coi (mm). 0 = tu dong theo khau do.</summary>
+        public double DieBodyHalfWidth { get; set; } = 0.0;
+
+        /// <summary>Goc chem cua chay dao (do). Quyet dinh goc chan lon nhat lam duoc.</summary>
+        public double PunchIncludedAngleDeg { get; set; } = 85.0;
+
+        /// <summary>Ban kinh mui dao (mm). 0 = lay bang ban kinh chan trong R.</summary>
+        public double PunchTipRadius { get; set; } = 0.0;
+
+        /// <summary>Chieu cao lam viec cua dao (mm). 0 = tu dong.</summary>
+        public double PunchHeight { get; set; } = 0.0;
+
+        /// <summary>
+        /// Nua be day LUOI dao (mm). 0 = tu dong. Dao that chi nhon o mui roi thanh luoi song
+        /// song; day la kich thuoc quyet dinh chi tiet co lot vua giua hai ma dao hay khong.
+        /// </summary>
+        public double PunchBladeHalfWidth { get; set; } = 0.0;
+
+        /// <summary>Chieu cao mo toi da cua may (mm). 0 = khong kiem tra.</summary>
+        public double MaxPartHeight { get; set; } = 0.0;
+
+        /// <summary>Chuan ga cu hau ngan nhat con dung duoc (mm). 0 = tu dong = khau do coi.</summary>
+        public double MinGaugeLength { get; set; } = 0.0;
+
+        /// <summary>Gia phat cho moi lan phai LAT TON khi tim thu tu chan.</summary>
+        public double FlipPenalty { get; set; } = 25.0;
 
         /// <summary>Goc xoay phoi trong WCS (do). 0 = chieu dai phoi nam ngang.</summary>
         public double BlankRotationDeg { get; set; } = 0.0;
@@ -250,6 +300,20 @@ namespace AUTOCAD_COMMANDS
                 StepLayerName = this.StepLayerName,
                 StepTextHeight = this.StepTextHeight,
                 StepGapFactor = this.StepGapFactor,
+                StepColumns = this.StepColumns,
+                DrawTooling = this.DrawTooling,
+                ToolingLayerName = this.ToolingLayerName,
+                DieOpening = this.DieOpening,
+                DieOpeningFactor = this.DieOpeningFactor,
+                DieIncludedAngleDeg = this.DieIncludedAngleDeg,
+                DieBodyHalfWidth = this.DieBodyHalfWidth,
+                PunchIncludedAngleDeg = this.PunchIncludedAngleDeg,
+                PunchTipRadius = this.PunchTipRadius,
+                PunchHeight = this.PunchHeight,
+                PunchBladeHalfWidth = this.PunchBladeHalfWidth,
+                MaxPartHeight = this.MaxPartHeight,
+                MinGaugeLength = this.MinGaugeLength,
+                FlipPenalty = this.FlipPenalty,
                 BlankRotationDeg = this.BlankRotationDeg,
                 Precision = this.Precision,
                 ZoomToResult = this.ZoomToResult

@@ -1540,6 +1540,14 @@ namespace AUTOCAD_COMMANDS
                     "Place numbered POINT entities at every vertex of a selected polyline.",
                     "AP",
                     tile, more, IconGlyph.PointsOnPolyline),
+                ["APOINT2"] = new RibbonCommandStyle(
+                    "Points On Polyline 2",
+                    "Points On\nPolyline 2",
+                    "APoint2",
+                    "A2",
+                    "Like APOINT but each x/y refers to the earliest matching vertex instead of the previous one.",
+                    "A2",
+                    tile, more, IconGlyph.PointsOnPolyline),
                 ["BBB_BLOCK_TO_CENTER"] = new RibbonCommandStyle(
                     "Block To Center",
                     "Block To\nCenter",

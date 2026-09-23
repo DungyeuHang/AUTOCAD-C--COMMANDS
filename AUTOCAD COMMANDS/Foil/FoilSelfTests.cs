@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 
@@ -75,6 +75,17 @@ namespace AUTOCAD_COMMANDS
             RunTest(report, "40. Doi huong bu be day", Test40_CompensationModeSwitch);
             RunTest(report, "41. Doi nhan UP/DOWN KHONG lam doi kich thuoc phoi", Test41_DisplayFlipDoesNotChangeSize);
             RunTest(report, "42. Bien dang lech so: dao chieu cho phoi KHAC nhau", Test42_UnbalancedProfileReverse);
+            RunTest(report, "43. Dao: mui nhon roi luoi song song", Test43_PunchProfile);
+            RunTest(report, "44. He toa do may: goc chan luon MO LEN", Test44_MachineFrameOpensUp);
+            RunTest(report, "45. Chu Z bat buoc lat ton dung mot lan", Test45_ZProfileNeedsOneFlip);
+            RunTest(report, "46. Mu doi xung: thu tu ve bi ket, tu dong go duoc", Test46_AutoOrderBeatsProfileOrder);
+            RunTest(report, "47. Doi thu tu chan KHONG lam doi kich thuoc phoi", Test47_OrderDoesNotChangeBlank);
+            RunTest(report, "48. Long hep sau bi bao va dao", Test48_NarrowChannelHitsPunch);
+            RunTest(report, "49. Canh ngan hon canh nho nhat cua coi bi canh bao", Test49_ShortFlangeWarning);
+            RunTest(report, "50. Tim kiem chum dat ket qua nhu vet can", Test50_BeamSearchMatchesBruteForce);
+            RunTest(report, "51. Hinh cac buoc KHONG chong len nhau", Test51_StepCellsDoNotOverlap);
+            RunTest(report, "52. Hinh he toa do may DONG DANG hinh bien dang", Test52_MachineShapeIsCongruent);
+            RunTest(report, "53. Khau chan luon MO LEN TREN trong he toa do may", Test53_BendAlwaysOpensUpward);
 
             report.Lines.Add(string.Empty);
             report.Lines.Add("==================================================");
@@ -1094,6 +1105,13 @@ namespace AUTOCAD_COMMANDS
 
         private static void Test36_SequenceOrders()
         {
+            // Combo "Thu tu chan" tren form nhap anh xa THANG tu SelectedIndex sang enum nay.
+            // Neu ai do doi thu tu khai bao enum thi combo se chon nham, nen khoa lai o day.
+            AssertEqual(0, (int)FoilBendSequenceOrder.ProfileOrder, "gia tri enum ProfileOrder");
+            AssertEqual(1, (int)FoilBendSequenceOrder.Reverse, "gia tri enum Reverse");
+            AssertEqual(2, (int)FoilBendSequenceOrder.OutsideIn, "gia tri enum OutsideIn");
+            AssertEqual(3, (int)FoilBendSequenceOrder.AutoFeasible, "gia tri enum AutoFeasible");
+
             AssertEqual("1,2,3,4,5",
                 Join(FoilBendSequenceBuilder.BuildOrder(5, FoilBendSequenceOrder.ProfileOrder)),
                 "thu tu ProfileOrder");
@@ -1462,6 +1480,716 @@ namespace AUTOCAD_COMMANDS
             }
 
             return count;
+        }
+
+        // ==================================================================================
+        // MO HINH MAY CHAN VA TRINH TU CHAN
+        // ==================================================================================
+
+        /// <summary>
+        /// Dao that KHONG phai hinh chem suot chieu cao: chi nhon o mui roi thanh luoi song
+        /// song. Neu mo hinh coi ca dao la hinh chem thi moi canh da chan deu bi bao "va dao"
+        /// (day dung la loi da tung mac phai) - test nay khoa lai hinh dang dung.
+        /// </summary>
+        private static void Test43_PunchProfile()
+        {
+            FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
+            s.DieOpening = 10.0;
+            s.PunchIncludedAngleDeg = 85.0;
+            s.PunchTipRadius = 1.0;
+            s.PunchBladeHalfWidth = 6.0;
+
+            FoilToolingGeometry t = FoilToolingGeometry.Resolve(s);
+
+            AssertClose(10.0, t.DieOpening, "khau do coi lay dung gia tri nguoi dung", 1e-12);
+            AssertClose(6.0, t.PunchBladeHalfWidth, "nua be day luoi dao", 1e-12);
+
+            // Mui nhon: tu 0 den PunchNoseHeight be rong tang dan theo goc dao.
+            double nose = t.PunchNoseHeight;
+            AssertTrue(nose > 0.0, "phai co mot doan mui nhon");
+            AssertClose(1.0, t.PunchHalfWidthAt(0.0), "tai mui dao be rong = ban kinh mui", 1e-12);
+            AssertClose(6.0, t.PunchHalfWidthAt(nose), "het doan nhon thi bang be day luoi", 1e-9);
+
+            // Tren doan nhon: LUOI SONG SONG - be rong khong doi.
+            AssertClose(6.0, t.PunchHalfWidthAt(nose * 2.0), "tren mui la luoi song song", 1e-12);
+            AssertClose(6.0, t.PunchHalfWidthAt(t.PunchHeight * 0.99), "van la luoi song song", 1e-12);
+
+            // Tren chieu cao lam viec la do ga - rong han.
+            AssertTrue(t.PunchHalfWidthAt(t.PunchHeight + 1.0) > 6.0,
+                "tren chieu cao lam viec la do ga, rong hon luoi dao");
+
+            // Goc chan lon nhat: 180 - goc dao.
+            AssertClose(95.0, t.MaxBendAngleRad * FoilMath.RadToDeg,
+                "goc chan lon nhat cua dao 85 do", 1e-9);
+        }
+
+        /// <summary>
+        /// Tren may chan, goc chan LUON mo len tren (dao tu tren an xuong long coi). Vi vay
+        /// trong he toa do may, sau moi lan chan hai canh ke duong chan deu phai NGOC LEN,
+        /// va dinh goc chan phai nam dung tai goc toa do.
+        /// </summary>
+        private static void Test44_MachineFrameOpensUp()
+        {
+            FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
+            s.BendSequenceOrder = FoilBendSequenceOrder.AutoFeasible;
+
+            FoilFlatPatternResult r = Compute(s, HatProfile());
+            AssertNoErrors(r);
+
+            FoilBendPlan plan = FoilBendSequenceBuilder.Plan(r, s);
+            AssertEqual(r.BendCount + 1, plan.Steps.Count, "so buoc = so duong chan + 1");
+
+            for (int i = 1; i < plan.Steps.Count; i++)
+            {
+                FoilBendStep step = plan.Steps[i];
+                List<FoilPoint2d> pts = step.MachinePoints;
+                AssertTrue(pts.Count >= 2, "buoc B" + i + " phai co hinh trong he toa do may");
+
+                // Dinh goc chan nam tai goc toa do => phai co dung mot diem trung goc.
+                int atOrigin = 0;
+                foreach (FoilPoint2d q in pts)
+                {
+                    if (Math.Abs(q.X) < 1e-9 && Math.Abs(q.Y) < 1e-9) atOrigin++;
+                }
+
+                AssertTrue(atOrigin >= 1,
+                    "B" + i + ": dinh goc chan phai nam tai goc he toa do may");
+
+                // Hai diem ke goc phai NGOC LEN (y > 0) - day la dac trung cua chan tren may.
+                int originIndex = -1;
+                for (int k = 0; k < pts.Count; k++)
+                {
+                    if (Math.Abs(pts[k].X) < 1e-9 && Math.Abs(pts[k].Y) < 1e-9) { originIndex = k; break; }
+                }
+
+                if (originIndex > 0)
+                {
+                    AssertTrue(pts[originIndex - 1].Y > 1e-9,
+                        "B" + i + ": canh truoc goc chan phai ngoc len");
+                }
+
+                if (originIndex >= 0 && originIndex < pts.Count - 1)
+                {
+                    AssertTrue(pts[originIndex + 1].Y > 1e-9,
+                        "B" + i + ": canh sau goc chan phai ngoc len");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Chu Z co hai goc re NGUOC chieu nhau. May chi chan duoc mot chieu, nen bat buoc
+        /// phai LAT TON dung mot lan - khong the it hon.
+        /// </summary>
+        private static void Test45_ZProfileNeedsOneFlip()
+        {
+            FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
+            s.BendSequenceOrder = FoilBendSequenceOrder.AutoFeasible;
+
+            FoilRawVertex[] z =
+            {
+                new FoilRawVertex(0, 20, 0),
+                new FoilRawVertex(0, 0, 0),
+                new FoilRawVertex(40, 0, 0),
+                new FoilRawVertex(40, -20, 0)
+            };
+
+            FoilFlatPatternResult r = Compute(s, z);
+            AssertNoErrors(r);
+            AssertEqual(2, r.BendCount, "chu Z co 2 duong chan");
+
+            FoilBendPlan plan = FoilBendSequenceBuilder.Plan(r, s);
+            AssertTrue(plan.AllFeasible, "chu Z phai chan duoc");
+            AssertEqual(1, plan.FlipCount, "chu Z bat buoc lat ton dung 1 lan");
+
+            // Hai lan chan phai nam o hai mat khac nhau.
+            AssertTrue(plan.Steps[1].Flipped != plan.Steps[2].Flipped,
+                "hai goc nguoc chieu phai chan o hai mat khac nhau");
+
+            // Chu U (hai goc CUNG chieu) thi khong phai lat lan nao.
+            FoilRawVertex[] u =
+            {
+                new FoilRawVertex(0, 15, 0),
+                new FoilRawVertex(0, 0, 0),
+                new FoilRawVertex(60, 0, 0),
+                new FoilRawVertex(60, 15, 0)
+            };
+
+            FoilBendPlan uPlan = FoilBendSequenceBuilder.Plan(Compute(s, u), s);
+            AssertTrue(uPlan.AllFeasible, "chu U rong phai chan duoc");
+            AssertEqual(0, uPlan.FlipCount, "chu U khong phai lat ton lan nao");
+        }
+
+        /// <summary>
+        /// BAI TOAN CHINH cua tinh nang nay: voi mu doi xung, chan lan luot theo thu tu VE
+        /// (1,2,3,4) se ket o buoc cuoi - canh da chan chuc xuong duoi mat coi. Che do tu dong
+        /// phai tim ra mot thu tu chan duoc het.
+        /// </summary>
+        private static void Test46_AutoOrderBeatsProfileOrder()
+        {
+            FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
+            s.Thickness = 1.5;
+            s.InsideRadius = 1.5;
+
+            FoilRawVertex[] hat =
+            {
+                new FoilRawVertex(0, 0, 0),
+                new FoilRawVertex(30, 0, 0),
+                new FoilRawVertex(30, 40, 0),
+                new FoilRawVertex(90, 40, 0),
+                new FoilRawVertex(90, 0, 0),
+                new FoilRawVertex(120, 0, 0)
+            };
+
+            FoilFlatPatternResult r = Compute(s, hat);
+            AssertNoErrors(r);
+            AssertEqual(4, r.BendCount, "mu doi xung co 4 duong chan");
+
+            FoilSettings profileOrder = s.Clone();
+            profileOrder.BendSequenceOrder = FoilBendSequenceOrder.ProfileOrder;
+            FoilBendPlan naive = FoilBendSequenceBuilder.Plan(r, profileOrder);
+
+            FoilSettings autoOrder = s.Clone();
+            autoOrder.BendSequenceOrder = FoilBendSequenceOrder.AutoFeasible;
+            FoilBendPlan smart = FoilBendSequenceBuilder.Plan(r, autoOrder);
+
+            AssertTrue(!naive.AllFeasible,
+                "chan lan luot theo thu tu VE phai bi ket (day la ly do can thuat toan)");
+            AssertTrue(smart.AllFeasible,
+                "che do tu dong phai tim duoc thu tu chan het");
+            AssertEqual(4, smart.Order.Count, "thu tu phai du 4 duong chan");
+
+            // Thu tu phai la mot HOAN VI day du, khong lap, khong sot.
+            HashSet<int> seen = new HashSet<int>();
+            foreach (int index in smart.Order)
+            {
+                AssertTrue(seen.Add(index), "thu tu chan khong duoc lap duong chan #" + index);
+                AssertTrue(index >= 1 && index <= 4, "chi so duong chan phai trong 1..4");
+            }
+        }
+
+        /// <summary>
+        /// Thu tu chan la chuyen CONG NGHE, khong duoc dung vao con so phoi. Du chon thu tu
+        /// nao, chieu rong phoi va vi tri moi duong chan phai y het nhau.
+        /// </summary>
+        private static void Test47_OrderDoesNotChangeBlank()
+        {
+            FoilSettings s = BaseSettings(FoilBendMethod.BendDeductionKFactor);
+            FoilFlatPatternResult r = Compute(s, HatProfile());
+            AssertNoErrors(r);
+
+            double width = r.BlankWidth;
+            FoilBendStep reference = null;
+
+            foreach (FoilBendSequenceOrder order in new[]
+            {
+                FoilBendSequenceOrder.ProfileOrder,
+                FoilBendSequenceOrder.Reverse,
+                FoilBendSequenceOrder.OutsideIn,
+                FoilBendSequenceOrder.AutoFeasible
+            })
+            {
+                FoilSettings variant = s.Clone();
+                variant.BendSequenceOrder = order;
+
+                FoilBendPlan plan = FoilBendSequenceBuilder.Plan(r, variant);
+                AssertEqual(r.BendCount + 1, plan.Steps.Count, "so buoc (" + order + ")");
+
+                AssertClose(width, r.BlankWidth, "chieu rong phoi khong doi (" + order + ")", 1e-12);
+                AssertClose(r.BlankWidth, plan.Steps[0].OutlineLength,
+                    "B0 luon bang chieu rong phoi (" + order + ")", 1e-9);
+
+                FoilBendStep last = plan.Steps[plan.Steps.Count - 1];
+                AssertClose(r.MoldLineTotalLength, last.OutlineLength,
+                    "buoc cuoi luon bang tong mold line (" + order + ")", 1e-9);
+
+                if (reference == null)
+                {
+                    reference = last;
+                    continue;
+                }
+
+                AssertEqual(reference.Points.Count, last.Points.Count,
+                    "so dinh buoc cuoi (" + order + ")");
+
+                for (int i = 0; i < reference.Points.Count; i++)
+                {
+                    AssertClose(0.0, reference.Points[i].DistanceTo(last.Points[i]),
+                        "dinh #" + i + " cua buoc cuoi (" + order + ")", 1e-9);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Long chu U hep va sau: canh da chan nga vao long dao khi chan canh con lai.
+        /// Voi dao 85 do va luoi day, truong hop nay phai bi bao (ho dao am hoac rat nho).
+        /// Cung bien dang do nhung LONG RONG thi phai chan duoc thoai mai.
+        /// </summary>
+        private static void Test48_NarrowChannelHitsPunch()
+        {
+            FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
+            s.BendSequenceOrder = FoilBendSequenceOrder.AutoFeasible;
+            s.DieOpening = 10.0;
+            s.PunchBladeHalfWidth = 10.0;   // luoi day 20 mm
+
+            FoilRawVertex[] narrow =
+            {
+                new FoilRawVertex(0, 40, 0),
+                new FoilRawVertex(0, 0, 0),
+                new FoilRawVertex(16, 0, 0),
+                new FoilRawVertex(16, 40, 0)
+            };
+
+            FoilBendPlan tight = FoilBendSequenceBuilder.Plan(Compute(s, narrow), s);
+            AssertTrue(!tight.AllFeasible,
+                "long 16 mm voi canh 40 mm va luoi dao 20 mm phai bi bao va dao");
+
+            FoilRawVertex[] wide =
+            {
+                new FoilRawVertex(0, 40, 0),
+                new FoilRawVertex(0, 0, 0),
+                new FoilRawVertex(120, 0, 0),
+                new FoilRawVertex(120, 40, 0)
+            };
+
+            FoilBendPlan roomy = FoilBendSequenceBuilder.Plan(Compute(s, wide), s);
+            AssertTrue(roomy.AllFeasible, "long 120 mm thi phai chan duoc");
+            AssertTrue(roomy.Steps[2].PunchClearance > 0.0, "phai con ho dao duong");
+        }
+
+        /// <summary>
+        /// Canh ngan hon V/2 + R + T thi khong gac duoc len vai coi. Phai duoc canh bao,
+        /// va canh bao phai BIEN MAT khi doi sang coi nho hon.
+        /// </summary>
+        private static void Test49_ShortFlangeWarning()
+        {
+            FoilRawVertex[] l =
+            {
+                new FoilRawVertex(0, 0, 0),
+                new FoilRawVertex(0, 8, 0),
+                new FoilRawVertex(60, 8, 0)
+            };
+
+            FoilSettings big = BaseSettings(FoilBendMethod.CustomShopRule);
+            big.BendSequenceOrder = FoilBendSequenceOrder.AutoFeasible;
+            big.DieOpening = 40.0;          // canh nho nhat = 20 + 1.2 + 1.2 = 22.4 > 8
+
+            FoilBendPlan bigPlan = FoilBendSequenceBuilder.Plan(Compute(big, l), big);
+            AssertTrue(HasIssue(bigPlan, "canh nho nhat"),
+                "canh 8 mm tren coi V40 phai bi canh bao qua ngan");
+
+            FoilSettings small = big.Clone();
+            small.DieOpening = 6.0;         // canh nho nhat = 3 + 1.2 + 1.2 = 5.4 < 8
+
+            FoilBendPlan smallPlan = FoilBendSequenceBuilder.Plan(Compute(small, l), small);
+            AssertTrue(!HasIssue(smallPlan, "canh nho nhat"),
+                "doi sang coi V6 thi canh 8 mm khong con bi canh bao");
+        }
+
+        /// <summary>
+        /// Tim thu tu chan la bai toan hoan vi. Ban cai dat dung TIM KIEM CHUM (beam search)
+        /// cho nhanh; test nay VET CAN toan bo hoan vi tren nhieu bien dang de chac chan chum
+        /// khong bo sot phuong an tot hon.
+        /// </summary>
+        private static void Test50_BeamSearchMatchesBruteForce()
+        {
+            FoilRawVertex[][] profiles =
+            {
+                // Mu doi xung.
+                new[]
+                {
+                    new FoilRawVertex(0, 0, 0), new FoilRawVertex(30, 0, 0),
+                    new FoilRawVertex(30, 40, 0), new FoilRawVertex(90, 40, 0),
+                    new FoilRawVertex(90, 0, 0), new FoilRawVertex(120, 0, 0)
+                },
+
+                // Bac thang - moi goc cung mot chieu.
+                new[]
+                {
+                    new FoilRawVertex(0, 0, 0), new FoilRawVertex(0, 25, 0),
+                    new FoilRawVertex(40, 25, 0), new FoilRawVertex(40, 50, 0),
+                    new FoilRawVertex(80, 50, 0), new FoilRawVertex(80, 75, 0)
+                },
+
+                // Chu Z co them mot canh.
+                new[]
+                {
+                    new FoilRawVertex(0, 30, 0), new FoilRawVertex(0, 0, 0),
+                    new FoilRawVertex(50, 0, 0), new FoilRawVertex(50, -30, 0),
+                    new FoilRawVertex(90, -30, 0)
+                }
+            };
+
+            foreach (FoilRawVertex[] profile in profiles)
+            {
+                FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
+                s.Thickness = 1.5;
+                s.InsideRadius = 1.5;
+                s.BendSequenceOrder = FoilBendSequenceOrder.AutoFeasible;
+
+                FoilFlatPatternResult r = Compute(s, profile);
+                AssertNoErrors(r);
+                AssertTrue(r.BendCount >= 3 && r.BendCount <= 7, "so duong chan hop ly de vet can");
+
+                FoilToolingGeometry tooling = FoilToolingGeometry.Resolve(s);
+                Dictionary<int, FoilBendInfo> byIndex = new Dictionary<int, FoilBendInfo>();
+                List<int> all = new List<int>();
+                foreach (FoilBendInfo b in r.Bends) { byIndex[b.Index] = b; all.Add(b.Index); }
+
+                int bestBlocked = int.MaxValue;
+                List<List<int>> permutations = new List<List<int>>();
+                Permute(all, 0, permutations);
+
+                foreach (List<int> order in permutations)
+                {
+                    int blocked = CountBlocked(r, byIndex, tooling, order);
+                    if (blocked < bestBlocked) bestBlocked = blocked;
+                }
+
+                FoilBendPlan plan = FoilBendSequenceBuilder.Plan(r, s);
+                int planBlocked = CountBlocked(r, byIndex, tooling, plan.Order);
+
+                AssertEqual(bestBlocked, planBlocked,
+                    "tim kiem chum phai dat so buoc bi chan nho nhat (" + r.BendCount + " duong chan)");
+
+                AssertEqual(bestBlocked == 0, plan.AllFeasible,
+                    "co bao 'chan duoc het' dung voi ket qua vet can");
+            }
+        }
+
+        private static void AssertEqual(bool expected, bool actual, string what)
+        {
+            AssertTrue(expected == actual,
+                what + " (mong doi " + expected + ", nhan duoc " + actual + ")");
+        }
+
+        private static int CountBlocked(
+            FoilFlatPatternResult result,
+            Dictionary<int, FoilBendInfo> byIndex,
+            FoilToolingGeometry tooling,
+            List<int> order)
+        {
+            HashSet<int> formed = new HashSet<int>();
+            int blocked = 0;
+
+            foreach (int index in order)
+            {
+                FoilFormedShape shape = FoilFormedShape.Build(result, formed);
+                FoilBendMounting mount = FoilPressBrakeModel.Evaluate(shape, byIndex[index], tooling);
+                if (!mount.Feasible) blocked++;
+                formed.Add(index);
+            }
+
+            return blocked;
+        }
+
+        private static void Permute(List<int> items, int start, List<List<int>> output)
+        {
+            if (start >= items.Count)
+            {
+                output.Add(new List<int>(items));
+                return;
+            }
+
+            for (int i = start; i < items.Count; i++)
+            {
+                int tmp = items[start]; items[start] = items[i]; items[i] = tmp;
+                Permute(items, start + 1, output);
+                tmp = items[start]; items[start] = items[i]; items[i] = tmp;
+            }
+        }
+
+        /// <summary>
+        /// Hai o hinh buoc chan KHONG duoc de len nhau, va ca day phai nam HOAN TOAN duoi phoi.
+        ///
+        /// Loi cu: be rong o chi tinh theo hinh chi tiet, con chieu cao chu lai suy tu chieu cao
+        /// hinh - voi bien dang cao thi dong chu dai gap may lan be rong o nen cac nhan de chong
+        /// len nhau. Test nay tinh hop bao cua tung o DA GOM CA DONG CHU va bat loi do.
+        /// </summary>
+        private static void Test51_StepCellsDoNotOverlap()
+        {
+            // Hai truong hop bay:
+            //   * chi tiet NHO tren phoi DAI  -> xep duoc nhieu cot, nhan de dam vao cot ben canh
+            //   * chi tiet CAO tren phoi ngan -> mot cot, cac hang de dam vao nhau
+            CheckStepLayout(2500.0, 1.2, new[]
+            {
+                new FoilRawVertex(0, 0, 0),
+                new FoilRawVertex(20, 0, 0),
+                new FoilRawVertex(20, 30, 0),
+                new FoilRawVertex(60, 30, 0),
+                new FoilRawVertex(60, 0, 0),
+                new FoilRawVertex(80, 0, 0)
+            });
+
+            CheckStepLayout(800.0, 2.0, new[]
+            {
+                new FoilRawVertex(0, 0, 0),
+                new FoilRawVertex(0, 120, 0),
+                new FoilRawVertex(45, 120, 0),
+                new FoilRawVertex(45, 0, 0),
+                new FoilRawVertex(90, 0, 0),
+                new FoilRawVertex(90, 110, 0)
+            });
+        }
+
+        private static void CheckStepLayout(
+            double blankLength, double thickness, FoilRawVertex[] profile)
+        {
+            FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
+            s.Thickness = thickness;
+            s.InsideRadius = thickness;
+            s.BlankLength = blankLength;
+            s.DrawBendSteps = true;
+            s.DrawTooling = true;
+            s.BendSequenceOrder = FoilBendSequenceOrder.AutoFeasible;
+
+            FoilFlatPatternResult r = Compute(s, profile);
+            AssertNoErrors(r);
+
+            FoilFlatPatternGeometry geometry = FoilFlatPatternGeometry.Build(
+                r, new FoilPoint2d(0, 0), 0.0);
+
+            AssertTrue(geometry.Steps.Count >= 2, "phai sinh duoc nhieu buoc de kiem tra");
+
+            double h = geometry.StepTextHeight;
+            AssertTrue(h > 0.0, "phai co chieu cao chu");
+
+            List<double[]> boxes = new List<double[]>();
+            foreach (FoilBendStepGeometry step in geometry.Steps)
+            {
+                double[] box = { double.MaxValue, double.MaxValue, double.MinValue, double.MinValue };
+                Grow(box, step.Points);
+                Grow(box, step.DiePoints);
+                Grow(box, step.PunchPoints);
+
+                // Hai dong chu: uoc luong be rong nhu tang ve dang dung.
+                GrowText(box, step.LabelPosition, step.Label, h);
+                GrowText(box, step.DetailPosition, step.Detail, h * 0.8);
+
+                boxes.Add(box);
+
+                // Ca day phai nam duoi canh duoi cua phoi (V = 0).
+                AssertTrue(box[3] < 1e-9,
+                    "hinh buoc chan phai nam duoi phoi, khong de len phoi");
+            }
+
+            const double tolerance = -1e-9;
+            for (int i = 0; i < boxes.Count; i++)
+            {
+                for (int j = i + 1; j < boxes.Count; j++)
+                {
+                    double overlapX = Math.Min(boxes[i][2], boxes[j][2]) - Math.Max(boxes[i][0], boxes[j][0]);
+                    double overlapY = Math.Min(boxes[i][3], boxes[j][3]) - Math.Max(boxes[i][1], boxes[j][1]);
+
+                    AssertTrue(overlapX <= tolerance || overlapY <= tolerance,
+                        "o buoc " + i + " va " + j + " de len nhau");
+                }
+            }
+        }
+
+        private static void Grow(double[] box, List<FoilPoint2d> points)
+        {
+            foreach (FoilPoint2d p in points)
+            {
+                if (p.X < box[0]) box[0] = p.X;
+                if (p.Y < box[1]) box[1] = p.Y;
+                if (p.X > box[2]) box[2] = p.X;
+                if (p.Y > box[3]) box[3] = p.Y;
+            }
+        }
+
+        private static void GrowText(double[] box, FoilPoint2d at, string text, double height)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+
+            double width = text.Length * height * 0.62;
+            Grow(box, new List<FoilPoint2d>
+            {
+                at,
+                new FoilPoint2d(at.X + width, at.Y + height)
+            });
+        }
+
+        /// <summary>
+        /// Hinh mot buoc duoc giu o HAI he toa do: he bien dang (de kiem chieu dai vat lieu) va
+        /// HE TOA DO MAY (de ve cho tho). Hai cai phai la CUNG MOT HINH, chi khac phep dat.
+        ///
+        /// Loi da tung mac: hinh o he toa do may duoc dung bang cach xoay hinh TRUOC khi chan,
+        /// nen vung chan dai BA van con nguyen - goc chan bi ve CUT va hai canh ke ngan mat
+        /// dung bang setback. Voi quy tac xuong BA = 0 nen khong lo ra; chi cac phuong phap
+        /// K-factor (BA > 0) moi thay. Test nay chay CA HAI nhom phuong phap.
+        /// </summary>
+        private static void Test52_MachineShapeIsCongruent()
+        {
+            foreach (FoilBendMethod method in new[]
+            {
+                FoilBendMethod.CustomShopRule,
+                FoilBendMethod.BendDeductionKFactor,
+                FoilBendMethod.BendAllowanceKFactor
+            })
+            {
+                foreach (FoilBendSequenceOrder order in new[]
+                {
+                    FoilBendSequenceOrder.ProfileOrder,
+                    FoilBendSequenceOrder.AutoFeasible
+                })
+                {
+                    FoilSettings s = BaseSettings(method);
+                    s.BendSequenceOrder = order;
+
+                    FoilFlatPatternResult r = Compute(s, HatProfile());
+                    AssertNoErrors(r);
+
+                    // Voi K-factor thi BA phai KHAC 0, neu khong test nay khong co y nghia.
+                    if (method != FoilBendMethod.CustomShopRule)
+                    {
+                        AssertTrue(r.Bends[0].BendAllowance > 1e-6,
+                            "phuong phap " + method + " phai co BA > 0 thi phep thu moi co y nghia");
+                    }
+
+                    FoilBendPlan plan = FoilBendSequenceBuilder.Plan(r, s);
+
+                    foreach (FoilBendStep step in plan.Steps)
+                    {
+                        if (step.FormedBend == null) continue;
+
+                        List<FoilPoint2d> profile = FoilBendSequenceBuilder.Simplify(step.Points);
+                        List<FoilPoint2d> machine = FoilBendSequenceBuilder.Simplify(step.MachinePoints);
+
+                        string tag = method + "/" + order + " B" + step.StepNumber;
+
+                        AssertEqual(profile.Count, machine.Count, "so dinh hai he toa do (" + tag + ")");
+
+                        double profileLength = 0.0;
+                        double machineLength = 0.0;
+
+                        for (int i = 0; i < profile.Count - 1 && i < machine.Count - 1; i++)
+                        {
+                            double a = profile[i].DistanceTo(profile[i + 1]);
+                            double b = machine[i].DistanceTo(machine[i + 1]);
+                            profileLength += a;
+                            machineLength += b;
+
+                            AssertClose(a, b, "canh #" + (i + 1) + " (" + tag + ")", 1e-9);
+                        }
+
+                        AssertClose(profileLength, machineLength,
+                            "tong chieu dai (" + tag + ")", 1e-9);
+
+                        // Dinh goc chan vua thuc hien phai nam dung tai goc he toa do may.
+                        bool atOrigin = false;
+                        foreach (FoilPoint2d q in machine)
+                        {
+                            if (Math.Abs(q.X) < 1e-9 && Math.Abs(q.Y) < 1e-9) { atOrigin = true; break; }
+                        }
+
+                        AssertTrue(atOrigin, "dinh goc chan phai o goc toa do may (" + tag + ")");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// BAT BIEN VAT LY CUA MAY CHAN: dao di tu tren xuong long coi, nen trong he toa do may
+        /// khau chan LUON MO LEN TREN - hai canh ke dinh goc deu ngoc len, va dinh goc la diem
+        /// THAP NHAT cua cum quanh no.
+        ///
+        /// Day chinh la rang buoc sinh ra toan bo bai toan thu tu: goc re nguoc chieu thi khong
+        /// con cach nao khac ngoai LAT TON. Neu phep dat bi sai dau o dau do thi test nay bat
+        /// duoc, bat ke phuong phap tinh hay che do thu tu nao.
+        /// </summary>
+        private static void Test53_BendAlwaysOpensUpward()
+        {
+            int checkedSteps = 0;
+
+            foreach (FoilBendMethod method in new[]
+            {
+                FoilBendMethod.CustomShopRule,
+                FoilBendMethod.BendDeductionKFactor,
+                FoilBendMethod.BendAllowanceKFactor
+            })
+            {
+                foreach (FoilBendSequenceOrder order in new[]
+                {
+                    FoilBendSequenceOrder.ProfileOrder,
+                    FoilBendSequenceOrder.Reverse,
+                    FoilBendSequenceOrder.OutsideIn,
+                    FoilBendSequenceOrder.AutoFeasible
+                })
+                {
+                    FoilSettings s = BaseSettings(method);
+                    s.BendSequenceOrder = order;
+
+                    FoilFlatPatternResult r = Compute(s, HatProfile());
+                    AssertNoErrors(r);
+
+                    FoilBendPlan plan = FoilBendSequenceBuilder.Plan(r, s);
+
+                    foreach (FoilBendStep step in plan.Steps)
+                    {
+                        if (step.FormedBend == null) continue;
+
+                        List<FoilPoint2d> pts = FoilBendSequenceBuilder.Simplify(step.MachinePoints);
+                        string tag = method + "/" + order + " B" + step.StepNumber;
+
+                        int apex = -1;
+                        for (int i = 0; i < pts.Count; i++)
+                        {
+                            if (Math.Abs(pts[i].X) < 1e-9 && Math.Abs(pts[i].Y) < 1e-9) { apex = i; break; }
+                        }
+
+                        AssertTrue(apex >= 0, "phai co dinh goc chan tai goc toa do (" + tag + ")");
+
+                        // Hai canh ke dinh goc phai NGOC LEN.
+                        if (apex > 0)
+                        {
+                            AssertTrue(pts[apex - 1].Y > 1e-9,
+                                "canh truoc dinh goc phai ngoc len (" + tag + ")");
+                        }
+
+                        if (apex >= 0 && apex < pts.Count - 1)
+                        {
+                            AssertTrue(pts[apex + 1].Y > 1e-9,
+                                "canh sau dinh goc phai ngoc len (" + tag + ")");
+                        }
+
+                        // Goc mo giua hai canh phai dung bang goc mo cua duong chan.
+                        if (apex > 0 && apex < pts.Count - 1)
+                        {
+                            FoilVector2d left = (pts[apex - 1] - pts[apex]).Normalized();
+                            FoilVector2d right = (pts[apex + 1] - pts[apex]).Normalized();
+
+                            double opening = FoilMath.AngleBetween(left, right) * FoilMath.RadToDeg;
+                            AssertClose(step.FormedBend.OpeningAngleDeg, opening,
+                                "goc mo tai dinh (" + tag + ")", 1e-6);
+
+                            // Duong phan giac phai huong THANG LEN (truc dao).
+                            FoilVector2d bisector = (left + right).Normalized();
+                            AssertClose(0.0, bisector.X, "phan giac phai trung truc dao (" + tag + ")", 1e-9);
+                            AssertTrue(bisector.Y > 0.0, "phan giac phai huong len (" + tag + ")");
+                        }
+
+                        checkedSteps++;
+                    }
+                }
+            }
+
+            AssertTrue(checkedSteps >= 90, "phai kiem duoc nhieu buoc (" + checkedSteps + ")");
+        }
+
+        private static bool HasIssue(FoilBendPlan plan, string fragment)
+        {
+            foreach (FoilBendStep step in plan.Steps)
+            {
+                foreach (FoilBendIssue issue in step.Issues)
+                {
+                    if (issue.Message.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private static FoilSettings BaseSettings(FoilBendMethod method)

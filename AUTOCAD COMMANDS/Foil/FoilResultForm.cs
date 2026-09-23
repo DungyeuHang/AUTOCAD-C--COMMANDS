@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -392,10 +392,19 @@ namespace AUTOCAD_COMMANDS
 
             _preview.SetData(_result, _profile);
 
-            List<FoilBendStep> steps = FoilBendSequenceBuilder.Build(_result, s.BendSequenceOrder);
-            _stepPreview.SetData(steps);
+            FoilBendPlan plan = FoilBendSequenceBuilder.Plan(_result, s);
+            _stepPreview.SetData(plan);
+
+            List<string> orderNames = new List<string>();
+            foreach (int index in plan.Order) orderNames.Add("#" + index.ToString(ci));
+
             _grpSteps.Text = string.Format(
-                ci, "CAC BUOC CHAN  ({0} buoc - B0 la phoi phang)", Math.Max(steps.Count - 1, 0));
+                ci,
+                "CAC BUOC CHAN  ({0} buoc)   thu tu: {1}   lat ton {2} lan{3}",
+                Math.Max(plan.Steps.Count - 1, 0),
+                orderNames.Count > 0 ? string.Join(" > ", orderNames.ToArray()) : "-",
+                plan.FlipCount,
+                plan.AllFeasible ? string.Empty : "   [CO BUOC KHONG CHAN DUOC]");
 
             if (_result.Warnings.Count > 0)
             {
@@ -410,14 +419,21 @@ namespace AUTOCAD_COMMANDS
     }
 
     /// <summary>
-    /// Ve day hinh trinh tu cac buoc chan: B0 (phoi phang) roi lan luot sau moi lan chan.
-    /// Duong chan vua thuc hien duoc danh dau bang mot vong tron mau theo huong UP/DOWN.
+    /// Ve day hinh trinh tu chan, MOI O LA MOT LAN DAT PHOI LEN MAY:
+    /// coi va chay dao ve mo phia sau, mat cat chi tiet ve dam phia tren, dung HE TOA DO MAY
+    /// nen nhin vao la biet phai dat phoi theo chieu nao.
+    /// Buoc nao mo hinh bao khong chan duoc thi o do duoc to vien do.
     /// </summary>
     public class FoilStepPreviewPanel : Panel
     {
-        private List<FoilBendStep> _steps;
+        private FoilBendPlan _plan;
+        private List<FoilPoint2d> _die = new List<FoilPoint2d>();
+        private List<List<FoilPoint2d>> _shapes = new List<List<FoilPoint2d>>();
+        private List<List<FoilPoint2d>> _punches = new List<List<FoilPoint2d>>();
+
         private double _scale = 1.0;
-        private int _cellWidth = 120;
+        private double _left, _right, _down, _up;
+        private int _cellWidth = 140;
 
         public FoilStepPreviewPanel()
         {
@@ -426,9 +442,39 @@ namespace AUTOCAD_COMMANDS
             AutoScroll = true;
         }
 
-        public void SetData(List<FoilBendStep> steps)
+        public void SetData(FoilBendPlan plan)
         {
-            _steps = steps;
+            _plan = plan;
+            _shapes.Clear();
+            _punches.Clear();
+            _die.Clear();
+
+            if (plan != null && plan.Steps.Count > 0)
+            {
+                FoilToolingGeometry tooling = plan.Tooling;
+                if (tooling != null)
+                {
+                    _die = FoilPressBrakeModel.BuildDieOutline(tooling);
+                }
+
+                foreach (FoilBendStep step in plan.Steps)
+                {
+                    List<FoilPoint2d> shape = FoilBendSequenceBuilder.Simplify(step.MachinePoints);
+                    _shapes.Add(shape);
+
+                    double partHeight = 0.0;
+                    foreach (FoilPoint2d q in shape)
+                    {
+                        if (q.Y > partHeight) partHeight = q.Y;
+                    }
+
+                    _punches.Add(tooling != null && step.FormedBend != null
+                        ? FoilPressBrakeModel.BuildPunchOutline(
+                            tooling, step.FormedBend.BendAngleRad, partHeight)
+                        : new List<FoilPoint2d>());
+                }
+            }
+
             RecomputeLayout();
             Invalidate();
         }
@@ -446,38 +492,40 @@ namespace AUTOCAD_COMMANDS
         /// </summary>
         private void RecomputeLayout()
         {
-            if (_steps == null || _steps.Count == 0)
+            if (_plan == null || _shapes.Count == 0)
             {
                 AutoScrollMinSize = Size.Empty;
                 return;
             }
 
-            double maxWidth = 0.0;
-            double maxHeight = 0.0;
-            foreach (FoilBendStep step in _steps)
+            _left = _right = _down = _up = 0.0;
+            for (int i = 0; i < _shapes.Count; i++)
             {
-                if (step.Width > maxWidth) maxWidth = step.Width;
-                if (step.Height > maxHeight) maxHeight = step.Height;
+                Measure(_shapes[i]);
+                Measure(_punches[i]);
             }
 
-            if (maxWidth <= 1e-9)
+            Measure(_die);
+
+            double width = _left + _right;
+            double height = _down + _up;
+            if (width <= 1e-9)
             {
                 AutoScrollMinSize = Size.Empty;
                 return;
             }
 
             const int cellPadding = 10;
-            const int captionHeight = 18;
-            const int maxCellWidth = 250;
+            const int captionHeight = 30;
+            const int maxCellWidth = 260;
+            const int minCellWidth = 130;
 
             int cellHeight = Math.Max(ClientSize.Height - 20, 40);
             int drawHeight = Math.Max(cellHeight - captionHeight - cellPadding, 20);
 
             // MOT ty le duy nhat cho moi buoc de so sanh duoc bang mat.
-            double scaleByHeight = maxHeight > 1e-9
-                ? (drawHeight - cellPadding) / maxHeight
-                : double.MaxValue;
-            double scaleByWidth = (maxCellWidth - 2.0 * cellPadding) / maxWidth;
+            double scaleByHeight = height > 1e-9 ? (drawHeight - cellPadding) / height : double.MaxValue;
+            double scaleByWidth = (maxCellWidth - 2.0 * cellPadding) / width;
 
             double scale = Math.Min(scaleByHeight, scaleByWidth);
             if (scale <= 0.0 || double.IsInfinity(scale) || double.IsNaN(scale))
@@ -486,12 +534,24 @@ namespace AUTOCAD_COMMANDS
             }
 
             _scale = scale;
-            _cellWidth = (int)Math.Ceiling(maxWidth * scale) + 2 * cellPadding;
+            _cellWidth = Math.Max(
+                (int)Math.Ceiling(width * scale) + 2 * cellPadding, minCellWidth);
 
-            Size required = new Size(_cellWidth * _steps.Count + 8, 0);
+            Size required = new Size(_cellWidth * _shapes.Count + 8, 0);
             if (AutoScrollMinSize != required)
             {
                 AutoScrollMinSize = required;
+            }
+        }
+
+        private void Measure(List<FoilPoint2d> points)
+        {
+            foreach (FoilPoint2d p in points)
+            {
+                if (-p.X > _left) _left = -p.X;
+                if (p.X > _right) _right = p.X;
+                if (-p.Y > _down) _down = -p.Y;
+                if (p.Y > _up) _up = p.Y;
             }
         }
 
@@ -499,7 +559,7 @@ namespace AUTOCAD_COMMANDS
         {
             base.OnPaint(e);
 
-            if (_steps == null || _steps.Count == 0)
+            if (_plan == null || _shapes.Count == 0)
             {
                 return;
             }
@@ -508,7 +568,7 @@ namespace AUTOCAD_COMMANDS
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
             const int cellPadding = 10;
-            const int captionHeight = 18;
+            const int captionHeight = 30;
 
             int cellHeight = Math.Max(ClientSize.Height - 20, 40);
             int drawHeight = Math.Max(cellHeight - captionHeight - cellPadding, 20);
@@ -518,12 +578,20 @@ namespace AUTOCAD_COMMANDS
             int scrollX = AutoScrollPosition.X;
 
             using (Font captionFont = new Font("Segoe UI", 7.5F))
-            using (Brush captionBrush = new SolidBrush(Color.FromArgb(205, 205, 205)))
+            using (Font detailFont = new Font("Segoe UI", 6.75F))
+            using (Brush captionBrush = new SolidBrush(Color.FromArgb(215, 215, 215)))
+            using (Brush detailBrush = new SolidBrush(Color.FromArgb(140, 140, 140)))
+            using (Brush badBrush = new SolidBrush(Color.FromArgb(255, 110, 110)))
             using (Pen separator = new Pen(Color.FromArgb(60, 60, 60)))
+            using (Pen toolPen = new Pen(Color.FromArgb(95, 95, 95), 1.3f))
+            using (StringFormat clip = new StringFormat(StringFormatFlags.NoWrap)
             {
-                for (int i = 0; i < _steps.Count; i++)
+                Trimming = StringTrimming.EllipsisCharacter
+            })
+            {
+                for (int i = 0; i < _shapes.Count; i++)
                 {
-                    FoilBendStep step = _steps[i];
+                    FoilBendStep step = _plan.Steps[i];
                     int cellX = scrollX + i * cellWidth;
                     if (cellX > Width || cellX + cellWidth < 0)
                     {
@@ -535,23 +603,22 @@ namespace AUTOCAD_COMMANDS
                         g.DrawLine(separator, cellX, 4, cellX, cellHeight);
                     }
 
-                    // Can giua hinh trong o.
-                    float originX = cellX + (float)((cellWidth - step.Width * scale) / 2.0);
-                    float originY = captionHeight + (float)((drawHeight - step.Height * scale) / 2.0)
-                                    + (float)(step.Height * scale);
+                    // Goc toa do may (dinh goc chan) nam cung mot cho o moi o.
+                    float slack = (float)((cellWidth - (_left + _right) * scale) / 2.0);
+                    float originX = cellX + slack + (float)(_left * scale);
+                    float originY = captionHeight + (float)((drawHeight - (_down + _up) * scale) / 2.0)
+                                    + (float)(_up * scale);
+
+                    DrawChain(g, toolPen, _die, scale, originX, originY);
+                    DrawChain(g, toolPen, _punches[i], scale, originX, originY);
 
                     Color color = step.FormedBend == null
                         ? Color.FromArgb(150, 200, 255)
-                        : Color.FromArgb(240, 220, 90);
+                        : (step.Feasible ? Color.FromArgb(240, 220, 90) : Color.FromArgb(255, 110, 110));
 
                     using (Pen pen = new Pen(color, 1.8f))
                     {
-                        for (int k = 0; k < step.Points.Count - 1; k++)
-                        {
-                            g.DrawLine(pen,
-                                ToScreen(step.Points[k], step, scale, originX, originY),
-                                ToScreen(step.Points[k + 1], step, scale, originX, originY));
-                        }
+                        DrawChain(g, pen, _shapes[i], scale, originX, originY);
                     }
 
                     if (step.FormedBend != null)
@@ -560,33 +627,53 @@ namespace AUTOCAD_COMMANDS
                             ? Color.FromArgb(255, 80, 80)
                             : Color.FromArgb(170, 170, 170);
 
-                        PointF m = ToScreen(step.MarkerPoint, step, scale, originX, originY);
                         using (Brush brush = new SolidBrush(markerColor))
                         {
-                            g.FillEllipse(brush, m.X - 3.5f, m.Y - 3.5f, 7f, 7f);
+                            g.FillEllipse(brush, originX - 3.5f, originY - 3.5f, 7f, 7f);
                         }
                     }
 
                     string caption = step.FormedBend == null
-                        ? "B0 phoi phang"
+                        ? "B0  phoi phang"
                         : string.Format(
                             CultureInfo.InvariantCulture,
-                            "B{0}  #{1} {2}",
+                            "B{0}  #{1} {2}{3}",
                             step.StepNumber,
                             step.FormedBend.Index,
-                            step.FormedBend.Direction == FoilBendDirection.Up ? "UP" : "DOWN");
+                            step.FormedBend.Direction == FoilBendDirection.Up ? "UP" : "DOWN",
+                            step.FlipChanged ? "  LAT" : string.Empty);
 
-                    g.DrawString(caption, captionFont, captionBrush, cellX + 6, 2);
+                    // Chu phai duoc KEP trong o cua no, neu khong se tran sang o ben canh.
+                    RectangleF captionBox = new RectangleF(cellX + 5, 2, cellWidth - 10, 13);
+                    RectangleF detailBox = new RectangleF(cellX + 5, 15, cellWidth - 10, 13);
+
+                    g.DrawString(caption, captionFont,
+                        step.Feasible ? captionBrush : badBrush, captionBox, clip);
+
+                    if (!string.IsNullOrEmpty(step.Detail))
+                    {
+                        g.DrawString(step.Detail, detailFont, detailBrush, detailBox, clip);
+                    }
                 }
             }
         }
 
-        private static PointF ToScreen(
-            FoilPoint2d p, FoilBendStep step, double scale, float originX, float originY)
+        private static void DrawChain(
+            Graphics g, Pen pen, List<FoilPoint2d> points, double scale, float originX, float originY)
+        {
+            for (int k = 0; k < points.Count - 1; k++)
+            {
+                g.DrawLine(pen,
+                    ToScreen(points[k], scale, originX, originY),
+                    ToScreen(points[k + 1], scale, originX, originY));
+            }
+        }
+
+        private static PointF ToScreen(FoilPoint2d p, double scale, float originX, float originY)
         {
             return new PointF(
-                originX + (float)((p.X - step.MinX) * scale),
-                originY - (float)((p.Y - step.MinY) * scale));
+                originX + (float)(p.X * scale),
+                originY - (float)(p.Y * scale));
         }
     }
 
