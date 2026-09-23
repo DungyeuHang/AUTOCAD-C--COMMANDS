@@ -243,6 +243,28 @@ namespace AUTOCAD_COMMANDS
         /// <summary>Khoang ho nho nhat den long dao.</summary>
         public double PunchClearance { get; set; }
 
+        /// <summary>CHAY DAO duoc chon cho buoc nay - chinh la hinh duoc ve.</summary>
+        public FoilToolShape Punch { get; set; }
+
+        /// <summary>THAN COI duoc ve cho buoc nay.</summary>
+        public FoilToolShape Die { get; set; }
+
+        /// <summary>DAM DUOI (ban may) duoc ve cho buoc nay.</summary>
+        public FoilToolShape Bed { get; set; }
+
+        /// <summary>
+        /// TOAN BO bo phan may cua buoc nay theo thu tu ve: dam duoi, ham kep coi, coi, ngon
+        /// cu hau, dam tren (neu chi tiet voi toi), chay dao. Day dung la bo da duoc dung de
+        /// kiem va cham.
+        /// </summary>
+        public List<FoilToolShape> Tools { get; private set; } = new List<FoilToolShape>();
+
+        /// <summary>True neu buoc nay phai doi sang dao khac so voi buoc truoc.</summary>
+        public bool ToolChanged { get; set; }
+
+        /// <summary>True neu buoc nay phai DOI DAU chi tiet so voi buoc truoc.</summary>
+        public bool TurnChanged { get; set; }
+
         public bool Feasible { get; set; } = true;
 
         public List<FoilBendIssue> Issues { get; private set; } = new List<FoilBendIssue>();
@@ -284,6 +306,15 @@ namespace AUTOCAD_COMMANDS
 
         /// <summary>So lan phai lat ton trong ca quy trinh.</summary>
         public int FlipCount { get; set; }
+
+        /// <summary>So lan phai thay chay dao trong ca quy trinh.</summary>
+        public int ToolChanges { get; set; }
+
+        /// <summary>So lan phai DOI DAU chi tiet trong ca quy trinh.</summary>
+        public int TurnCount { get; set; }
+
+        /// <summary>So buoc van con vuong sau khi da chon thu tu tot nhat.</summary>
+        public int BlockedCount { get; set; }
 
         public List<string> Warnings { get; private set; } = new List<string>();
 
@@ -426,6 +457,14 @@ namespace AUTOCAD_COMMANDS
                 // Dat phoi phang len coi dung nhu luc chuan bi cho lan chan dau tien.
                 FoilBendMounting first = FoilPressBrakeModel.Evaluate(shape, byIndex[order[0]], tooling);
                 zero.MachinePoints.AddRange(first.MachinePointsBefore);
+
+                // Ve luon ca bo may o buoc 0: day la hinh DAT PHOI cho lan chan dau tien, nen
+                // tho nhin thay ngay phoi ti vao cu hau o dau va dao se an xuong cho nao.
+                zero.Tools.AddRange(first.Tools);
+                zero.Die = first.Die;
+                zero.Bed = first.Bed;
+                zero.Punch = first.Punch;
+                zero.GaugeLength = first.GaugeLength;
             }
             else
             {
@@ -436,6 +475,8 @@ namespace AUTOCAD_COMMANDS
 
             // ---- Cac buoc chan ----
             bool previousFlipped = false;
+            bool previousEndSwapped = false;
+            string previousPunch = string.Empty;
             bool havePrevious = false;
 
             for (int k = 0; k < order.Count; k++)
@@ -459,17 +500,29 @@ namespace AUTOCAD_COMMANDS
                 step.GaugeLength = mount.GaugeLength;
                 step.PunchClearance = mount.PunchClearance;
                 step.Feasible = mount.Feasible;
+                step.Punch = mount.Punch;
+                step.Die = mount.Die;
+                step.Bed = mount.Bed;
+                step.Tools.AddRange(mount.Tools);
+                step.ToolChanged = havePrevious && previousPunch != mount.PunchName;
                 step.Issues.AddRange(mount.Issues);
                 step.FlipChanged = havePrevious && mount.Flipped != previousFlipped;
+                step.TurnChanged = havePrevious && mount.EndSwapped != previousEndSwapped;
 
                 if (step.FlipChanged)
                 {
                     plan.FlipCount++;
                 }
 
+                if (step.TurnChanged)
+                {
+                    plan.TurnCount++;
+                }
+
                 if (!mount.Feasible)
                 {
                     plan.AllFeasible = false;
+                    plan.BlockedCount++;
                 }
 
                 step.Caption = BuildCaption(step, result, s);
@@ -477,7 +530,14 @@ namespace AUTOCAD_COMMANDS
 
                 plan.Steps.Add(step);
 
+                if (step.ToolChanged)
+                {
+                    plan.ToolChanges++;
+                }
+
                 previousFlipped = mount.Flipped;
+                previousEndSwapped = mount.EndSwapped;
+                previousPunch = mount.PunchName;
                 havePrevious = true;
                 shape = next;
             }
@@ -495,8 +555,14 @@ namespace AUTOCAD_COMMANDS
         //
         // Gia cua mot lan chan gom:
         //   * phat rat nang neu VA COI / VA DAO (de thu tu kha thi luon thang thu tu khong kha thi)
-        //   * phat neu phai LAT TON so voi lan chan truoc (moi lan lat la mot lan mat cong)
-        //   * phat nhe khi ho dao it, chi tiet cao, chuan ga ngan
+        //   * phat theo SO LAN PHAI THAY DOI THAO TAC giua hai buoc lien tiep:
+        //       - THAY CHAY DAO  : ton cong nhat (dung may, thao ke, can chinh lai)
+        //       - LAT TON        : nhac ca chi tiet len lat mat
+        //       - DOI DAU        : xoay chi tiet 180 do de doi dau vao cu hau
+        //     Phat theo LAN THAY DOI moi dung. Truoc day moi buoc dung dao dac chung bi phat
+        //     rieng le, nen phuong an "dao A, dao B, dao A" va "dao A, dao A, dao B" cung gia -
+        //     trong khi ngoai xuong mot ben thay dao 2 lan, mot ben chi 1 lan.
+        //   * phat nhe khi chi tiet cao (kho cam) va khi chuan ga ngan
         // ======================================================================================
         private static List<int> SearchFeasibleOrder(
             FoilFlatPatternResult result,
@@ -517,7 +583,6 @@ namespace AUTOCAD_COMMANDS
                 return all;
             }
 
-            double flipPenalty = settings.FlipPenalty > 0.0 ? settings.FlipPenalty : 25.0;
             int beamWidth = BeamWidthFor(all.Count);
 
             List<SearchNode> beam = new List<SearchNode> { SearchNode.Root() };
@@ -536,20 +601,17 @@ namespace AUTOCAD_COMMANDS
                         int candidate = all[i];
                         if (formed.Contains(candidate)) continue;
 
-                        FoilBendMounting mount =
-                            FoilPressBrakeModel.Evaluate(shape, byIndex[candidate], tooling);
+                        // Luc tim kiem chi can biet CO VUONG HAY KHONG - khong can do khoang ho.
+                        FoilBendMounting mount = FoilPressBrakeModel.Evaluate(
+                            shape, byIndex[candidate], tooling, false);
 
-                        double cost = node.Cost + mount.Cost;
-                        if (node.HasPrevious && mount.Flipped != node.LastFlipped)
-                        {
-                            cost += flipPenalty;
-                        }
+                        double cost = node.Cost + StepCost(
+                            settings, mount, candidate,
+                            node.HasPrevious, node.LastFlipped, node.LastEndSwapped,
+                            node.LastPunchIndex);
 
-                        // Uu tien rat nhe thu tu tu nhien cua bien dang khi moi thu ngang nhau,
-                        // de bien dang don gian van cho ra 1,2,3... quen thuoc.
-                        cost += candidate * 1e-6;
-
-                        candidates.Add(node.Extend(candidate, cost, mount.Flipped));
+                        candidates.Add(node.Extend(
+                            candidate, cost, mount.Flipped, mount.EndSwapped, mount.PunchIndex));
                     }
                 }
 
@@ -568,6 +630,93 @@ namespace AUTOCAD_COMMANDS
             }
 
             return beam.Count > 0 ? beam[0].Order : all;
+        }
+
+        /// <summary>
+        /// Gia cua MOT lan chan trong mot trinh tu: gia ban than lan chan cong gia cac thao tac
+        /// phai THAY DOI so voi lan chan truoc.
+        ///
+        /// Tach rieng ra day de tim kiem chum va phep kiem vet can dung CHUNG mot ham - neu
+        /// khong, phep kiem se chi so no voi chinh no.
+        /// </summary>
+        private static double StepCost(
+            FoilSettings settings,
+            FoilBendMounting mount,
+            int bendIndex,
+            bool hasPrevious,
+            bool lastFlipped,
+            bool lastEndSwapped,
+            int lastPunchIndex)
+        {
+            double flipPenalty = settings.FlipPenalty > 0.0 ? settings.FlipPenalty : 25.0;
+            double toolPenalty = settings.ToolChangePenalty > 0.0 ? settings.ToolChangePenalty : 120.0;
+            double turnPenalty = settings.TurnPenalty > 0.0 ? settings.TurnPenalty : 12.0;
+
+            double cost = mount.Cost;
+
+            if (hasPrevious)
+            {
+                if (mount.Flipped != lastFlipped) cost += flipPenalty;
+                if (mount.EndSwapped != lastEndSwapped) cost += turnPenalty;
+                if (mount.PunchIndex != lastPunchIndex) cost += toolPenalty;
+            }
+            else if (mount.PunchIndex != 0)
+            {
+                // Lan chan dau tien ma da phai dung dao dac chung: van la mot lan len dao,
+                // chi khong phai lan THAY.
+                cost += toolPenalty * 0.5;
+            }
+
+            // Uu tien rat nhe thu tu tu nhien cua bien dang khi moi thu ngang nhau, de bien
+            // dang don gian van cho ra 1,2,3... quen thuoc.
+            return cost + bendIndex * 1e-6;
+        }
+
+        /// <summary>
+        /// Gia CONG DON cua mot thu tu chan hoan chinh - dung dung ham gia ma tim kiem dung.
+        /// Nho co ham nay, phep kiem co the vet can moi hoan vi va so voi ket qua tim kiem.
+        /// </summary>
+        public static double OrderCost(
+            FoilFlatPatternResult result,
+            FoilToolingGeometry tooling,
+            FoilSettings settings,
+            List<int> order)
+        {
+            if (result == null || order == null) return 0.0;
+
+            Dictionary<int, FoilBendInfo> byIndex = new Dictionary<int, FoilBendInfo>();
+            foreach (FoilBendInfo b in result.Bends)
+            {
+                byIndex[b.Index] = b;
+            }
+
+            HashSet<int> formed = new HashSet<int>();
+            double cost = 0.0;
+
+            bool hasPrevious = false;
+            bool lastFlipped = false;
+            bool lastEndSwapped = false;
+            int lastPunchIndex = 0;
+
+            foreach (int index in order)
+            {
+                FoilBendInfo bend;
+                if (!byIndex.TryGetValue(index, out bend)) continue;
+
+                FoilFormedShape shape = FoilFormedShape.Build(result, formed);
+                FoilBendMounting mount = FoilPressBrakeModel.Evaluate(shape, bend, tooling, false);
+
+                cost += StepCost(settings, mount, index,
+                    hasPrevious, lastFlipped, lastEndSwapped, lastPunchIndex);
+
+                lastFlipped = mount.Flipped;
+                lastEndSwapped = mount.EndSwapped;
+                lastPunchIndex = mount.PunchIndex;
+                hasPrevious = true;
+                formed.Add(index);
+            }
+
+            return cost;
         }
 
         private static int CompareNodes(SearchNode a, SearchNode b)
@@ -589,6 +738,8 @@ namespace AUTOCAD_COMMANDS
             public List<int> Order;
             public double Cost;
             public bool LastFlipped;
+            public bool LastEndSwapped;
+            public int LastPunchIndex;
             public bool HasPrevious;
 
             public static SearchNode Root()
@@ -596,7 +747,8 @@ namespace AUTOCAD_COMMANDS
                 return new SearchNode { Order = new List<int>(), Cost = 0.0 };
             }
 
-            public SearchNode Extend(int bendIndex, double cost, bool flipped)
+            public SearchNode Extend(
+                int bendIndex, double cost, bool flipped, bool endSwapped, int punchIndex)
             {
                 List<int> next = new List<int>(Order.Count + 1);
                 next.AddRange(Order);
@@ -607,6 +759,8 @@ namespace AUTOCAD_COMMANDS
                     Order = next,
                     Cost = cost,
                     LastFlipped = flipped,
+                    LastEndSwapped = endSwapped,
+                    LastPunchIndex = punchIndex,
                     HasPrevious = true
                 };
             }
@@ -743,11 +897,10 @@ namespace AUTOCAD_COMMANDS
                     result.BlankWidth.ToString(f, ci));
             }
 
+            // Ban ve trinh tu la de THO LAM THEO. No luon ve day du va sach; nhung cho can luu y
+            // ve dung cu duoc danh dau bang mot dau (*) va giai thich mot lan o dong lenh / hop
+            // thoai, chu KHONG dan chu "khong chan duoc" len tung hinh.
             string flag = step.FlipChanged ? "  [LAT TON]" : string.Empty;
-            if (!step.Feasible)
-            {
-                flag += "  [!]";
-            }
 
             return string.Format(
                 ci,
@@ -770,19 +923,31 @@ namespace AUTOCAD_COMMANDS
 
             string text = string.Format(
                 ci,
-                "cu {0} | {1}",
+                "cu {0} | {1} | {2}",
                 step.GaugeLength.ToString(f, ci),
-                step.Flipped ? "mat B" : "mat A");
+                step.Flipped ? "mat B" : "mat A",
+                step.Punch != null ? step.Punch.Name : "dao thang");
 
+            // Con vuong thi noi THANG vuong cai gi, khong bat nguoi doc di tra cho khac.
             foreach (FoilBendIssue issue in step.Issues)
             {
                 if (issue.Level == FoilBendIssueLevel.Blocking)
                 {
-                    return text + "  |  KHONG CHAN DUOC";
+                    return text + " | VUONG: " + ShortReason(issue.Message);
                 }
             }
 
             return text;
+        }
+
+        /// <summary>Rut gon ly do vuong thanh vai chu de ve vua tren ban ve.</summary>
+        private static string ShortReason(string message)
+        {
+            if (message.IndexOf("than coi", StringComparison.OrdinalIgnoreCase) >= 0) return "than coi";
+            if (message.IndexOf("dam duoi", StringComparison.OrdinalIgnoreCase) >= 0) return "dam may";
+            if (message.IndexOf("dao", StringComparison.OrdinalIgnoreCase) >= 0) return "chay dao";
+            if (message.IndexOf("thong xuong", StringComparison.OrdinalIgnoreCase) >= 0) return "hai dau thong xuong";
+            return "xem dong lenh";
         }
 
         private static void CollectWarnings(FoilBendPlan plan, FoilSettings settings)
@@ -812,6 +977,25 @@ namespace AUTOCAD_COMMANDS
             {
                 plan.Warnings.Add(string.Format(ci,
                     "Quy trinh can LAT TON {0} lan.", plan.FlipCount));
+            }
+
+            if (plan.ToolChanges > 0)
+            {
+                plan.Warnings.Add(string.Format(ci,
+                    "Quy trinh can THAY CHAY DAO {0} lan.", plan.ToolChanges));
+            }
+
+            if (plan.TurnCount > 0)
+            {
+                plan.Warnings.Add(string.Format(ci,
+                    "Quy trinh can DOI DAU chi tiet {0} lan.", plan.TurnCount));
+            }
+
+            if (!plan.AllFeasible)
+            {
+                plan.Warnings.Add(
+                    "Buoc ghi VUONG la cho chi tiet cham vao dung cu ngay tren hinh - nhin hinh " +
+                    "se thay ro cham o dau. Trinh tu da duoc chon sao cho it vuong nhat.");
             }
         }
     }

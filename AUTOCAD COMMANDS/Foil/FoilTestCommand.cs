@@ -425,12 +425,29 @@ namespace AUTOCAD_COMMANDS
 
                     Assert(shapes == 3, "moi buoc phai co 1 duong gap khuc cua chi tiet");
 
-                    // Moi buoc ve 1 hinh coi; rieng buoc co chan ve them 1 hinh dao.
-                    Assert(toolShapes == 5, "3 hinh coi + 2 hinh dao");
-                    Assert(markers == 2, "chi 2 buoc co chan moi co dau danh dau (B0 khong co)");
+                    // Moi buoc ve DU bo phan may da duoc dung de kiem va cham:
+                    // dam duoi, ke coi, than coi, ngon cu hau, chay dao. Chi tiet nay thap hon
+                    // chieu cao dao nen khong ve dam tren (no khong the cham toi).
+                    int expectedTools = 0;
+                    foreach (FoilBendStepGeometry sg in geometry.Steps)
+                    {
+                        expectedTools += sg.ToolOutlines.Count;
+                    }
 
-                    // Buoc co chan co them dong chu phu ve thong so ga dat.
-                    Assert(labels == 5, "3 dong chu chinh + 2 dong chu phu");
+                    Assert(expectedTools == 15,
+                        "3 buoc x 5 bo phan may (dam duoi, ke coi, coi, cu hau, dao)");
+                    Assert(toolShapes == expectedTools,
+                        "phai ve dung bo phan may da dung de kiem va cham");
+
+                    // Moi duong chan duoc danh mot so thu tu bang bong tron o mep phoi.
+                    Assert(draw.StepMarkCount == 2, "2 duong chan => 2 bong tron so thu tu");
+                    Assert(markers == 2 + draw.StepMarkCount,
+                        "2 dau danh dau dinh goc + 2 bong tron so thu tu");
+
+                    // Buoc co chan co them dong chu phu ve thong so ga dat; moi bong tron co
+                    // mot chu so ben trong.
+                    Assert(labels == 5 + draw.StepMarkCount,
+                        "3 dong chu chinh + 2 dong chu phu + 2 so trong bong tron");
 
                     // Duong chan van phai nam dung layer cua no.
                     foreach (ObjectId id in draw.BendLineIds)
@@ -469,6 +486,9 @@ namespace AUTOCAD_COMMANDS
                         "khong duoc tao layer buoc chan khi tuy chon dang tat");
                     Assert(!lt.Has("_mss.dungcu"),
                         "khong duoc tao layer dung cu khi tuy chon dang tat");
+                    Assert(geometry.StepMarks.Count == 0,
+                        "khong duoc danh so thu tu khi khong ve buoc chan");
+                    Assert(draw.StepMarkCount == 0, "khong duoc ve bong tron nao");
 
                     tr.Abort();
                 }

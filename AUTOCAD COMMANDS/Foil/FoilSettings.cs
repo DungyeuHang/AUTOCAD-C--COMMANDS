@@ -219,6 +219,12 @@ namespace AUTOCAD_COMMANDS
         /// <summary>Nua be rong than coi (mm). 0 = tu dong theo khau do.</summary>
         public double DieBodyHalfWidth { get; set; } = 0.0;
 
+        /// <summary>
+        /// Chieu cao than coi (mm), tu mat coi xuong dam may. 0 = tu dong.
+        /// Quyet dinh chi tiet chu U / chu MU co cuoi om duoc len than coi hay khong.
+        /// </summary>
+        public double DieHeight { get; set; } = 0.0;
+
         /// <summary>Goc chem cua chay dao (do). Quyet dinh goc chan lon nhat lam duoc.</summary>
         public double PunchIncludedAngleDeg { get; set; } = 85.0;
 
@@ -240,8 +246,64 @@ namespace AUTOCAD_COMMANDS
         /// <summary>Chuan ga cu hau ngan nhat con dung duoc (mm). 0 = tu dong = khau do coi.</summary>
         public double MinGaugeLength { get; set; } = 0.0;
 
+        /// <summary>
+        /// Cho phep TU DOI SANG DAO KHAC khi dao thang bi vuong (dao co ngong, dao nhon).
+        /// Con dao duoc chon se duoc ve dung hinh trong tung buoc.
+        /// </summary>
+        public bool UseToolLibrary { get; set; } = true;
+
+        /// <summary>Nua be rong DAM DUOI (ban may) (mm). 0 = tu dong.</summary>
+        public double BedHalfWidth { get; set; } = 0.0;
+
+        /// <summary>Chieu sau dam duoi (mm). 0 = tu dong.</summary>
+        public double BedDepth { get; set; } = 0.0;
+
+        /// <summary>Nua be rong HAM KEP COI (mm). 0 = tu dong = 1.6 lan nua be rong than coi.</summary>
+        public double DieHolderHalfWidth { get; set; } = 0.0;
+
+        /// <summary>Chieu cao ham kep coi (mm). 0 = tu dong.</summary>
+        public double DieHolderHeight { get; set; } = 0.0;
+
+        /// <summary>Nua be rong DAM TREN (mm). 0 = tu dong.</summary>
+        public double RamHalfWidth { get; set; } = 0.0;
+
+        /// <summary>Chieu cao mat chan NGON CU HAU (mm). 0 = tu dong.</summary>
+        public double BackGaugeHeight { get; set; } = 0.0;
+
+        /// <summary>Khoang vuon toi da cua cu hau (mm). 0 = tu dong (500).</summary>
+        public double BackGaugeTravel { get; set; } = 0.0;
+
+        /// <summary>Do lech than cua dao co ngong (mm). 0 = tu dong.</summary>
+        public double GooseneckOffset { get; set; } = 0.0;
+
+        /// <summary>Chieu cao bat dau lech cua dao co ngong (mm). 0 = tu dong.</summary>
+        public double GooseneckHeight { get; set; } = 0.0;
+
+        /// <summary>Nua be day luoi dao co ngong (mm). 0 = tu dong.</summary>
+        public double GooseneckBladeHalfWidth { get; set; } = 0.0;
+
+        /// <summary>Goc mui cua dao nhon (do). 0 = tu dong (30 do).</summary>
+        public double AcuteIncludedAngleDeg { get; set; } = 0.0;
+
+
+
         /// <summary>Gia phat cho moi lan phai LAT TON khi tim thu tu chan.</summary>
         public double FlipPenalty { get; set; } = 25.0;
+
+        /// <summary>
+        /// Gia phat cho moi lan phai THAY CHAY DAO. Dat cao vi thay dao la thao tac ton cong
+        /// nhat trong ca quy trinh: phai dung may, thao ke, can chinh lai.
+        /// </summary>
+        public double ToolChangePenalty { get; set; } = 120.0;
+
+        /// <summary>Gia phat cho moi lan phai DOI DAU chi tiet (xoay 180 do trong mat phang).</summary>
+        public double TurnPenalty { get; set; } = 12.0;
+
+        /// <summary>
+        /// Ghi SO THU TU BUOC CHAN bang bong tron o ngoai mep phai phoi, ngang tung duong chan.
+        /// Chi co tac dung khi DrawBendSteps = true.
+        /// </summary>
+        public bool ShowStepNumbers { get; set; } = true;
 
         /// <summary>Goc xoay phoi trong WCS (do). 0 = chieu dai phoi nam ngang.</summary>
         public double BlankRotationDeg { get; set; } = 0.0;
@@ -307,13 +369,29 @@ namespace AUTOCAD_COMMANDS
                 DieOpeningFactor = this.DieOpeningFactor,
                 DieIncludedAngleDeg = this.DieIncludedAngleDeg,
                 DieBodyHalfWidth = this.DieBodyHalfWidth,
+                DieHeight = this.DieHeight,
                 PunchIncludedAngleDeg = this.PunchIncludedAngleDeg,
                 PunchTipRadius = this.PunchTipRadius,
                 PunchHeight = this.PunchHeight,
                 PunchBladeHalfWidth = this.PunchBladeHalfWidth,
                 MaxPartHeight = this.MaxPartHeight,
                 MinGaugeLength = this.MinGaugeLength,
+                UseToolLibrary = this.UseToolLibrary,
+                BedHalfWidth = this.BedHalfWidth,
+                BedDepth = this.BedDepth,
+                DieHolderHalfWidth = this.DieHolderHalfWidth,
+                DieHolderHeight = this.DieHolderHeight,
+                RamHalfWidth = this.RamHalfWidth,
+                BackGaugeHeight = this.BackGaugeHeight,
+                BackGaugeTravel = this.BackGaugeTravel,
+                GooseneckOffset = this.GooseneckOffset,
+                GooseneckHeight = this.GooseneckHeight,
+                GooseneckBladeHalfWidth = this.GooseneckBladeHalfWidth,
+                AcuteIncludedAngleDeg = this.AcuteIncludedAngleDeg,
                 FlipPenalty = this.FlipPenalty,
+                ToolChangePenalty = this.ToolChangePenalty,
+                TurnPenalty = this.TurnPenalty,
+                ShowStepNumbers = this.ShowStepNumbers,
                 BlankRotationDeg = this.BlankRotationDeg,
                 Precision = this.Precision,
                 ZoomToResult = this.ZoomToResult

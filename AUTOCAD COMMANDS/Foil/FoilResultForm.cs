@@ -400,11 +400,13 @@ namespace AUTOCAD_COMMANDS
 
             _grpSteps.Text = string.Format(
                 ci,
-                "CAC BUOC CHAN  ({0} buoc)   thu tu: {1}   lat ton {2} lan{3}",
+                "CAC BUOC CHAN  ({0} buoc)   thu tu: {1}   lat ton {2} | doi dau {3} | thay dao {4}{5}",
                 Math.Max(plan.Steps.Count - 1, 0),
                 orderNames.Count > 0 ? string.Join(" > ", orderNames.ToArray()) : "-",
                 plan.FlipCount,
-                plan.AllFeasible ? string.Empty : "   [CO BUOC KHONG CHAN DUOC]");
+                plan.TurnCount,
+                plan.ToolChanges,
+                plan.AllFeasible ? string.Empty : "   (*) co buoc can luu y ve dung cu");
 
             if (_result.Warnings.Count > 0)
             {
@@ -427,9 +429,8 @@ namespace AUTOCAD_COMMANDS
     public class FoilStepPreviewPanel : Panel
     {
         private FoilBendPlan _plan;
-        private List<FoilPoint2d> _die = new List<FoilPoint2d>();
         private List<List<FoilPoint2d>> _shapes = new List<List<FoilPoint2d>>();
-        private List<List<FoilPoint2d>> _punches = new List<List<FoilPoint2d>>();
+        private List<List<List<FoilPoint2d>>> _tools = new List<List<List<FoilPoint2d>>>();
 
         private double _scale = 1.0;
         private double _left, _right, _down, _up;
@@ -446,32 +447,20 @@ namespace AUTOCAD_COMMANDS
         {
             _plan = plan;
             _shapes.Clear();
-            _punches.Clear();
-            _die.Clear();
+            _tools.Clear();
 
             if (plan != null && plan.Steps.Count > 0)
             {
-                FoilToolingGeometry tooling = plan.Tooling;
-                if (tooling != null)
-                {
-                    _die = FoilPressBrakeModel.BuildDieOutline(tooling);
-                }
-
                 foreach (FoilBendStep step in plan.Steps)
                 {
-                    List<FoilPoint2d> shape = FoilBendSequenceBuilder.Simplify(step.MachinePoints);
-                    _shapes.Add(shape);
-
-                    double partHeight = 0.0;
-                    foreach (FoilPoint2d q in shape)
+                    _shapes.Add(FoilBendSequenceBuilder.Simplify(step.MachinePoints));
+                    List<List<FoilPoint2d>> parts = new List<List<FoilPoint2d>>();
+                    foreach (FoilToolShape tool in step.Tools)
                     {
-                        if (q.Y > partHeight) partHeight = q.Y;
+                        if (tool != null) parts.Add(tool.Outline);
                     }
 
-                    _punches.Add(tooling != null && step.FormedBend != null
-                        ? FoilPressBrakeModel.BuildPunchOutline(
-                            tooling, step.FormedBend.BendAngleRad, partHeight)
-                        : new List<FoilPoint2d>());
+                    _tools.Add(parts);
                 }
             }
 
@@ -502,10 +491,11 @@ namespace AUTOCAD_COMMANDS
             for (int i = 0; i < _shapes.Count; i++)
             {
                 Measure(_shapes[i]);
-                Measure(_punches[i]);
+                foreach (List<FoilPoint2d> part in _tools[i])
+                {
+                    Measure(part);
+                }
             }
-
-            Measure(_die);
 
             double width = _left + _right;
             double height = _down + _up;
@@ -581,7 +571,7 @@ namespace AUTOCAD_COMMANDS
             using (Font detailFont = new Font("Segoe UI", 6.75F))
             using (Brush captionBrush = new SolidBrush(Color.FromArgb(215, 215, 215)))
             using (Brush detailBrush = new SolidBrush(Color.FromArgb(140, 140, 140)))
-            using (Brush badBrush = new SolidBrush(Color.FromArgb(255, 110, 110)))
+            using (Brush badBrush = new SolidBrush(Color.FromArgb(245, 170, 80)))
             using (Pen separator = new Pen(Color.FromArgb(60, 60, 60)))
             using (Pen toolPen = new Pen(Color.FromArgb(95, 95, 95), 1.3f))
             using (StringFormat clip = new StringFormat(StringFormatFlags.NoWrap)
@@ -609,12 +599,14 @@ namespace AUTOCAD_COMMANDS
                     float originY = captionHeight + (float)((drawHeight - (_down + _up) * scale) / 2.0)
                                     + (float)(_up * scale);
 
-                    DrawChain(g, toolPen, _die, scale, originX, originY);
-                    DrawChain(g, toolPen, _punches[i], scale, originX, originY);
+                    foreach (List<FoilPoint2d> part in _tools[i])
+                    {
+                        DrawChain(g, toolPen, part, scale, originX, originY, true);
+                    }
 
                     Color color = step.FormedBend == null
                         ? Color.FromArgb(150, 200, 255)
-                        : (step.Feasible ? Color.FromArgb(240, 220, 90) : Color.FromArgb(255, 110, 110));
+                        : (step.Feasible ? Color.FromArgb(240, 220, 90) : Color.FromArgb(245, 160, 60));
 
                     using (Pen pen = new Pen(color, 1.8f))
                     {
@@ -661,11 +653,25 @@ namespace AUTOCAD_COMMANDS
         private static void DrawChain(
             Graphics g, Pen pen, List<FoilPoint2d> points, double scale, float originX, float originY)
         {
+            DrawChain(g, pen, points, scale, originX, originY, false);
+        }
+
+        private static void DrawChain(
+            Graphics g, Pen pen, List<FoilPoint2d> points,
+            double scale, float originX, float originY, bool closed)
+        {
             for (int k = 0; k < points.Count - 1; k++)
             {
                 g.DrawLine(pen,
                     ToScreen(points[k], scale, originX, originY),
                     ToScreen(points[k + 1], scale, originX, originY));
+            }
+
+            if (closed && points.Count > 2)
+            {
+                g.DrawLine(pen,
+                    ToScreen(points[points.Count - 1], scale, originX, originY),
+                    ToScreen(points[0], scale, originX, originY));
             }
         }
 

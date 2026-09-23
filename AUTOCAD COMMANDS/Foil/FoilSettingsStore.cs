@@ -175,6 +175,9 @@ namespace AUTOCAD_COMMANDS
                             case "DieIncludedAngleDeg":
                                 settings.DieIncludedAngleDeg = ParseDouble(val, settings.DieIncludedAngleDeg);
                                 break;
+                            case "DieHeight":
+                                settings.DieHeight = ParseDouble(val, settings.DieHeight);
+                                break;
                             case "DieBodyHalfWidth":
                                 settings.DieBodyHalfWidth = ParseDouble(val, settings.DieBodyHalfWidth);
                                 break;
@@ -193,11 +196,56 @@ namespace AUTOCAD_COMMANDS
                             case "MaxPartHeight":
                                 settings.MaxPartHeight = ParseDouble(val, settings.MaxPartHeight);
                                 break;
+                            case "UseToolLibrary":
+                                if (bool.TryParse(val, out bool useTools)) settings.UseToolLibrary = useTools;
+                                break;
+                            case "BedHalfWidth":
+                                settings.BedHalfWidth = ParseDouble(val, settings.BedHalfWidth);
+                                break;
+                            case "BedDepth":
+                                settings.BedDepth = ParseDouble(val, settings.BedDepth);
+                                break;
+                            case "DieHolderHalfWidth":
+                                settings.DieHolderHalfWidth = ParseDouble(val, settings.DieHolderHalfWidth);
+                                break;
+                            case "DieHolderHeight":
+                                settings.DieHolderHeight = ParseDouble(val, settings.DieHolderHeight);
+                                break;
+                            case "RamHalfWidth":
+                                settings.RamHalfWidth = ParseDouble(val, settings.RamHalfWidth);
+                                break;
+                            case "BackGaugeHeight":
+                                settings.BackGaugeHeight = ParseDouble(val, settings.BackGaugeHeight);
+                                break;
+                            case "BackGaugeTravel":
+                                settings.BackGaugeTravel = ParseDouble(val, settings.BackGaugeTravel);
+                                break;
+                            case "GooseneckOffset":
+                                settings.GooseneckOffset = ParseDouble(val, settings.GooseneckOffset);
+                                break;
+                            case "GooseneckHeight":
+                                settings.GooseneckHeight = ParseDouble(val, settings.GooseneckHeight);
+                                break;
+                            case "GooseneckBladeHalfWidth":
+                                settings.GooseneckBladeHalfWidth = ParseDouble(val, settings.GooseneckBladeHalfWidth);
+                                break;
+                            case "AcuteIncludedAngleDeg":
+                                settings.AcuteIncludedAngleDeg = ParseDouble(val, settings.AcuteIncludedAngleDeg);
+                                break;
                             case "MinGaugeLength":
                                 settings.MinGaugeLength = ParseDouble(val, settings.MinGaugeLength);
                                 break;
                             case "FlipPenalty":
                                 settings.FlipPenalty = ParseDouble(val, settings.FlipPenalty);
+                                break;
+                            case "ToolChangePenalty":
+                                settings.ToolChangePenalty = ParseDouble(val, settings.ToolChangePenalty);
+                                break;
+                            case "TurnPenalty":
+                                settings.TurnPenalty = ParseDouble(val, settings.TurnPenalty);
+                                break;
+                            case "ShowStepNumbers":
+                                if (bool.TryParse(val, out bool showNums)) settings.ShowStepNumbers = showNums;
                                 break;
                             case "BlankRotationDeg":
                                 settings.BlankRotationDeg = ParseDouble(val, settings.BlankRotationDeg);
@@ -271,13 +319,29 @@ namespace AUTOCAD_COMMANDS
                     sb.AppendLine("DieOpeningFactor	" + settings.DieOpeningFactor.ToString(ci));
                     sb.AppendLine("DieIncludedAngleDeg	" + settings.DieIncludedAngleDeg.ToString(ci));
                     sb.AppendLine("DieBodyHalfWidth	" + settings.DieBodyHalfWidth.ToString(ci));
+                    sb.AppendLine("DieHeight	" + settings.DieHeight.ToString(ci));
                     sb.AppendLine("PunchIncludedAngleDeg	" + settings.PunchIncludedAngleDeg.ToString(ci));
                     sb.AppendLine("PunchTipRadius	" + settings.PunchTipRadius.ToString(ci));
                     sb.AppendLine("PunchHeight	" + settings.PunchHeight.ToString(ci));
                     sb.AppendLine("PunchBladeHalfWidth	" + settings.PunchBladeHalfWidth.ToString(ci));
                     sb.AppendLine("MaxPartHeight	" + settings.MaxPartHeight.ToString(ci));
                     sb.AppendLine("MinGaugeLength	" + settings.MinGaugeLength.ToString(ci));
+                    sb.AppendLine("UseToolLibrary	" + settings.UseToolLibrary);
+                    sb.AppendLine("BedHalfWidth	" + settings.BedHalfWidth.ToString(ci));
+                    sb.AppendLine("BedDepth	" + settings.BedDepth.ToString(ci));
+                    sb.AppendLine("GooseneckOffset	" + settings.GooseneckOffset.ToString(ci));
+                    sb.AppendLine("GooseneckHeight	" + settings.GooseneckHeight.ToString(ci));
+                    sb.AppendLine("GooseneckBladeHalfWidth	" + settings.GooseneckBladeHalfWidth.ToString(ci));
+                    sb.AppendLine("AcuteIncludedAngleDeg	" + settings.AcuteIncludedAngleDeg.ToString(ci));
                     sb.AppendLine("FlipPenalty	" + settings.FlipPenalty.ToString(ci));
+                    sb.AppendLine("DieHolderHalfWidth\t" + settings.DieHolderHalfWidth.ToString(ci));
+                    sb.AppendLine("DieHolderHeight\t" + settings.DieHolderHeight.ToString(ci));
+                    sb.AppendLine("RamHalfWidth\t" + settings.RamHalfWidth.ToString(ci));
+                    sb.AppendLine("BackGaugeHeight\t" + settings.BackGaugeHeight.ToString(ci));
+                    sb.AppendLine("BackGaugeTravel\t" + settings.BackGaugeTravel.ToString(ci));
+                    sb.AppendLine("ToolChangePenalty\t" + settings.ToolChangePenalty.ToString(ci));
+                    sb.AppendLine("TurnPenalty\t" + settings.TurnPenalty.ToString(ci));
+                    sb.AppendLine("ShowStepNumbers\t" + settings.ShowStepNumbers);
                     sb.AppendLine("BlankRotationDeg\t" + settings.BlankRotationDeg.ToString(ci));
                     sb.AppendLine("Precision\t" + settings.Precision.ToString(ci));
                     sb.AppendLine("ZoomToResult\t" + settings.ZoomToResult);

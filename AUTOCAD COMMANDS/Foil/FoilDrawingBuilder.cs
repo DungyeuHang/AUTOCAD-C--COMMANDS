@@ -27,6 +27,9 @@ namespace AUTOCAD_COMMANDS
         /// <summary>Toan bo entity cua day hinh trinh tu cac buoc chan.</summary>
         public List<ObjectId> StepIds { get; private set; } = new List<ObjectId>();
 
+        /// <summary>So bong tron danh so thu tu buoc chan da ve o mep phoi.</summary>
+        public int StepMarkCount { get; set; }
+
         public int StepCount { get; set; }
 
         /// <summary>So duong chan duoc cong be day (goc lom). Chi de bao cao, khong ve danh dau.</summary>
@@ -217,8 +220,11 @@ namespace AUTOCAD_COMMANDS
             foreach (FoilBendStepGeometry step in geometry.Steps)
             {
                 // ---- Dung cu truoc, de nam duoi hinh chi tiet ----
-                AddPolyline(db, tr, space, step.DiePoints, toolLayerId, elevation, false, drawResult);
-                AddPolyline(db, tr, space, step.PunchPoints, toolLayerId, elevation, false, drawResult);
+                // Duong bao dung cu la duong KIN: day dung la da giac ma phep kiem va cham dung.
+                foreach (List<FoilPoint2d> tool in step.ToolOutlines)
+                {
+                    AddPolyline(db, tr, space, tool, toolLayerId, elevation, true, drawResult);
+                }
 
                 // ---- Mat cat chi tiet ----
                 AddPolyline(db, tr, space, step.Points, stepLayerId, elevation, false, drawResult);
@@ -246,6 +252,64 @@ namespace AUTOCAD_COMMANDS
 
                 drawResult.StepCount++;
             }
+
+            // ---- So thu tu buoc chan o mep phai phoi ----
+            foreach (FoilStepMarkGeometry mark in geometry.StepMarks)
+            {
+                Circle balloon = new Circle(
+                    new Point3d(mark.Center.X, mark.Center.Y, elevation),
+                    Vector3d.ZAxis,
+                    mark.Radius);
+                balloon.SetDatabaseDefaults(db);
+                balloon.LayerId = stepLayerId;
+
+                space.AppendEntity(balloon);
+                tr.AddNewlyCreatedDBObject(balloon, true);
+                drawResult.StepIds.Add(balloon.ObjectId);
+
+                AddCenteredText(db, tr, space, mark.Text, mark.Center, stepLayerId,
+                    geometry.StepMarkTextHeight, elevation, drawResult);
+
+                drawResult.StepMarkCount++;
+            }
+        }
+
+        /// <summary>
+        /// Chu CAN GIUA theo ca hai phuong quanh mot diem. Khi HorizontalMode / VerticalMode
+        /// khac mac dinh thi AutoCAD lay AlignmentPoint chu khong lay Position, nen phai gan
+        /// AlignmentPoint SAU khi dat hai che do - dat truoc se bi ghi de.
+        /// </summary>
+        private static void AddCenteredText(
+            Database db,
+            Transaction tr,
+            BlockTableRecord space,
+            string content,
+            FoilPoint2d center,
+            ObjectId layerId,
+            double height,
+            double elevation,
+            FoilDrawResult drawResult)
+        {
+            if (string.IsNullOrEmpty(content) || height <= 0.0)
+            {
+                return;
+            }
+
+            DBText text = new DBText
+            {
+                Position = new Point3d(center.X, center.Y, elevation),
+                Height = height,
+                TextString = content
+            };
+            text.SetDatabaseDefaults(db);
+            text.LayerId = layerId;
+            text.HorizontalMode = TextHorizontalMode.TextCenter;
+            text.VerticalMode = TextVerticalMode.TextVerticalMid;
+            text.AlignmentPoint = new Point3d(center.X, center.Y, elevation);
+
+            space.AppendEntity(text);
+            tr.AddNewlyCreatedDBObject(text, true);
+            drawResult.StepIds.Add(text.ObjectId);
         }
 
         private static void AddPolyline(

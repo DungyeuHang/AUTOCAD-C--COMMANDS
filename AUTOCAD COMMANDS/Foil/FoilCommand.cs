@@ -359,7 +359,31 @@ namespace AUTOCAD_COMMANDS
                         plan.FlipCount,
                         plan.AllFeasible
                             ? string.Empty
-                            : "   -- CO BUOC MO HINH MAY BAO KHONG CHAN DUOC"));
+                            : "   -- co buoc chi tiet cham dung cu, xem ben duoi"));
+
+                    if (plan.ToolChanges > 0)
+                    {
+                        ed.WriteMessage(string.Format(
+                            ci,
+                            "\n Thay chay dao   : {0} lan",
+                            plan.ToolChanges));
+                    }
+
+                    if (plan.TurnCount > 0)
+                    {
+                        ed.WriteMessage(string.Format(
+                            ci,
+                            "\n Doi dau chi tiet: {0} lan",
+                            plan.TurnCount));
+                    }
+
+                    if (drawResult.StepMarkCount > 0)
+                    {
+                        ed.WriteMessage(string.Format(
+                            ci,
+                            "\n Danh so buoc    : {0} so, ghi o ngoai mep phai phoi",
+                            drawResult.StepMarkCount));
+                    }
 
                     if (plan.Tooling != null)
                     {
@@ -369,6 +393,15 @@ namespace AUTOCAD_COMMANDS
                             plan.Tooling.DieOpening,
                             plan.Tooling.PunchIncludedAngleDeg,
                             plan.Tooling.MinFlangeLength));
+
+                        ed.WriteMessage(string.Format(
+                            ci,
+                            "\n Ban may         : than coi cao {0:0.##}  ke coi rong {1:0.##}  " +
+                            "dam tren cach mat coi {2:0.##}  cu hau vuon toi {3:0.##} mm",
+                            plan.Tooling.DieHeight,
+                            plan.Tooling.DieHolderHalfWidth * 2.0,
+                            plan.Tooling.PunchHeight,
+                            plan.Tooling.BackGaugeTravel));
                     }
 
                     foreach (string warning in plan.Warnings)

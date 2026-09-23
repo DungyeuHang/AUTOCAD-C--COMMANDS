@@ -75,17 +75,23 @@ namespace AUTOCAD_COMMANDS
             RunTest(report, "40. Doi huong bu be day", Test40_CompensationModeSwitch);
             RunTest(report, "41. Doi nhan UP/DOWN KHONG lam doi kich thuoc phoi", Test41_DisplayFlipDoesNotChangeSize);
             RunTest(report, "42. Bien dang lech so: dao chieu cho phoi KHAC nhau", Test42_UnbalancedProfileReverse);
-            RunTest(report, "43. Dao: mui nhon roi luoi song song", Test43_PunchProfile);
+            RunTest(report, "43. Bo dung cu: dao thang, dao co ngong, coi, dam duoi", Test43_ToolLibrary);
             RunTest(report, "44. He toa do may: goc chan luon MO LEN", Test44_MachineFrameOpensUp);
             RunTest(report, "45. Chu Z bat buoc lat ton dung mot lan", Test45_ZProfileNeedsOneFlip);
-            RunTest(report, "46. Mu doi xung: thu tu ve bi ket, tu dong go duoc", Test46_AutoOrderBeatsProfileOrder);
+            RunTest(report, "46. Thu tu ve bi ket, tu dong go duoc", Test46_AutoOrderBeatsProfileOrder);
             RunTest(report, "47. Doi thu tu chan KHONG lam doi kich thuoc phoi", Test47_OrderDoesNotChangeBlank);
-            RunTest(report, "48. Long hep sau bi bao va dao", Test48_NarrowChannelHitsPunch);
+            RunTest(report, "48. Long hep sau: tu doi sang dao co ngong", Test48_NarrowChannelSwitchesPunch);
+            RunTest(report, "48b. Long qua hep thi doi dao cung khong cuu duoc", Test48b_VeryNarrowChannelStillBlocked);
             RunTest(report, "49. Canh ngan hon canh nho nhat cua coi bi canh bao", Test49_ShortFlangeWarning);
             RunTest(report, "50. Tim kiem chum dat ket qua nhu vet can", Test50_BeamSearchMatchesBruteForce);
             RunTest(report, "51. Hinh cac buoc KHONG chong len nhau", Test51_StepCellsDoNotOverlap);
             RunTest(report, "52. Hinh he toa do may DONG DANG hinh bien dang", Test52_MachineShapeIsCongruent);
             RunTest(report, "53. Khau chan luon MO LEN TREN trong he toa do may", Test53_BendAlwaysOpensUpward);
+            RunTest(report, "54. Doan DAI luon quay ra ngoai may", Test54_LongSideFacesOperator);
+            RunTest(report, "55. Ban may: cac bo phan khop nhau", Test55_MachineFrameIsConsistent);
+            RunTest(report, "56. Ngon cu hau dat dung khoang ga", Test56_BackGaugeSitsAtGaugeLength);
+            RunTest(report, "57. So thu tu buoc chan o mep phoi", Test57_StepNumbersOnBlankEdge);
+            RunTest(report, "58. Tim kiem chum dat GIA nho nhat", Test58_BeamSearchReachesBestCost);
 
             report.Lines.Add(string.Empty);
             report.Lines.Add("==================================================");
@@ -1487,40 +1493,115 @@ namespace AUTOCAD_COMMANDS
         // ==================================================================================
 
         /// <summary>
-        /// Dao that KHONG phai hinh chem suot chieu cao: chi nhon o mui roi thanh luoi song
-        /// song. Neu mo hinh coi ca dao la hinh chem thi moi canh da chan deu bi bao "va dao"
-        /// (day dung la loi da tung mac phai) - test nay khoa lai hinh dang dung.
+        /// BO DUNG CU la cac DA GIAC KIN - va chinh nhung da giac nay duoc ve ra ban ve.
+        /// Test kiem ba dieu quan trong nhat:
+        ///
+        ///   1. Dao that KHONG phai hinh chem suot chieu cao (chi nhon o mui roi thanh luoi
+        ///      song song). Neu coi ca dao la hinh chem thi moi canh da chan deu bi bao va dao.
+        ///   2. DAO CO NGONG phai THUC SU tha ra mot ben: cho ma dao thang chiem cho thi dao co
+        ///      ngong phai bo trong. Neu khong thi viec "doi dao" chi la doi cai ten.
+        ///   3. Lap nguoc dao co ngong thi ben duoc tha doi sang phia con lai.
         /// </summary>
-        private static void Test43_PunchProfile()
+        private static void Test43_ToolLibrary()
         {
             FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
             s.DieOpening = 10.0;
             s.PunchIncludedAngleDeg = 85.0;
             s.PunchTipRadius = 1.0;
             s.PunchBladeHalfWidth = 6.0;
+            s.UseToolLibrary = true;
 
             FoilToolingGeometry t = FoilToolingGeometry.Resolve(s);
-
             AssertClose(10.0, t.DieOpening, "khau do coi lay dung gia tri nguoi dung", 1e-12);
             AssertClose(6.0, t.PunchBladeHalfWidth, "nua be day luoi dao", 1e-12);
 
-            // Mui nhon: tu 0 den PunchNoseHeight be rong tang dan theo goc dao.
-            double nose = t.PunchNoseHeight;
-            AssertTrue(nose > 0.0, "phai co mot doan mui nhon");
-            AssertClose(1.0, t.PunchHalfWidthAt(0.0), "tai mui dao be rong = ban kinh mui", 1e-12);
-            AssertClose(6.0, t.PunchHalfWidthAt(nose), "het doan nhon thi bang be day luoi", 1e-9);
+            List<FoilToolShape> punches = t.BuildPunches(60.0);
+            AssertTrue(punches.Count >= 4, "phai co du dao thang, hai chieu co ngong va dao nhon");
 
-            // Tren doan nhon: LUOI SONG SONG - be rong khong doi.
-            AssertClose(6.0, t.PunchHalfWidthAt(nose * 2.0), "tren mui la luoi song song", 1e-12);
-            AssertClose(6.0, t.PunchHalfWidthAt(t.PunchHeight * 0.99), "van la luoi song song", 1e-12);
+            FoilToolShape straight = punches[0];
+            AssertEqual("dao thang", straight.Name, "dao dau tien phai la dao thang");
+            AssertTrue(straight.Outline.Count >= 4, "duong bao dao phai la da giac");
 
-            // Tren chieu cao lam viec la do ga - rong han.
-            AssertTrue(t.PunchHalfWidthAt(t.PunchHeight + 1.0) > 6.0,
-                "tren chieu cao lam viec la do ga, rong hon luoi dao");
+            // ---- 1. Luoi dao song song, khong phai hinh chem ----
+            // Diem sat ma dao o tren cao phai NAM TRONG dao; ra ngoai mot chut phai o ngoai.
+            AssertTrue(FoilToolGeometry.PointInPolygon(new FoilPoint2d(5.0, 40.0), straight.Outline),
+                "diem cach truc 5 mm o cao 40 mm phai nam trong luoi dao day 12 mm");
+            AssertTrue(!FoilToolGeometry.PointInPolygon(new FoilPoint2d(7.0, 40.0), straight.Outline),
+                "diem cach truc 7 mm phai o NGOAI luoi dao - neu dao la hinh chem thi no se o trong");
 
-            // Goc chan lon nhat: 180 - goc dao.
-            AssertClose(95.0, t.MaxBendAngleRad * FoilMath.RadToDeg,
-                "goc chan lon nhat cua dao 85 do", 1e-9);
+            // Mui dao van phai nhon: sat mui thi be rong chi con bang ban kinh mui.
+            AssertTrue(!FoilToolGeometry.PointInPolygon(new FoilPoint2d(3.0, 0.5), straight.Outline),
+                "sat mui dao thi phai hep lai");
+
+            // ---- 2. Dao co ngong phai thuc su tha ra mot ben ----
+            FoilToolShape goose = null;
+            FoilToolShape gooseFlipped = null;
+            foreach (FoilToolShape punch in punches)
+            {
+                if (punch.Name == "dao co ngong") goose = punch;
+                else if (punch.Name == "dao co ngong lap nguoc") gooseFlipped = punch;
+            }
+
+            AssertTrue(goose != null, "phai co dao co ngong");
+            AssertTrue(gooseFlipped != null, "phai co dao co ngong lap nguoc");
+
+            double high = t.GooseneckHeight + t.GooseneckOffset + 5.0;
+
+            // Cho sat truc dao: dao THANG chiem, dao co ngong phai THA RA.
+            FoilPoint2d nearAxis = new FoilPoint2d(-4.0, high);
+            AssertTrue(FoilToolGeometry.PointInPolygon(nearAxis, straight.Outline),
+                "cho sat truc dao la dao THANG chiem");
+            AssertTrue(!FoilToolGeometry.PointInPolygon(nearAxis, goose.Outline),
+                "dao co ngong phai THA RA cho do - neu khong thi doi dao chi la doi ten");
+
+            // ---- 3. Than dao co ngong phai NAM HAN mot ben, va lap nguoc thi doi ben ----
+            FoilPoint2d bodyRight = new FoilPoint2d(t.GooseneckOffset, high);
+            FoilPoint2d bodyLeft = new FoilPoint2d(-t.GooseneckOffset, high);
+
+            AssertTrue(FoilToolGeometry.PointInPolygon(bodyRight, goose.Outline),
+                "than dao co ngong phai nam lech han ve mot ben");
+            AssertTrue(!FoilToolGeometry.PointInPolygon(bodyLeft, goose.Outline),
+                "ben con lai phai trong hoan toan");
+
+            AssertTrue(FoilToolGeometry.PointInPolygon(bodyLeft, gooseFlipped.Outline),
+                "lap nguoc thi than dao phai sang ben kia");
+            AssertTrue(!FoilToolGeometry.PointInPolygon(bodyRight, gooseFlipped.Outline),
+                "lap nguoc thi ben cu phai trong");
+
+            AssertTrue(!FoilToolGeometry.PointInPolygon(bodyRight, straight.Outline),
+                "dao thang khong voi den do - luoi no chi day 12 mm");
+
+            // ---- Goc chan lon nhat theo tung dao ----
+            AssertClose(95.0, straight.MaxBendAngleDeg, "goc chan lon nhat cua dao 85 do", 1e-9);
+
+            FoilToolShape acute = punches[punches.Count - 1];
+            AssertTrue(acute.MaxBendAngleDeg > straight.MaxBendAngleDeg,
+                "dao nhon phai lam duoc goc chan lon hon dao thang");
+
+            // ---- Coi va dam duoi ----
+            FoilToolShape die = t.BuildDie();
+            AssertTrue(die.Outline.Count >= 6, "than coi phai co long chu V");
+            AssertTrue(!FoilToolGeometry.PointInPolygon(new FoilPoint2d(0.0, -1.0), die.Outline),
+                "long chu V phai RONG - vat lieu an xuong day khong duoc tinh la va coi");
+            AssertTrue(FoilToolGeometry.PointInPolygon(
+                    new FoilPoint2d(t.DieBodyHalfWidth * 0.9, -t.DieHeight * 0.5), die.Outline),
+                "canh khau do la than coi dac");
+
+            FoilToolShape bed = t.BuildBed();
+            AssertTrue(bed.Outline.Count == 4, "dam duoi la mot khoi chu nhat");
+            AssertTrue(t.BedHalfWidth > t.DieBodyHalfWidth,
+                "dam duoi phai keo ve phia sau xa hon than coi");
+            AssertTrue(FoilToolGeometry.PointInPolygon(
+                    new FoilPoint2d(0.0, -t.DieHeight - 1.0), bed.Outline),
+                "ngay duoi day coi la dam may");
+
+            // Dam duoi phai LECH: rong ve phia sau, het gan nhu ngay o mep truoc coi.
+            AssertTrue(FoilToolGeometry.PointInPolygon(
+                    new FoilPoint2d(-t.BedHalfWidth * 0.8, -t.DieHeight - 1.0), bed.Outline),
+                "phia sau van la dam may");
+            AssertTrue(!FoilToolGeometry.PointInPolygon(
+                    new FoilPoint2d(t.DieBodyHalfWidth * 2.0, -t.DieHeight - 1.0), bed.Outline),
+                "phia truoc coi phai TRONG - do la cho chi tiet dai thong xuong");
         }
 
         /// <summary>
@@ -1620,51 +1701,86 @@ namespace AUTOCAD_COMMANDS
         }
 
         /// <summary>
-        /// BAI TOAN CHINH cua tinh nang nay: voi mu doi xung, chan lan luot theo thu tu VE
-        /// (1,2,3,4) se ket o buoc cuoi - canh da chan chuc xuong duoi mat coi. Che do tu dong
-        /// phai tim ra mot thu tu chan duoc het.
+        /// BAI TOAN CHINH cua tinh nang nay.
+        ///
+        /// (a) BIEN DANG THAT cua nguoi dung - tam panel co ranh gan cung hai chan bien. Chan
+        ///     lan luot theo thu tu VE bi ket, che do tu dong phai chan duoc HET. Day la moc
+        ///     chan hoi quy: da co lan be rong than coi mac dinh dat qua rong (15 mm cho coi
+        ///     V9.6) khien bien dang nay bi bao nham la khong chan duoc o 4 buoc.
+        ///
+        /// (b) Vai bien dang goc vuong don gian ma thu tu ve chac chan bi ket.
         /// </summary>
         private static void Test46_AutoOrderBeatsProfileOrder()
         {
-            FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
-            s.Thickness = 1.5;
-            s.InsideRadius = 1.5;
+            // ---- (a) bien dang that ----
+            AssertTrue(BlockedSteps(HatProfile(), FoilBendSequenceOrder.AutoFeasible) == 0,
+                "bien dang panel co ranh phai chan duoc HET o che do tu dong");
 
-            FoilRawVertex[] hat =
+            // ---- (b) cac bien dang ma thu tu ve bi ket ----
+            FoilRawVertex[][] tricky =
             {
-                new FoilRawVertex(0, 0, 0),
-                new FoilRawVertex(30, 0, 0),
-                new FoilRawVertex(30, 40, 0),
-                new FoilRawVertex(90, 40, 0),
-                new FoilRawVertex(90, 0, 0),
-                new FoilRawVertex(120, 0, 0)
+                // Tam co bac: chan lan luot theo thu tu ve thi den goc thu 3 bi ket.
+                new[]
+                {
+                    new FoilRawVertex(0, 0, 0), new FoilRawVertex(0, 50, 0),
+                    new FoilRawVertex(80, 50, 0), new FoilRawVertex(80, 10, 0),
+                    new FoilRawVertex(130, 10, 0), new FoilRawVertex(130, 0, 0)
+                },
+
+                // Bac thang bon goc.
+                new[]
+                {
+                    new FoilRawVertex(0, 0, 0), new FoilRawVertex(0, -50, 0),
+                    new FoilRawVertex(-50, -50, 0), new FoilRawVertex(-50, -70, 0),
+                    new FoilRawVertex(-100, -70, 0), new FoilRawVertex(-100, -20, 0)
+                }
             };
 
-            FoilFlatPatternResult r = Compute(s, hat);
-            AssertNoErrors(r);
-            AssertEqual(4, r.BendCount, "mu doi xung co 4 duong chan");
-
-            FoilSettings profileOrder = s.Clone();
-            profileOrder.BendSequenceOrder = FoilBendSequenceOrder.ProfileOrder;
-            FoilBendPlan naive = FoilBendSequenceBuilder.Plan(r, profileOrder);
-
-            FoilSettings autoOrder = s.Clone();
-            autoOrder.BendSequenceOrder = FoilBendSequenceOrder.AutoFeasible;
-            FoilBendPlan smart = FoilBendSequenceBuilder.Plan(r, autoOrder);
-
-            AssertTrue(!naive.AllFeasible,
-                "chan lan luot theo thu tu VE phai bi ket (day la ly do can thuat toan)");
-            AssertTrue(smart.AllFeasible,
-                "che do tu dong phai tim duoc thu tu chan het");
-            AssertEqual(4, smart.Order.Count, "thu tu phai du 4 duong chan");
-
-            // Thu tu phai la mot HOAN VI day du, khong lap, khong sot.
-            HashSet<int> seen = new HashSet<int>();
-            foreach (int index in smart.Order)
+            foreach (FoilRawVertex[] profile in tricky)
             {
-                AssertTrue(seen.Add(index), "thu tu chan khong duoc lap duong chan #" + index);
-                AssertTrue(index >= 1 && index <= 4, "chi so duong chan phai trong 1..4");
+                int naive = BlockedSteps(profile, FoilBendSequenceOrder.ProfileOrder);
+                int smart = BlockedSteps(profile, FoilBendSequenceOrder.AutoFeasible);
+
+                AssertTrue(naive > 0,
+                    "bien dang nay phai lam thu tu VE bi ket (neu khong thi phep thu vo nghia)");
+                AssertEqual(0, smart, "che do tu dong phai go duoc");
             }
+
+            // Thu tu tra ve phai luon la mot HOAN VI day du.
+            FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
+            s.BendSequenceOrder = FoilBendSequenceOrder.AutoFeasible;
+
+            FoilFlatPatternResult r = Compute(s, HatProfile());
+            FoilBendPlan plan = FoilBendSequenceBuilder.Plan(r, s);
+
+            AssertEqual(r.BendCount, plan.Order.Count, "thu tu phai du so duong chan");
+
+            HashSet<int> seen = new HashSet<int>();
+            foreach (int index in plan.Order)
+            {
+                AssertTrue(seen.Add(index), "thu tu khong duoc lap duong chan #" + index);
+                AssertTrue(index >= 1 && index <= r.BendCount, "chi so duong chan phai hop le");
+            }
+        }
+
+        /// <summary>So buoc bi mo hinh may bao la vuong dung cu, voi mot che do thu tu.</summary>
+        private static int BlockedSteps(FoilRawVertex[] profile, FoilBendSequenceOrder order)
+        {
+            FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
+            s.BendSequenceOrder = order;
+
+            FoilFlatPatternResult r = Compute(s, profile);
+            AssertNoErrors(r);
+
+            FoilBendPlan plan = FoilBendSequenceBuilder.Plan(r, s);
+
+            int blocked = 0;
+            foreach (FoilBendStep step in plan.Steps)
+            {
+                if (!step.Feasible) blocked++;
+            }
+
+            return blocked;
         }
 
         /// <summary>
@@ -1724,7 +1840,49 @@ namespace AUTOCAD_COMMANDS
         /// Voi dao 85 do va luoi day, truong hop nay phai bi bao (ho dao am hoac rat nho).
         /// Cung bien dang do nhung LONG RONG thi phai chan duoc thoai mai.
         /// </summary>
-        private static void Test48_NarrowChannelHitsPunch()
+        private static void Test48_NarrowChannelSwitchesPunch()
+        {
+            // ---- Long vua hep: dao thang vuong, nhung DAO CO NGONG go duoc ----
+            // Day la gia tri that cua thu vien dao: khong phai bao "khong chan duoc" roi thoi,
+            // ma doi sang con dao lam duoc, va VE DUNG con dao do ra ban ve.
+            FoilRawVertex[] channel =
+            {
+                new FoilRawVertex(0, 30, 0), new FoilRawVertex(0, 0, 0),
+                new FoilRawVertex(20, 0, 0), new FoilRawVertex(20, 30, 0)
+            };
+
+            FoilSettings withLibrary = BaseSettings(FoilBendMethod.CustomShopRule);
+            withLibrary.BendSequenceOrder = FoilBendSequenceOrder.AutoFeasible;
+            withLibrary.UseToolLibrary = true;
+
+            FoilBendPlan rescued = FoilBendSequenceBuilder.Plan(
+                Compute(withLibrary, channel), withLibrary);
+
+            AssertTrue(rescued.AllFeasible,
+                "long 20 canh 30 phai chan duoc khi duoc phep doi dao");
+
+            bool usedSpecial = false;
+            foreach (FoilBendStep step in rescued.Steps)
+            {
+                if (step.Punch != null && step.Punch.Name != "dao thang") usedSpecial = true;
+            }
+
+            AssertTrue(usedSpecial, "phai co buoc doi sang dao dac chung (co ngong)");
+
+            // Tat thu vien dao -> chi con dao thang -> phai bi vuong. Neu KHONG bi vuong thi
+            // phep thu tren mat y nghia (nghia la dao thang cung lam duoc, khong can doi dao).
+            FoilSettings straightOnly = withLibrary.Clone();
+            straightOnly.UseToolLibrary = false;
+
+            FoilBendPlan plain = FoilBendSequenceBuilder.Plan(
+                Compute(straightOnly, channel), straightOnly);
+
+            AssertTrue(!plain.AllFeasible,
+                "chi voi dao thang thi long 20 canh 30 phai bi vuong");
+        }
+
+        /// <summary>Long qua hep va sau thi doi dao cung khong cuu duoc - van phai bao.</summary>
+        private static void Test48b_VeryNarrowChannelStillBlocked()
         {
             FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
             s.BendSequenceOrder = FoilBendSequenceOrder.AutoFeasible;
@@ -1958,8 +2116,10 @@ namespace AUTOCAD_COMMANDS
             {
                 double[] box = { double.MaxValue, double.MaxValue, double.MinValue, double.MinValue };
                 Grow(box, step.Points);
-                Grow(box, step.DiePoints);
-                Grow(box, step.PunchPoints);
+                foreach (List<FoilPoint2d> tool in step.ToolOutlines)
+                {
+                    Grow(box, tool);
+                }
 
                 // Hai dong chu: uoc luong be rong nhu tang ve dang dung.
                 GrowText(box, step.LabelPosition, step.Label, h);
@@ -2176,6 +2336,99 @@ namespace AUTOCAD_COMMANDS
             AssertTrue(checkedSteps >= 90, "phai kiem duoc nhieu buoc (" + checkedSteps + ")");
         }
 
+        /// <summary>
+        /// DOAN DAI PHAI QUAY RA NGOAI MAY.
+        ///
+        /// Tho dung phia truoc va do phan dai; phia sau la cu hau va than may. Neu de doan dai
+        /// chui vao trong may thi khong ai chan duoc - du hinh hoc khong bao va cham gi.
+        ///
+        /// Da tung sai o day: co mot buoc "doi dau de lay chuan ga dai hon" - dung la chuan ga
+        /// dai hon that, nhung no keo luon doan dai vao trong may.
+        ///
+        /// Trong he toa do may, +X la phia ngoai. Nen tong chieu dai vat lieu ben +X phai LON
+        /// HON HOAC BANG ben -X, tru khi bi ep boi phan thong xuong sau hon day coi.
+        /// </summary>
+        private static void Test54_LongSideFacesOperator()
+        {
+            FoilRawVertex[][] profiles =
+            {
+                HatProfile(),
+
+                // Mot canh ngan mot canh rat dai - truong hop de lo nhat.
+                new[]
+                {
+                    new FoilRawVertex(0, 0, 0), new FoilRawVertex(12, 0, 0),
+                    new FoilRawVertex(12, 400, 0)
+                },
+
+                // Bac thang.
+                new[]
+                {
+                    new FoilRawVertex(0, 0, 0), new FoilRawVertex(0, 25, 0),
+                    new FoilRawVertex(40, 25, 0), new FoilRawVertex(40, 50, 0),
+                    new FoilRawVertex(200, 50, 0)
+                }
+            };
+
+            int checkedSteps = 0;
+
+            foreach (FoilRawVertex[] profile in profiles)
+            {
+                foreach (FoilBendSequenceOrder order in new[]
+                {
+                    FoilBendSequenceOrder.ProfileOrder,
+                    FoilBendSequenceOrder.AutoFeasible
+                })
+                {
+                    FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
+                    s.BendSequenceOrder = order;
+
+                    FoilFlatPatternResult r = Compute(s, profile);
+                    AssertNoErrors(r);
+
+                    FoilBendPlan plan = FoilBendSequenceBuilder.Plan(r, s);
+
+                    foreach (FoilBendStep step in plan.Steps)
+                    {
+                        if (step.FormedBend == null) continue;
+
+                        // Do thang tren hinh: tong chieu dai vat lieu moi ben truc dao.
+                        List<FoilPoint2d> pts = FoilBendSequenceBuilder.Simplify(step.MachinePoints);
+                        double front = 0.0;
+                        double back = 0.0;
+
+                        for (int i = 0; i < pts.Count - 1; i++)
+                        {
+                            double d = pts[i].DistanceTo(pts[i + 1]);
+                            double mid = (pts[i].X + pts[i + 1].X) * 0.5;
+                            if (mid >= 0.0) front += d; else back += d;
+                        }
+
+                        string tag = order + " B" + step.StepNumber;
+
+                        // Neu bi ep boi phan thong xuong thi da co canh bao rieng - bo qua.
+                        bool forced = false;
+                        foreach (FoilBendIssue issue in step.Issues)
+                        {
+                            if (issue.Message.IndexOf("quay vao trong may",
+                                StringComparison.OrdinalIgnoreCase) >= 0) forced = true;
+                        }
+
+                        if (forced) continue;
+
+                        AssertTrue(front >= back - 1e-6, string.Format(
+                            CultureInfo.InvariantCulture,
+                            "doan dai phai ra ngoai may ({0}): ngoai {1:0.##} < trong {2:0.##}",
+                            tag, front, back));
+
+                        checkedSteps++;
+                    }
+                }
+            }
+
+            AssertTrue(checkedSteps >= 20, "phai kiem duoc nhieu buoc (" + checkedSteps + ")");
+        }
+
         private static bool HasIssue(FoilBendPlan plan, string fragment)
         {
             foreach (FoilBendStep step in plan.Steps)
@@ -2279,6 +2532,314 @@ namespace AUTOCAD_COMMANDS
             {
                 report.Failed++;
                 report.Lines.Add("[FAIL] " + name + "  ->  " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Ban may phai la mot khoi HOP LY, khong phai vai hinh roi rac ve cho dep:
+        ///   * than coi dung tren mat dam duoi, ham kep om lay chan coi va RONG HON than coi,
+        ///   * mat duoi dam tren o dung chieu cao lam viec cua dao,
+        ///   * moi bo phan la da giac KIN co dien tich khac 0.
+        ///
+        /// Neu mot trong nhung quan he nay sai thi hinh ve ra se noi doi: tho nhin thay mot
+        /// khoang trong ma may that khong co, hoac nguoc lai.
+        /// </summary>
+        private static void Test55_MachineFrameIsConsistent()
+        {
+            double[] thicknesses = { 0.8, 1.2, 3.0, 6.0 };
+
+            foreach (double t in thicknesses)
+            {
+                FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
+                s.Thickness = t;
+                s.InsideRadius = t;
+
+                FoilToolingGeometry g = FoilToolingGeometry.Resolve(s);
+
+                FoilToolShape die = g.Die;
+                FoilToolShape holder = g.DieHolder;
+                FoilToolShape bed = g.Bed;
+                FoilToolShape ram = g.Ram;
+
+                // Moi bo phan phai la da giac kin that.
+                FoilToolShape[] parts = { die, holder, bed, ram };
+                foreach (FoilToolShape part in parts)
+                {
+                    AssertTrue(part.Outline.Count >= 4,
+                        part.Name + ": phai la da giac kin (>= 4 dinh)");
+                    AssertTrue(part.MaxX - part.MinX > 1e-6 && part.MaxY - part.MinY > 1e-6,
+                        part.Name + ": phai co be rong va chieu cao khac 0");
+                }
+
+                // Vai coi nam dung mat phoi (y = 0) - day la goc toa do may.
+                AssertClose(0.0, die.MaxY, "dinh than coi phai o mat phoi", 1e-9);
+
+                // Than coi dung tren mat dam duoi, ham kep om chan coi tu chinh mat do.
+                AssertClose(die.MinY, holder.MinY,
+                    "ham kep coi phai dat tren cung mat voi chan coi", 1e-9);
+                AssertTrue(holder.MaxY > holder.MinY,
+                    "ham kep coi phai co chieu cao");
+                AssertTrue(holder.MaxY < die.MaxY,
+                    "ham kep chi om CHAN coi, khong duoc cao bang vai coi");
+
+                // Ham kep RONG HON than coi - do la cai lam khe hai ben coi hep lai.
+                AssertTrue(holder.MaxX > die.MaxX + 1e-9 && holder.MinX < die.MinX - 1e-9,
+                    "ham kep coi phai rong hon than coi (neu bang thi no khong gioi han gi)");
+
+                // Dam duoi o ngay duoi chan coi va rong hon ham kep.
+                AssertClose(die.MinY, bed.MaxY, "mat dam duoi phai do chan coi", 1e-9);
+                AssertTrue(bed.MinX < holder.MinX - 1e-9,
+                    "dam duoi phai keo ve phia sau xa hon ham kep");
+
+                // Dam duoi LECH ve phia sau: phia truoc phai thoang hon phia sau, neu khong
+                // thi doan dai quay ra ngoai cung khong thoat duoc.
+                AssertTrue(Math.Abs(bed.MinX) > bed.MaxX + 1e-9,
+                    "dam duoi phai lech ve phia sau (-X), phia truoc de trong cho tho");
+
+                // Mat duoi dam tren o dung chieu cao lam viec cua dao.
+                AssertClose(g.PunchHeight, ram.MinY,
+                    "mat duoi dam tren phai o dung chieu cao lam viec cua dao", 1e-9);
+                AssertTrue(ram.MaxX > g.PunchShankHalfWidth,
+                    "dam tren phai rong hon do ga dao");
+            }
+        }
+
+        /// <summary>
+        /// Ngon cu hau phai duoc DAT o dung khoang ga da bao, va khong duoc bao nham.
+        ///
+        /// Hai dieu kien:
+        ///   (a) mat chan cua ngon cu nam tai x = -GaugeLength (sai so chi la khe ho rat nho),
+        ///       nen con so ghi tren ban ve va hinh ve la MOT;
+        ///   (b) neu phoi chi TI VAO cu chu khong chay ra sau cu thi KHONG duoc bao vuong -
+        ///       day chinh la cong dung cua cu, khong phai va cham.
+        /// </summary>
+        private static void Test56_BackGaugeSitsAtGaugeLength()
+        {
+            FoilRawVertex[][] profiles =
+            {
+                HatProfile(),
+
+                new[]
+                {
+                    new FoilRawVertex(0, 15, 0), new FoilRawVertex(0, 0, 0),
+                    new FoilRawVertex(60, 0, 0), new FoilRawVertex(60, 15, 0)
+                },
+
+                new[]
+                {
+                    new FoilRawVertex(0, 20, 0), new FoilRawVertex(0, 0, 0),
+                    new FoilRawVertex(40, 0, 0), new FoilRawVertex(40, -20, 0)
+                }
+            };
+
+            int checks = 0;
+
+            foreach (FoilRawVertex[] profile in profiles)
+            {
+                FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
+                s.BendSequenceOrder = FoilBendSequenceOrder.AutoFeasible;
+
+                FoilFlatPatternResult r = Compute(s, profile);
+                AssertNoErrors(r);
+
+                FoilToolingGeometry tooling = FoilToolingGeometry.Resolve(s);
+                FoilBendPlan plan = FoilBendSequenceBuilder.Plan(r, s);
+
+                Dictionary<int, FoilBendInfo> byIndex = new Dictionary<int, FoilBendInfo>();
+                foreach (FoilBendInfo b in r.Bends) byIndex[b.Index] = b;
+
+                // Di lai dung trinh tu da chon de lay duoc hinh LUC DAT PHOI - do moi la luc
+                // phoi ti vao cu hau, va cung la hinh ma phep kiem cu hau dung.
+                HashSet<int> formed = new HashSet<int>();
+
+                foreach (int index in plan.Order)
+                {
+                    FoilFormedShape shape = FoilFormedShape.Build(r, formed);
+                    FoilBendMounting mount = FoilPressBrakeModel.Evaluate(
+                        shape, byIndex[index], tooling);
+                    formed.Add(index);
+
+                    AssertTrue(mount.BackGauge != null, "buoc nao cung phai co ngon cu hau");
+
+                    // (a) mat chan dung o -GaugeLength (lui ra sau mot khe rat nho).
+                    double face = mount.BackGauge.MaxX;
+                    AssertTrue(face <= -mount.GaugeLength + 1e-9,
+                        "mat cu khong duoc nam truoc mep phoi");
+                    AssertTrue(face >= -mount.GaugeLength - 0.5,
+                        "mat cu phai dat dung khoang ga da bao, khong duoc lech");
+
+                    // Con so ghi tren ban ve phai la chinh con so nay.
+                    FoilBendStep drawn = null;
+                    foreach (FoilBendStep st in plan.Steps)
+                    {
+                        if (st.FormedBend != null && st.FormedBend.Index == index) drawn = st;
+                    }
+
+                    AssertTrue(drawn != null, "moi duong chan phai co mot buoc tuong ung");
+                    AssertClose(mount.GaugeLength, drawn.GaugeLength,
+                        "chuan ga ghi tren ban ve phai trung voi vi tri ngon cu da ve", 1e-9);
+
+                    // (b) phoi chi TI VAO cu chu khong chay ra sau cu thi khong duoc bao vuong.
+                    double deepest = 0.0;
+                    foreach (FoilPoint2d q in mount.MachinePointsBefore)
+                    {
+                        deepest = Math.Min(deepest, q.X);
+                    }
+
+                    bool gaugeIssue = false;
+                    foreach (FoilBendIssue issue in mount.Issues)
+                    {
+                        if (issue.Message.IndexOf("NGON CU HAU", StringComparison.Ordinal) >= 0)
+                        {
+                            gaugeIssue = true;
+                        }
+                    }
+
+                    if (deepest >= face - 1e-9)
+                    {
+                        AssertTrue(!gaugeIssue,
+                            "phoi chi ti vao cu ma van bi bao vuong cu - phep kiem bat nham");
+                    }
+
+                    checks++;
+                }
+            }
+
+            AssertTrue(checks >= 6, "phai kiem duoc nhieu buoc");
+        }
+
+        /// <summary>
+        /// So thu tu buoc chan ghi o mep phoi phai DUNG va DOC DUOC:
+        ///   * moi duong chan dung mot bong tron, danh so 1..N khong trung khong sot,
+        ///   * so ghi tren duong chan nao phai dung la thu tu chan cua duong chan do,
+        ///   * bong tron nam NGOAI bien phoi ve phia phai, khong de len hinh phoi,
+        ///   * hai bong tron khong duoc de len nhau.
+        /// </summary>
+        private static void Test57_StepNumbersOnBlankEdge()
+        {
+            FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
+            s.DrawBendSteps = true;
+            s.ShowStepNumbers = true;
+            s.BendSequenceOrder = FoilBendSequenceOrder.AutoFeasible;
+
+            FoilFlatPatternResult r = Compute(s, HatProfile());
+            AssertNoErrors(r);
+
+            FoilFlatPatternGeometry g = FoilFlatPatternGeometry.Build(r, new FoilPoint2d(0, 0), 0.0);
+
+            AssertEqual(r.BendCount, g.StepMarks.Count, "moi duong chan dung mot bong tron");
+            AssertTrue(g.StepMarkTextHeight > 0.0, "phai co chieu cao chu cho bong tron");
+
+            HashSet<int> numbers = new HashSet<int>();
+            foreach (FoilStepMarkGeometry mark in g.StepMarks)
+            {
+                AssertTrue(numbers.Add(mark.StepNumber), "khong duoc trung so thu tu");
+                AssertTrue(mark.StepNumber >= 1 && mark.StepNumber <= r.BendCount,
+                    "so thu tu phai nam trong 1..N");
+
+                // So ghi tren duong chan nay phai dung la thu tu chan cua chinh no.
+                AssertEqual(mark.Bend.Index, g.Plan.Order[mark.StepNumber - 1],
+                    "so tren duong chan phai khop thu tu chan da chon");
+
+                AssertEqual(
+                    mark.StepNumber.ToString(CultureInfo.InvariantCulture), mark.Text,
+                    "chu trong bong phai la so thu tu");
+
+                // Bong tron phai nam ngoai mep phai phoi.
+                AssertTrue(mark.Center.X - mark.Radius > r.BlankLength + 1e-9,
+                    "bong tron phai nam hoan toan ngoai bien phoi, khong de len phoi");
+
+                // Va phai ngang voi duong chan cua no.
+                AssertClose(mark.Bend.FlatPosition, mark.Center.Y,
+                    "bong tron phai ngang voi duong chan cua no", 1e-6);
+            }
+
+            // Khong bong nao duoc de len bong nao.
+            for (int i = 0; i < g.StepMarks.Count; i++)
+            {
+                for (int j = i + 1; j < g.StepMarks.Count; j++)
+                {
+                    double d = g.StepMarks[i].Center.DistanceTo(g.StepMarks[j].Center);
+                    double need = g.StepMarks[i].Radius + g.StepMarks[j].Radius;
+                    AssertTrue(d >= need - 1e-9,
+                        "hai bong tron so thu tu de len nhau (cach " + d.ToString("0.###",
+                            CultureInfo.InvariantCulture) + ", can " + need.ToString("0.###",
+                            CultureInfo.InvariantCulture) + ")");
+                }
+            }
+
+            // Tat tuy chon thi khong duoc ve so nao.
+            s.ShowStepNumbers = false;
+            FoilFlatPatternGeometry off = FoilFlatPatternGeometry.Build(
+                Compute(s, HatProfile()), new FoilPoint2d(0, 0), 0.0);
+            AssertEqual(0, off.StepMarks.Count, "tat tuy chon thi khong duoc danh so");
+        }
+
+        /// <summary>
+        /// Tim kiem chum phai dat GIA NHO NHAT tren toan bo cac hoan vi, chu khong chi dat so
+        /// buoc bi chan nho nhat (test 50 da kiem phan do).
+        ///
+        /// Gia o day gom ca cac thao tac ton cong: THAY DAO, LAT TON, DOI DAU. Phep kiem dung
+        /// dung ham gia ma tim kiem dung (FoilBendSequenceBuilder.OrderCost) nen cai duoc so
+        /// sanh la THUAT TOAN TIM KIEM, khong phai cong thuc gia.
+        /// </summary>
+        private static void Test58_BeamSearchReachesBestCost()
+        {
+            FoilRawVertex[][] profiles =
+            {
+                new[]
+                {
+                    new FoilRawVertex(0, 0, 0), new FoilRawVertex(30, 0, 0),
+                    new FoilRawVertex(30, 40, 0), new FoilRawVertex(90, 40, 0),
+                    new FoilRawVertex(90, 0, 0), new FoilRawVertex(120, 0, 0)
+                },
+
+                new[]
+                {
+                    new FoilRawVertex(0, 0, 0), new FoilRawVertex(0, 50, 0),
+                    new FoilRawVertex(80, 50, 0), new FoilRawVertex(80, 10, 0),
+                    new FoilRawVertex(130, 10, 0), new FoilRawVertex(130, 0, 0)
+                },
+
+                new[]
+                {
+                    new FoilRawVertex(0, 30, 0), new FoilRawVertex(0, 0, 0),
+                    new FoilRawVertex(50, 0, 0), new FoilRawVertex(50, -30, 0),
+                    new FoilRawVertex(90, -30, 0), new FoilRawVertex(90, 10, 0)
+                }
+            };
+
+            foreach (FoilRawVertex[] profile in profiles)
+            {
+                FoilSettings s = BaseSettings(FoilBendMethod.CustomShopRule);
+                s.BendSequenceOrder = FoilBendSequenceOrder.AutoFeasible;
+
+                FoilFlatPatternResult r = Compute(s, profile);
+                AssertNoErrors(r);
+                AssertTrue(r.BendCount >= 3 && r.BendCount <= 6, "so duong chan hop ly de vet can");
+
+                FoilToolingGeometry tooling = FoilToolingGeometry.Resolve(s);
+
+                List<int> all = new List<int>();
+                foreach (FoilBendInfo b in r.Bends) all.Add(b.Index);
+
+                List<List<int>> permutations = new List<List<int>>();
+                Permute(all, 0, permutations);
+
+                double best = double.MaxValue;
+                foreach (List<int> order in permutations)
+                {
+                    double cost = FoilBendSequenceBuilder.OrderCost(r, tooling, s, order);
+                    if (cost < best) best = cost;
+                }
+
+                FoilBendPlan plan = FoilBendSequenceBuilder.Plan(r, s);
+                double planCost = FoilBendSequenceBuilder.OrderCost(r, tooling, s, plan.Order);
+
+                AssertTrue(planCost <= best + 1e-6, string.Format(
+                    CultureInfo.InvariantCulture,
+                    "tim kiem chum phai dat gia nho nhat: dat {0:0.####}, vet can tim duoc {1:0.####}",
+                    planCost, best));
             }
         }
 

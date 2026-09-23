@@ -46,11 +46,13 @@ namespace AUTOCAD_COMMANDS
         /// <summary>Duong gap khuc cua buoc, da dat vao vi tri trong WCS.</summary>
         public List<FoilPoint2d> Points { get; private set; } = new List<FoilPoint2d>();
 
-        /// <summary>Duong bao coi (die) cua o nay trong WCS. Rong neu khong ve dung cu.</summary>
-        public List<FoilPoint2d> DiePoints { get; private set; } = new List<FoilPoint2d>();
-
-        /// <summary>Duong bao chay dao cua o nay trong WCS. Rong neu khong ve dung cu.</summary>
-        public List<FoilPoint2d> PunchPoints { get; private set; } = new List<FoilPoint2d>();
+        /// <summary>
+        /// Duong bao KIN cua tung bo phan may trong o nay (WCS), theo thu tu ve tu duoi len:
+        /// dam duoi, ham kep coi, coi, ngon cu hau, dam tren, chay dao.
+        /// Rong neu nguoi dung tat che do ve dung cu.
+        /// </summary>
+        public List<List<FoilPoint2d>> ToolOutlines { get; private set; }
+            = new List<List<FoilPoint2d>>();
 
         /// <summary>Vi tri dinh vua chan, trong WCS.</summary>
         public FoilPoint2d Marker { get; set; }
@@ -68,6 +70,25 @@ namespace AUTOCAD_COMMANDS
         public bool HasMarker { get; set; }
     }
 
+    /// <summary>
+    /// Bong tron ghi SO THU TU BUOC CHAN, dat ngoai mep phoi, ngang voi duong chan tuong ung.
+    /// </summary>
+    public class FoilStepMarkGeometry
+    {
+        /// <summary>Tam bong tron trong WCS.</summary>
+        public FoilPoint2d Center { get; set; }
+
+        public double Radius { get; set; }
+
+        /// <summary>So thu tu buoc chan (1..N).</summary>
+        public int StepNumber { get; set; }
+
+        /// <summary>Duong chan duoc danh so.</summary>
+        public FoilBendInfo Bend { get; set; }
+
+        public string Text { get; set; } = string.Empty;
+    }
+
     public class FoilFlatPatternGeometry
     {
         /// <summary>4 dinh hinh chu nhat phoi trong WCS, theo chieu CCW.</summary>
@@ -79,6 +100,13 @@ namespace AUTOCAD_COMMANDS
         /// <summary>Day hinh trinh tu cac buoc chan, dat ben duoi phoi.</summary>
         public List<FoilBendStepGeometry> Steps { get; private set; }
             = new List<FoilBendStepGeometry>();
+
+        /// <summary>Bong tron so thu tu buoc chan o mep phoi. Rong neu khong ve buoc chan.</summary>
+        public List<FoilStepMarkGeometry> StepMarks { get; private set; }
+            = new List<FoilStepMarkGeometry>();
+
+        /// <summary>Chieu cao chu trong bong tron so thu tu.</summary>
+        public double StepMarkTextHeight { get; set; }
 
         /// <summary>Chieu cao chu dung cho nhan cac buoc (da quy doi ra don vi ban ve).</summary>
         public double StepTextHeight { get; set; }
@@ -141,6 +169,11 @@ namespace AUTOCAD_COMMANDS
             if (settings.DrawBendSteps)
             {
                 AddBendSteps(geometry, result, settings, frame, length, width);
+
+                if (settings.ShowStepNumbers)
+                {
+                    AddStepMarks(geometry, result, localOutline, frame, length, width);
+                }
             }
 
             return geometry;
@@ -181,38 +214,37 @@ namespace AUTOCAD_COMMANDS
             }
 
             bool drawTooling = settings.DrawTooling;
-            FoilToolingGeometry tooling = plan.Tooling ?? FoilToolingGeometry.Resolve(settings);
-
-            List<FoilPoint2d> dieOutline = drawTooling
-                ? FoilPressBrakeModel.BuildDieOutline(tooling)
-                : new List<FoilPoint2d>();
 
             // ---- 1. Hinh cua tung o, trong he toa do may ----
+            // Dung cu lay DUNG bo ma phep kiem va cham da dung cho buoc do - ke ca khi buoc nay
+            // phai doi sang dao co ngong. Nho vay cai tho NHIN THAY chinh la cai da duoc KIEM.
             List<List<FoilPoint2d>> shapes = new List<List<FoilPoint2d>>();
-            List<List<FoilPoint2d>> punches = new List<List<FoilPoint2d>>();
+            List<List<List<FoilPoint2d>>> tools = new List<List<List<FoilPoint2d>>>();
 
             double left = 0.0, right = 0.0, down = 0.0, up = 0.0;
 
             for (int i = 0; i < steps.Count; i++)
             {
-                List<FoilPoint2d> shape = FoilBendSequenceBuilder.Simplify(steps[i].MachinePoints);
+                FoilBendStep step = steps[i];
+                List<FoilPoint2d> shape = FoilBendSequenceBuilder.Simplify(step.MachinePoints);
                 shapes.Add(shape);
 
-                double partHeight = 0.0;
-                foreach (FoilPoint2d p in shape)
+                List<List<FoilPoint2d>> parts = new List<List<FoilPoint2d>>();
+                if (drawTooling)
                 {
-                    if (p.Y > partHeight) partHeight = p.Y;
+                    foreach (FoilToolShape tool in step.Tools)
+                    {
+                        if (tool != null) parts.Add(tool.Outline);
+                    }
                 }
 
-                List<FoilPoint2d> punch = (drawTooling && steps[i].FormedBend != null)
-                    ? FoilPressBrakeModel.BuildPunchOutline(
-                        tooling, steps[i].FormedBend.BendAngleRad, partHeight)
-                    : new List<FoilPoint2d>();
-                punches.Add(punch);
+                tools.Add(parts);
 
                 Measure(shape, ref left, ref right, ref down, ref up);
-                Measure(dieOutline, ref left, ref right, ref down, ref up);
-                Measure(punch, ref left, ref right, ref down, ref up);
+                foreach (List<FoilPoint2d> part in parts)
+                {
+                    Measure(part, ref left, ref right, ref down, ref up);
+                }
             }
 
             double cellWidth = left + right;
@@ -287,14 +319,15 @@ namespace AUTOCAD_COMMANDS
                     placed.Points.Add(frame.ToWorld(p.X + originU, p.Y + originV));
                 }
 
-                foreach (FoilPoint2d p in dieOutline)
+                foreach (List<FoilPoint2d> part in tools[i])
                 {
-                    placed.DiePoints.Add(frame.ToWorld(p.X + originU, p.Y + originV));
-                }
+                    List<FoilPoint2d> outline = new List<FoilPoint2d>(part.Count);
+                    foreach (FoilPoint2d p in part)
+                    {
+                        outline.Add(frame.ToWorld(p.X + originU, p.Y + originV));
+                    }
 
-                foreach (FoilPoint2d p in punches[i])
-                {
-                    placed.PunchPoints.Add(frame.ToWorld(p.X + originU, p.Y + originV));
+                    placed.ToolOutlines.Add(outline);
                 }
 
                 if (steps[i].FormedBend != null)
@@ -310,6 +343,98 @@ namespace AUTOCAD_COMMANDS
                 placed.DetailPosition = frame.ToWorld(labelU, labelV - textHeight * 1.5);
 
                 geometry.Steps.Add(placed);
+            }
+        }
+
+        /// <summary>
+        /// Danh so THU TU CHAN len tung duong chan, bang bong tron dat NGOAI mep phai phoi.
+        ///
+        /// Vi tri: keo dai chinh duong chan do ra khoi bien phoi roi dat bong tron o do, nen
+        /// duong chan xien cung duoc danh so dung cho - bong tron luon nam tren duong keo dai
+        /// cua no chu khong phai o mot cot co dinh.
+        ///
+        /// Ban kinh bong khong duoc lon hon nua khoang cach giua hai duong chan gan nhau nhat,
+        /// neu khong hai bong se de len nhau tren bien dang co hai duong chan sat nhau.
+        /// </summary>
+        private static void AddStepMarks(
+            FoilFlatPatternGeometry geometry,
+            FoilFlatPatternResult result,
+            List<FoilPoint2d> localOutline,
+            FoilBlankFrame frame,
+            double blankLength,
+            double blankWidth)
+        {
+            if (geometry.Plan == null || geometry.Plan.Order.Count == 0) return;
+
+            // So thu tu chan cua tung duong chan.
+            Dictionary<int, int> stepOf = new Dictionary<int, int>();
+            for (int i = 0; i < geometry.Plan.Order.Count; i++)
+            {
+                stepOf[geometry.Plan.Order[i]] = i + 1;
+            }
+
+            double radius = Math.Min(blankLength, blankWidth) * 0.03;
+            if (radius <= FoilMath.LengthTolerance) return;
+
+            geometry.StepMarkTextHeight = radius * 1.15;
+
+            // Duyet theo vi tri tren phoi de viec xep cot ben duoi on dinh.
+            List<FoilBendInfo> ordered = new List<FoilBendInfo>(result.Bends);
+            ordered.Sort((x, y) => x.FlatPosition.CompareTo(y.FlatPosition));
+
+            // Hai duong chan sat nhau thi bong tron se de len nhau neu cung nam mot cot. Khi do
+            // day bong sau ra THEM MOT COT thay vi thu nho ca loat bong lai - mot cap duong chan
+            // sat nhau khong duoc lam moi con so tren ban ve be di.
+            List<double> lastInColumn = new List<double>();
+            double pitch = radius * 2.2;
+
+            foreach (FoilBendInfo bend in ordered)
+            {
+                int stepNumber;
+                if (!stepOf.TryGetValue(bend.Index, out stepNumber)) continue;
+
+                int column = 0;
+                while (column < lastInColumn.Count &&
+                       Math.Abs(bend.FlatPosition - lastInColumn[column]) < pitch)
+                {
+                    column++;
+                }
+
+                if (column < lastInColumn.Count) lastInColumn[column] = bend.FlatPosition;
+                else lastInColumn.Add(bend.FlatPosition);
+
+                double offset = radius * 1.8 + column * radius * 2.6;
+
+                FoilPoint2d anchor = new FoilPoint2d(blankLength * 0.5, bend.FlatPosition);
+
+                FoilPoint2d a;
+                FoilPoint2d b;
+                FoilPoint2d center;
+
+                if (FoilLineClipper.ClipInfiniteLine(
+                        anchor, bend.BendLineDirection, localOutline, out a, out b) &&
+                    a.DistanceTo(b) > FoilMath.LengthTolerance)
+                {
+                    // Dau nao xa ve phia +U hon thi la dau NGOAI CUNG BEN PHAI.
+                    FoilPoint2d outer = a.X >= b.X ? a : b;
+                    FoilPoint2d inner = a.X >= b.X ? b : a;
+
+                    FoilVector2d dir = (outer - inner).Normalized();
+                    center = outer + dir * offset;
+                }
+                else
+                {
+                    center = new FoilPoint2d(blankLength + offset, bend.FlatPosition);
+                }
+
+                geometry.StepMarks.Add(new FoilStepMarkGeometry
+                {
+                    Center = frame.ToWorld(center),
+                    Radius = radius,
+                    StepNumber = stepNumber,
+                    Bend = bend,
+                    Text = stepNumber.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                });
             }
         }
 
