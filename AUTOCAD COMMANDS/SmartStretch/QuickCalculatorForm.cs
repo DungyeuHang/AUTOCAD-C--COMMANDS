@@ -10,6 +10,10 @@ namespace AUTOCAD_COMMANDS
 {
     public partial class QuickCalculatorForm : Form
     {
+        // 10 decimals is well past anything a drawing needs; the extra digits only
+        // ever showed floating point noise.
+        private const string ResultFormat = "0.##########";
+
         private bool _isResultShown;
         private bool _allowClose; // To distinguish between Hide and actual Close
         private bool _isUserVisible; // To distinguish between user-intended visibility and shutdown-hiding
@@ -222,7 +226,7 @@ namespace AUTOCAD_COMMANDS
             try
             {
                 double result = ExpressionEvaluator.Evaluate(expression);
-                string resultString = result.ToString("0.###############", CultureInfo.InvariantCulture);
+                string resultString = result.ToString(ResultFormat, CultureInfo.InvariantCulture);
 
                 txtDisplay.Text = resultString;
                 _isResultShown = true;
@@ -233,7 +237,10 @@ namespace AUTOCAD_COMMANDS
                 QuickCalculatorState.SetLastValue(result);
 
                 string historyEntry = $"{expression} = {resultString}";
-                lstHistory.Items.Add(historyEntry);
+                // Newest first: the latest result sits on the top line so it is
+                // visible without scrolling to the bottom of the list.
+                lstHistory.Items.Insert(0, historyEntry);
+                lstHistory.TopIndex = 0;
             }
             catch (Exception ex)
             {
@@ -318,7 +325,7 @@ namespace AUTOCAD_COMMANDS
                     // Try last value from calculator state
                     if (QuickCalculatorState.TryGetLastValue(out double lastVal))
                     {
-                        valueToInsert = lastVal.ToString("0.###############", CultureInfo.InvariantCulture);
+                        valueToInsert = lastVal.ToString(ResultFormat, CultureInfo.InvariantCulture);
                     }
                     else
                     {
@@ -330,7 +337,7 @@ namespace AUTOCAD_COMMANDS
                     try
                     {
                         double result = ExpressionEvaluator.Evaluate(expression);
-                        valueToInsert = result.ToString("0.###############", CultureInfo.InvariantCulture);
+                        valueToInsert = result.ToString(ResultFormat, CultureInfo.InvariantCulture);
                     }
                     catch
                     {
@@ -385,7 +392,7 @@ namespace AUTOCAD_COMMANDS
             try
             {
                 double result = ExpressionEvaluator.Evaluate(expression);
-                return result.ToString("0.###############", CultureInfo.InvariantCulture);
+                return result.ToString(ResultFormat, CultureInfo.InvariantCulture);
             }
             catch
             {

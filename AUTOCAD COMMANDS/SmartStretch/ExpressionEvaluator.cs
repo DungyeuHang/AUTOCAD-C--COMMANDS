@@ -12,7 +12,24 @@ namespace AUTOCAD_COMMANDS
                 throw new ArgumentException("Expression is empty.");
             }
 
-            return new Parser(expression).Parse();
+            return Snap(new Parser(expression).Parse());
+        }
+
+        // Doubles cannot hold values such as 594.4 exactly, so a chain of operations
+        // leaves a tiny residue behind (587 - 594.4 lands on -7.3999999999999773
+        // instead of -7.4).  Rounding the final result to 12 significant digits drops
+        // that residue while keeping far more precision than a drawing ever needs.
+        public static double Snap(double value)
+        {
+            if (double.IsNaN(value) || double.IsInfinity(value) || value == 0.0)
+            {
+                return value;
+            }
+
+            return double.Parse(
+                value.ToString("G12", CultureInfo.InvariantCulture),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture);
         }
 
         private sealed class Parser
