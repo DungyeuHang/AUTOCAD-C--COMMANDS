@@ -1,0 +1,10 @@
+# Rectangle can only share the sheet by going into the U pocket.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=60 extra=1
+SHEET name=S310 length=310 width=310
+PART id=U qty=1 material=1.2MM tol=0 name=U
+OUTER 0,0 300,0 300,300 250,300 250,50 50,50 50,300 0,300
+END
+PART id=B qty=1 material=1.2MM tol=0 name=B
+OUTER 0,0 150,0 150,150 0,150
+END
+EXPECT placed=2 sheets=1 mingap>=5 minedge>=5

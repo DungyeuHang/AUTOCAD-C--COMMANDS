@@ -1,0 +1,14 @@
+﻿# L brackets interlock; plates with a round-ish hole; small tabs can go into holes.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=60 extra=2
+SHEET name=1250x2500 length=2500 width=1250
+PART id=L qty=12 material=1.2MM name=BRACKET
+OUTER 0,0 400,0 400,120 120,120 120,400 0,400
+END
+PART id=P qty=4 material=1.2MM name=PLATE
+OUTER 0,0 400,0 400,400 0,400
+HOLE 100,100 300,100 300,300 100,300
+END
+PART id=T qty=8 material=1.2MM name=TAB
+OUTER 0,0 80,0 80,60 0,60
+END
+EXPECT placed=24 unplaced=0 sheets<=1

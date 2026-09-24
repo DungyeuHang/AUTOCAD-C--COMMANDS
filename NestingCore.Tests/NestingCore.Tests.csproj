@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  GHOPHOI core tests WITHOUT AutoCAD.
+  Compiles the AutoCAD-free sources of the plugin (Nesting\Core, Nesting\Recognition,
+  Nesting\SelfTests) into a console exe and replays Fixtures\*.nest.
+  This project references NO Autodesk assembly - if it stops compiling, something in
+  those folders started depending on AutoCAD, which is an architecture violation.
+
+  Build + run (Visual Studio 2022 / MSBuild):
+    msbuild NestingCore.Tests\NestingCore.Tests.csproj /p:Configuration=Debug /p:Platform=x64
+    NestingCore.Tests\bin\Debug\NestingCore.Tests.exe
+  Exit code 0 = all tests passed.
+-->
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">x64</Platform>
+    <ProjectGuid>{7B2E6C0A-4C1D-4E5B-9E0A-3F5D2C8B1A77}</ProjectGuid>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>NestingCore.Tests</RootNamespace>
+    <AssemblyName>NestingCore.Tests</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <LangVersion>7.3</LangVersion>
+    <FileAlignment>512</FileAlignment>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x64' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <PlatformTarget>x64</PlatformTarget>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x64' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <PlatformTarget>x64</PlatformTarget>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\Core\*.cs">
+      <Link>Linked\Core\%(Filename)%(Extension)</Link>
+    </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\Recognition\*.cs">
+      <Link>Linked\Recognition\%(Filename)%(Extension)</Link>
+    </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\SelfTests\*.cs">
+      <Link>Linked\SelfTests\%(Filename)%(Extension)</Link>
+    </Compile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Fixtures\*.nest">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

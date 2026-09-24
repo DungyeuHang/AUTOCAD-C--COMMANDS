@@ -1,0 +1,14 @@
+# REGRESSION: the old MinLength/LeftBottom X-pruning cut this layout to 539 mm used length.
+# Without pruning the same seed/settings reach 503 mm (random trial 18 of the pruning audit).
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=1000 extra=0
+SHEET name=S length=677 width=329
+PART id=G0 qty=2 material=1.2MM tol=0 name=G0
+OUTER 0,0 144,0 144,46.944 99.132,46.944 99.132,96 0,96
+END
+PART id=G1 qty=1 material=1.2MM tol=0 name=G1
+OUTER 0,0 276,0 276,140 0,140
+END
+PART id=G2 qty=2 material=1.2MM tol=0 name=G2
+OUTER 0,0 256,0 256,52.872 120.713,52.872 120.713,146 0,146
+END
+EXPECT placed=5 unplaced=0 sheets=1 usedlength<=503

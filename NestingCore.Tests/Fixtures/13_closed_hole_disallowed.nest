@@ -1,0 +1,11 @@
+# AllowPartInsideHole=0: the square must NOT go into the frame hole -> 2 sheets.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=60 extra=1
+SHEET name=S310 length=310 width=310
+PART id=F qty=1 material=1.2MM tol=0 name=FRAME
+OUTER 0,0 300,0 300,300 0,300
+HOLE 50,50 250,50 250,250 50,250
+END
+PART id=S qty=1 material=1.2MM tol=0 name=SQUARE
+OUTER 0,0 100,0 100,100 0,100
+END
+EXPECT placed=2 sheets=2

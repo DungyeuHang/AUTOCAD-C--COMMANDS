@@ -1,0 +1,7 @@
+# 2 x 2 of 42.5x42.5 on 100x100: 5 + 42.5 + 5 + 42.5 + 5 = 100 exactly (edge, gap).
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=60 extra=1
+SHEET name=S100 length=100 width=100
+PART id=A qty=4 material=1.2MM tol=0 name=A
+OUTER 0,0 42.5,0 42.5,42.5 0,42.5
+END
+EXPECT placed=4 sheets=1 mingap=5 minedge=5

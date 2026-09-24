@@ -1,0 +1,7 @@
+﻿# 18 strips 1000x200 on 1500x3000: needs 2 unrotated columns (7 each) + 4 rotated strips.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=60 extra=3
+SHEET name=1500x3000 length=3000 width=1500
+PART id=S qty=18 material=1.2MM name=STRIP
+OUTER 0,0 1000,0 1000,200 0,200
+END
+EXPECT placed=18 sheets=1

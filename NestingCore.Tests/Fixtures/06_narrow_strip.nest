@@ -1,0 +1,7 @@
+# 10 strips 2000x20 across a 1250 wide sheet: 10*20 + 9*5 + 2*5 = 255.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=60 extra=1
+SHEET name=1250x2500 length=2500 width=1250
+PART id=S qty=10 material=1.2MM tol=0 name=STRIP
+OUTER 0,0 2000,0 2000,20 0,20
+END
+EXPECT placed=10 sheets=1 mingap=5 minedge=5

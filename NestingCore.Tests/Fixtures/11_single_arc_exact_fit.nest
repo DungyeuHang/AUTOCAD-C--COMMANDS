@@ -1,0 +1,7 @@
+# Arc part (tol 0.05): needs EdgeMargin + tol = 5.05 each side; sheet is exactly 90 + 2*5.05.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=60 extra=1
+SHEET name=S100.1 length=100.1 width=100.1
+PART id=A qty=1 material=1.2MM tol=0.05 name=ARC_CORNER
+OUTER 0,0 90,0 90,70 89.239,73.827 87.071,77.071 83.827,79.239 80,80 80,90 0,90
+END
+EXPECT placed=1 sheets=1 minedge=5.05

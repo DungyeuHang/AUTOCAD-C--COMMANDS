@@ -60,7 +60,8 @@ namespace AUTOCAD_COMMANDS
         AutoCut,
         TrimOutside,
         TrimInside,
-        SheetMetalUnfold
+        SheetMetalUnfold,
+        SheetNesting
     }
 
     internal sealed class RibbonCommandStyle

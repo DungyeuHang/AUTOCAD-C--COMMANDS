@@ -1,0 +1,13 @@
+﻿# Two materials must be nested separately; one part is longer than the sheet in any orientation.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=60 extra=1
+SHEET name=1250x2500 length=2500 width=1250
+PART id=A qty=12 material=1.2MM name=A
+OUTER 0,0 300,0 300,150 0,150
+END
+PART id=B qty=4 material=1.5MM name=B
+OUTER 0,0 500,0 500,250 0,250
+END
+PART id=C qty=2 material=1.2MM name=C_TOO_LONG
+OUTER 0,0 2600,0 2600,100 0,100
+END
+EXPECT placed=16 unplaced=2 sheets=2

@@ -68,6 +68,10 @@
     <Compile Include="AutoTrim\*.cs" />
     <Compile Include="Foil\*.cs" />
     <Compile Include="AutoDimPline\*.cs" />
+    <Compile Include="Nesting\*.cs" />
+    <Compile Include="Nesting\Core\*.cs" />
+    <Compile Include="Nesting\Recognition\*.cs" />
+    <Compile Include="Nesting\SelfTests\*.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>

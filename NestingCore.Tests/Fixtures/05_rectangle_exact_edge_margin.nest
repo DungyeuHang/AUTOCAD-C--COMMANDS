@@ -1,0 +1,7 @@
+# 90x90 on 100x100, EdgeMargin 5: fits only at exactly (5,5).
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=60 extra=1
+SHEET name=S100 length=100 width=100
+PART id=A qty=1 material=1.2MM tol=0 name=A
+OUTER 0,0 90,0 90,90 0,90
+END
+EXPECT placed=1 sheets=1 minedge=5

@@ -1,0 +1,10 @@
+# C opens to -X; no rotation; rectangle must enter the mouth from the left margin.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0 inhole=0 seed=1 budget=60 extra=1
+SHEET name=S310 length=310 width=310
+PART id=C qty=1 material=1.2MM tol=0 name=C
+OUTER 0,0 300,0 300,300 0,300 0,250 250,250 250,50 0,50
+END
+PART id=B qty=1 material=1.2MM tol=0 name=B
+OUTER 0,0 150,0 150,150 0,150
+END
+EXPECT placed=2 sheets=1 mingap>=5 minedge>=5

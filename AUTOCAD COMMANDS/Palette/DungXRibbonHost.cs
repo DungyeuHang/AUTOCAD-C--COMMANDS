@@ -55,7 +55,7 @@ namespace AUTOCAD_COMMANDS
 
         // Các command tôn chấn / dãn phôi.
         private static readonly string[] SheetMetalCommands =
-            { "DX_FOIL" };
+            { "DX_FOIL", "GHOPHOI" };
 
         private static readonly string[] HiddenCommands =
             {
@@ -71,7 +71,8 @@ namespace AUTOCAD_COMMANDS
                 "DANPHOI",
                 "DX_FOIL_SETTINGS",
                 "DX_FOIL_CALIB",
-                "DX_FOIL_TEST"
+                "DX_FOIL_TEST",
+                "GHOPHOI_TEST"
             };
 
         private static readonly HashSet<string> KnownCommands =
@@ -1231,6 +1232,20 @@ namespace AUTOCAD_COMMANDS
                             break;
                         }
 
+                    case IconGlyph.SheetNesting:
+                        {
+                            // To phoi (khung ngoai) voi cac chi tiet da ghep ben trong.
+                            g.DrawRectangle(pen, x0, y0 + r.Height * 0.12f, r.Width, r.Height * 0.76f);
+                            float pad = r.Width * 0.1f;
+                            float top = y0 + r.Height * 0.12f + pad;
+                            float bottom = y1 - r.Height * 0.12f - pad;
+                            g.FillRectangle(brush, x0 + pad, top, r.Width * 0.3f, bottom - top);
+                            g.FillRectangle(brush, x0 + pad * 2 + r.Width * 0.3f, top, r.Width * 0.4f, (bottom - top) * 0.42f);
+                            g.FillEllipse(brush, x0 + pad * 2 + r.Width * 0.3f, bottom - (bottom - top) * 0.46f,
+                                (bottom - top) * 0.46f, (bottom - top) * 0.46f);
+                            break;
+                        }
+
                     default:
                         {
                             float d = Math.Min(r.Width, r.Height) * 0.16f;
@@ -1613,6 +1628,15 @@ namespace AUTOCAD_COMMANDS
                     "vẽ phôi, đường chấn và hình các bước chấn.",
                     "DF",
                     tile, Color.FromArgb(124, 77, 255), IconGlyph.SheetMetalUnfold),
+                ["GHOPHOI"] = new RibbonCommandStyle(
+                    "Ghép Phôi",
+                    "Ghép\nPhôi",
+                    "Ghép Phôi",
+                    "GP",
+                    "Tự động ghép chi tiết tôn lên khổ phôi (theo SL / vật liệu), " +
+                    "kiểm tra khe cắt và xuất ra bản vẽ mới.",
+                    "GP",
+                    tile, Color.FromArgb(124, 77, 255), IconGlyph.SheetNesting),
                 ["UFF"] = new RibbonCommandStyle(
                     "Un-Fillet Polyline",
                     "Un-Fillet\nPolyline",

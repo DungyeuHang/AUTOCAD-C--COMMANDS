@@ -1,0 +1,10 @@
+# Rectangle can only share the 310x310 sheet by going into the L notch.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=60 extra=1
+SHEET name=S310 length=310 width=310
+PART id=L qty=1 material=1.2MM tol=0 name=L
+OUTER 0,0 300,0 300,100 100,100 100,300 0,300
+END
+PART id=B qty=1 material=1.2MM tol=0 name=B
+OUTER 0,0 180,0 180,180 0,180
+END
+EXPECT placed=2 sheets=1 mingap>=5 minedge>=5

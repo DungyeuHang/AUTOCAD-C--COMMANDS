@@ -47,7 +47,8 @@ namespace AUTOCAD_COMMANDS
             "DANPHOI",
             "DX_FOIL_SETTINGS",
             "DX_FOIL_CALIB",
-            "DX_FOIL_TEST"
+            "DX_FOIL_TEST",
+            "GHOPHOI_TEST"
         };
 
         public static List<PaletteCommandItem> BuildItems()

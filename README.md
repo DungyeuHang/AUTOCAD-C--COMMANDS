@@ -174,3 +174,31 @@
     3.  Với mỗi text, thử lần lượt các cấu trúc đầu vào — **ưu tiên cấu trúc cụ thể hơn trước** (sắp theo độ dài chuỗi cấu trúc giảm dần, cấu trúc dài/nhiều ký tự cố định hơn được thử trước; bằng độ dài thì giữ thứ tự người dùng nhập) — dùng cấu trúc ĐẦU TIÊN khớp; nếu không có cấu trúc nào khớp thì bỏ qua text đó. Sau khi khớp, tính lại số theo tỉ lệ rồi sinh ra theo cấu trúc đầu ra; toàn bộ phần còn lại của text được giữ nguyên.
     4.  Ghi trực tiếp giá trị mới vào entity đó — không dùng FIND/REPLACE nên không bị cascading (mỗi text luôn tính từ giá trị SL gốc của chính nó, và text vừa sinh ra không bị xử lý lại trong cùng lần chạy).
 *   **Lưu ý:** Mỗi cấu trúc (đầu vào lẫn đầu ra) phải chứa đúng 1 placeholder `{X}`, nếu không lệnh sẽ báo lỗi và không cho tiếp tục. Nếu SL gốc không chia hết cho số bộ gốc, đối tượng đó bị bỏ qua và lệnh báo lỗi thay vì sửa sai. Lệnh không tự quét toàn bản vẽ — chỉ xử lý các đối tượng đã chọn.
+
+---
+
+### 6. Ghép phôi tự động (nesting tôn tấm)
+
+#### `GHOPHOI` (Ghép phôi)
+*   **File:** `Nesting/` (module riêng). Lõi thuật toán `Nesting/Core/` và nhận dạng `Nesting/Recognition/` **không tham chiếu AutoCAD** (test được ngoài AutoCAD, chạy được trên luồng phụ).
+*   **Chức năng:** Ghép các chi tiết tôn (đường bao kín + lỗ) lên khổ phôi đã duyệt của công ty, theo số lượng (SL) và vật liệu đọc từ TEXT/MTEXT, rồi xuất ra **một bản vẽ MỚI**. Bản vẽ gốc chỉ được đọc.
+*   **Quy trình:** `chọn đối tượng → nhận dạng → bảng KIỂM TRA → bảng CÀI ĐẶT → ghép (luồng phụ, có nút Dừng) → VALIDATOR → bảng kết quả → TẠO BẢN VẼ MỚI`.
+*   **Nhận dạng hình:**
+    1.  Hỗ trợ LINE, ARC, CIRCLE, LWPOLYLINE (có bulge, kể cả normal −Z sau MIRROR), POLYLINE 2D/3D, ELLIPSE, SPLINE và BLOCK (explode trong bộ nhớ, block vẫn là 1 đối tượng nguồn).
+    2.  Đầu mút gần nhau hơn `JoinToleranceMm` (0.05 mm) được nối thành đường bao. Vòng kín theo độ sâu lồng nhau: chẵn = chi tiết, lẻ = lỗ; chi tiết vẽ nằm trong lỗ của chi tiết khác vẫn là chi tiết riêng.
+    3.  Đường hở nằm trong chi tiết (vd. đường chấn) được giữ theo chi tiết khi xuất nhưng không dùng để ghép. Hình trên layer đánh dấu (`MarkingLayers`, mặc định `_mss.dut` — layer đường chấn của `DX_FOIL`) luôn được coi là đánh dấu, không bao giờ là lỗ.
+    4.  **Không bao giờ đoán:** đường bao hở, tự cắt, rẽ nhánh, diện tích 0, lỗ chạm biên, 1 block chứa nhiều chi tiết → bản ghi `INVALID GEOMETRY` có lý do và tọa độ.
+*   **Đọc SL / vật liệu:** `SL: 12`, `SL:12`, `SL 12`, `sl: 12`, `SL=12`; `1.2MM`, `1.2 MM`, `1,2MM`, `1,2 MM`, `1.2mm`. Độ dày ngoài 0.3–25 mm bị bỏ qua (để `150MM` không bị hiểu là vật liệu). Mẫu regex nằm trong `MetadataRules`.
+    *   Thiếu SL → 1, thiếu vật liệu → `1.2MM` (hiện `WARNING` để người dùng thấy).
+    *   Gán text: nằm trong đường bao → chi tiết đó; nếu không → chi tiết gần nhất trong `MaxTextDistanceMm` (300 mm); gần 2 chi tiết gần như nhau → `AMBIGUOUS` cho cả hai, **không gán**; 2 SL khác nhau cho 1 chi tiết → `AMBIGUOUS`.
+*   **Bảng kiểm tra:** `Chi tiết | SL | Vật liệu | Trạng thái (OK / WARNING / AMBIGUOUS / INVALID GEOMETRY)`. Chọn dòng → zoom + highlight hình trong bản vẽ. Sửa được SL / vật liệu. Dòng `AMBIGUOUS` phải xác nhận; nếu có dòng lỗi hình học phải tick xác nhận bỏ qua thì mới bấm TIẾP TỤC được.
+*   **Cài đặt:** khổ phôi cho từng vật liệu (chỉ chọn trong danh mục), khe cắt (mặc định 5 mm), lề mép (5 mm), hướng xoay (0/90/180/270, 0/180, không xoay), lật gương (**mặc định TẮT** — lật đổi chiều chi tiết chấn), cho phép đặt chi tiết vào **lỗ kín** của chi tiết khác (`AllowPartInsideHole`, **mặc định TẮT**; hốc lõm hở L/U/C luôn được phép), thời gian tối đa, seed, xuất dạng block, ghi tên chi tiết, lưu fixture test.
+    *   Danh mục khổ phôi: `%AppData%\DUNGX\AUTOCAD_COMMANDS\ghophoi_sheets.tsv` (`Tên<TAB>Rộng<TAB>Dài<TAB>Vật liệu`), sửa được ngay trên bảng cài đặt. Lần đầu được tạo sẵn 1250x2500, 1500x3000, 1500x6000 để sửa lại theo khổ thật của xưởng.
+*   **Thuật toán V1:** candidate-point + va chạm đa giác thật (hộp bao chỉ để lọc nhanh) + trượt ép trái/xuống; nhiều thứ tự xếp tất định (diện tích, cao, rộng, cạnh dài, kết hợp + vài thứ tự nhiễu theo seed) × 2 chính sách đặt; so sánh: ít chi tiết chưa xếp → ít tờ → tổng chiều dài dùng ngắn → gọn hơn. Mỗi vật liệu ghép riêng. Chi tiết không vừa tờ trống ở mọi hướng → `CHƯA XẾP` kèm lý do. Không cắt tỉa ứng viên X (đã kiểm chứng: cắt tỉa cũ làm kết quả kém hơn ở 7/300 case ngẫu nhiên). Các thứ tự chạy song song trên nhiều nhân nhưng chọn kết quả theo đúng thứ tự → kết quả giống hệt chạy tuần tự. Không có NFP / GA / SA (để V2).
+*   **Khe hở / lề mép (khoảng cách THỰC TẾ, độc lập):** chi tiết ↔ chi tiết ≥ `Gap`, chi tiết ↔ mép tờ ≥ `EdgeMargin` (mặc định 5 / 5 mm). Không có quy tắc cộng dồn. Chi tiết chỉ gồm đoạn thẳng là đa giác chính xác (dung sai 0); chi tiết có cung / đường cong được xấp xỉ với sai số dây cung ≤ 0.05 mm và dung sai này được cộng vào khoảng hở **của riêng chi tiết đó**. So sánh chính xác đến 0.001 mm (không có "slack").
+*   **Validator độc lập:** đo lại từ hình gốc — nằm trong tờ, lề mép, không chồng, không nằm trong lỗ kín (nếu không cho phép), đủ khe, góc xoay/lật hợp lệ, đủ số lượng, không thiếu / trùng / thừa, đúng vật liệu tờ. **Không đạt → không cho tạo bản vẽ.**
+*   **Bản vẽ mới:** lưu cạnh file gốc (`<tên>_GHOPHOI_yyyyMMdd_HHmmss.dwg`, hoặc Documents), tự mở sau khi lệnh kết thúc. Mỗi chi tiết là 1 block chứa **đúng entity gốc** (LINE/ARC… không bị đổi thành polyline), mỗi vị trí là 1 BlockReference (xoay / lật đúng như lõi tính). Mỗi tờ có khung (`GHOPHOI_TO`), nhãn tờ / vật liệu / khổ / % sử dụng / phần dư (`GHOPHOI_TEXT`), vạch phần dư (`GHOPHOI_PHANDU`), tên chi tiết (`GHOPHOI_NHAN`, không in). Các tờ xếp theo hàng, mỗi vật liệu 1 hàng; chi tiết chưa xếp được vẽ riêng bên dưới.
+*   **Kiểm thử:**
+    *   `GHOPHOI_TEST` (ẩn trên ribbon/palette): phần A = lõi + nhận dạng, phần B = tầng AutoCAD trên Database trong bộ nhớ (kể cả ghi/đọc lại DWG). Chạy thêm mọi fixture `*.nest` trong `%AppData%\DUNGX\AUTOCAD_COMMANDS\ghophoi_fixtures`.
+    *   Ngoài AutoCAD: project `NestingCore.Tests/` (console, không tham chiếu AutoCAD) chạy toàn bộ test lõi + `NestingCore.Tests/Fixtures/*.nest`.
+    *   Tick "Lưu fixture test" trong bảng cài đặt để biến bản vẽ thật thành fixture tái lập được.
