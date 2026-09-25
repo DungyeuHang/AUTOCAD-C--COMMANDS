@@ -21,7 +21,22 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
         public RecognitionResult Recognize(IList<CurveChain> chains, IList<TextItem> texts)
         {
             RecognitionResult result = new RecognitionResult();
-            List<RecognizedPart> records = new ContourLoopBuilder(_settings).Build(chains);
+            ContourLoopBuilder builder = new ContourLoopBuilder(_settings);
+            List<RecognizedPart> records = builder.Build(chains);
+
+            if (builder.MergedDuplicateLoops > 0)
+            {
+                result.GlobalWarnings.Add(string.Format(CultureInfo.InvariantCulture,
+                    "{0} duong bao ve TRUNG KHIT len nhau - da gop lam 1 (vi du tai {1}). Nen xoa bot trong ban ve goc.",
+                    builder.MergedDuplicateLoops, builder.FirstDuplicateAt ?? "-"));
+            }
+
+            if (builder.DroppedOpenGroups > 0)
+            {
+                result.GlobalWarnings.Add(string.Format(CultureInfo.InvariantCulture,
+                    "{0} nhom hinh HO nam ngoai moi chi tiet - da bo qua (khong ghep). Neu thieu chi tiet nao thi kiem xem duong bao co bi ho khe khong.",
+                    builder.DroppedOpenGroups));
+            }
 
             // Reading order: top row first, then left to right (rows = 1/2 of the median height).
             List<RecognizedPart> valid = records.FindAll(r => r.Outer != null);
@@ -122,6 +137,38 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
 
             if (owner == null) return false;
             if (!owner.MarkingSources.Contains(sourceIndex)) owner.MarkingSources.Add(sourceIndex);
+            if (!owner.GeometrySources.Contains(sourceIndex)) owner.GeometrySources.Add(sourceIndex);
+            return true;
+        }
+
+        /// <summary>
+        /// Attaches one engraving TEXT / MTEXT to the part that contains it.
+        ///
+        /// Same containment rule as <see cref="AttachMarking"/> - innermost part wins - because
+        /// engraving is physically on the part, so its anchor must lie inside the outline. Text
+        /// that sits outside every part is NOT attached and the caller reports it; silently
+        /// dropping it would lose a marking the operator asked for.
+        ///
+        /// The source is added to GeometrySources, which is what the output stage clones into the
+        /// part block. Nothing is added to the nesting polygon, so engraving can never affect
+        /// collision or placement.
+        /// </summary>
+        public static bool AttachEngraving(IList<RecognizedPart> records, int sourceIndex, Pt anchor)
+        {
+            RecognizedPart owner = null;
+            foreach (RecognizedPart part in records)
+            {
+                if (part.Outer == null) continue;
+                if (owner != null && part.Outer.Area >= owner.Outer.Area) continue;
+
+                List<IntPoint> ring = new List<IntPoint>(part.Outer.Points.Count);
+                foreach (Pt q in part.Outer.Points) ring.Add(IntPoint.FromMm(q.X, q.Y));
+
+                if (GeometryMath.PointInRing(IntPoint.FromMm(anchor.X, anchor.Y), ring) >= 0) owner = part;
+            }
+
+            if (owner == null) return false;
+            if (!owner.EngravingSources.Contains(sourceIndex)) owner.EngravingSources.Add(sourceIndex);
             if (!owner.GeometrySources.Contains(sourceIndex)) owner.GeometrySources.Add(sourceIndex);
             return true;
         }

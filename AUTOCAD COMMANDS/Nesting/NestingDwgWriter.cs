@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -7,6 +7,7 @@ using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using AUTOCAD_COMMANDS.Nesting.Core;
+using AUTOCAD_COMMANDS.Nesting.Recognition;
 
 namespace AUTOCAD_COMMANDS.Nesting
 {
@@ -26,6 +27,10 @@ namespace AUTOCAD_COMMANDS.Nesting
     {
         public string Path;
         public int BlockReferenceCount;
+
+        /// <summary>True khi ket qua duoc ve thang vao ban ve dang mo thay vi ra file moi.</summary>
+        public bool DrawnInPlace;
+
         public List<string> Warnings = new List<string>();
     }
 
@@ -149,7 +154,11 @@ namespace AUTOCAD_COMMANDS.Nesting
                             AddPlacement(ms, tr, blockId, position, pl, settings.OutputAsBlocks);
                             write.BlockReferenceCount++;
 
-                            if (settings.LabelParts)
+                            // Nhan ten chi tiet chi de nhin cho de; chi tiet nao DA CO chu khac
+                            // cua chinh nguoi dung thi khong ve them nhan nua - ve them se thanh
+                            // hai chu khac nhau chong len nhau, va chu khong phai cua ho lai nam
+                            // giua chi tiet.
+                            if (settings.LabelParts && !HasOwnText(byGroup[pl.PartGroupId]))
                             {
                                 OutputPart op = byGroup[pl.PartGroupId];
                                 AddPartLabel(ms, tr, labelLayer, op.Group, pl, corner);
@@ -204,6 +213,114 @@ namespace AUTOCAD_COMMANDS.Nesting
             return write;
         }
 
+        /// <summary>
+        /// Ve ket qua ghep vao CHINH ban ve dang mo, goc dat tai <paramref name="at"/>.
+        ///
+        /// Cach lam: dung lai y nguyen <see cref="Write"/> de dung bo cuc ra mot file tam (toan
+        /// bo phep bien hinh da duoc kiem ky o day), doc no vao bo nho roi CHEN vao ban ve hien
+        /// tai va PHA KHOI ngay. Khong viet lai phep dung hinh lan thu hai - neu viet lai thi
+        /// som muon hai duong se lech nhau.
+        ///
+        /// Sau khi pha khoi, moi entity nam trong khong gian mo hinh va GIU NGUYEN LAYER cua no
+        /// (duong bao o layer duong bao, chu khac o layer khac), nen khi xuat di cat co the
+        /// chon dung layer can cat.
+        /// </summary>
+        public static NestingDwgWriteResult DrawIntoCurrent(
+            Database db,
+            Point3d at,
+            NestingRequest request,
+            NestingResult result,
+            IList<OutputPart> parts,
+            GhoPhoiSettings settings,
+            string sourceName)
+        {
+            string temp = Path.Combine(Path.GetTempPath(),
+                "ghophoi_" + Guid.NewGuid().ToString("N") + ".dwg");
+
+            NestingDwgWriteResult write;
+            try
+            {
+                write = Write(db, temp, request, result, parts, settings, sourceName);
+
+                using (Database layout = new Database(false, true))
+                {
+                    layout.ReadDwgFile(temp, FileOpenMode.OpenForReadAndAllShare, true, string.Empty);
+
+                    ObjectId blockId = db.Insert(UniqueName(db, "GHOPHOI_KETQUA"), layout, false);
+
+                    using (Transaction tr = db.TransactionManager.StartTransaction())
+                    {
+                        BlockTableRecord ms = (BlockTableRecord)tr.GetObject(
+                            SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+
+                        BlockReference br = new BlockReference(at, blockId);
+                        ms.AppendEntity(br);
+                        tr.AddNewlyCreatedDBObject(br, true);
+
+                        // Pha khoi ngay: de nguyen block thi may CNC doc ca khoi va cat tat ca
+                        // moi thu ben trong, ke ca chu khong dinh cat.
+                        br.ExplodeToOwnerSpace();
+                        br.Erase();
+
+                        tr.Commit();
+                    }
+
+                    // Dinh nghia block chi la phuong tien de chen - bo di cho ban ve sach.
+                    PurgeBlock(db, blockId);
+                }
+
+                write.Path = string.Empty;
+                write.DrawnInPlace = true;
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(temp)) File.Delete(temp);
+                }
+                catch
+                {
+                    // temp file only
+                }
+            }
+
+            return write;
+        }
+
+        private static string UniqueName(Database db, string baseName)
+        {
+            using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+            {
+                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                if (!bt.Has(baseName)) return baseName;
+
+                for (int i = 2; i < 10000; i++)
+                {
+                    string candidate = baseName + "_" + i.ToString(CultureInfo.InvariantCulture);
+                    if (!bt.Has(candidate)) return candidate;
+                }
+            }
+
+            return baseName + "_" + Guid.NewGuid().ToString("N").Substring(0, 6);
+        }
+
+        private static void PurgeBlock(Database db, ObjectId blockId)
+        {
+            try
+            {
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    BlockTableRecord btr = tr.GetObject(blockId, OpenMode.ForWrite) as BlockTableRecord;
+                    if (btr != null && btr.GetBlockReferenceIds(true, true).Count == 0) btr.Erase();
+                    tr.Commit();
+                }
+            }
+            catch
+            {
+                // leaving an unused block definition behind is harmless
+            }
+        }
+
         private static void AddPlacement(BlockTableRecord ms, Transaction tr, ObjectId blockId, Point3d position, Placement pl, bool asBlock)
         {
             BlockReference br = new BlockReference(position, blockId)
@@ -220,6 +337,14 @@ namespace AUTOCAD_COMMANDS.Nesting
                 br.ExplodeToOwnerSpace();
                 br.Erase();
             }
+        }
+
+        /// <summary>Chi tiet nay da mang san chu khac cua nguoi dung chua.</summary>
+        private static bool HasOwnText(OutputPart part)
+        {
+            if (part == null || part.Group == null) return false;
+            RecognizedPart r = part.Group.SourceReference as RecognizedPart;
+            return r != null && r.EngravingSources.Count > 0;
         }
 
         private static void AddPartLabel(BlockTableRecord ms, Transaction tr, ObjectId layer, PartGroup g, Placement pl, Point3d corner)

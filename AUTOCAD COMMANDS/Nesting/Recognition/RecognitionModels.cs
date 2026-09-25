@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 
@@ -153,6 +153,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
         {
             Holes = new List<RecognizedLoop>();
             MarkingSources = new List<int>();
+            EngravingSources = new List<int>();
             TextSources = new List<int>();
             Notes = new List<string>();
             GeometrySources = new List<int>();
@@ -169,8 +170,24 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
 
         public List<RecognizedLoop> Holes { get; private set; }
 
-        /// <summary>Open geometry lying inside the part (bend lines, engraving...) - output only.</summary>
+        /// <summary>Open geometry lying inside the part (bend lines...) - output only.</summary>
         public List<int> MarkingSources { get; private set; }
+
+        /// <summary>
+        /// TEXT / MTEXT di theo chi tiet ra ban ve moi (chu cat / chu khac tren chi tiet).
+        ///
+        /// Gom hai nguon:
+        ///   * chu nam TRONG duong bao ma khong doc ra SL / vat lieu -> ma chi tiet, may cat that;
+        ///   * chu tren layer khac (<c>_mss.khac</c>) -> luon la chu khac, khong bao gio doc
+        ///     lam SL / vat lieu.
+        ///
+        /// Chu doc ra duoc SL / vat lieu thi KHONG vao day: do la thong tin de doc, khong phai
+        /// thu de cat.
+        ///
+        /// De rieng khoi <see cref="MarkingSources"/>: con so kia duoc bao cho nguoi dung la
+        /// "co N duong ho ben trong", ma chu thi khong phai duong ho.
+        /// </summary>
+        public List<int> EngravingSources { get; private set; }
 
         /// <summary>Every source entity that makes up this record (contours + markings).</summary>
         public List<int> GeometrySources { get; private set; }
@@ -234,10 +251,17 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
         public double MaxTextDistance { get; set; } = 300.0;
 
         /// <summary>Second-nearest part within best x ratio ... is ambiguous.</summary>
-        public double AmbiguityRatio { get; set; } = 1.5;
+        /// <summary>
+        /// Chi coi la MO HO khi hai khoang cach gan nhu bang nhau. Truoc day de 1.5 (chi tiet
+        /// thu hai xa gap ruoi van bi coi la mo ho), nen tren ban ve that mot chu cach 68.4 mm
+        /// va 69.4 mm - ro rang la gan cai dau hon - van bat nguoi dung xac nhan bang tay.
+        /// Gio cai nao GAN HON thi thang; chi khi chenh nhau duoi 1% (hoac duoi
+        /// <see cref="AmbiguityAbsolute"/>) moi thuc su la khong phan biet duoc.
+        /// </summary>
+        public double AmbiguityRatio { get; set; } = 1.01;
 
         /// <summary>... or within this absolute distance difference (mm).</summary>
-        public double AmbiguityAbsolute { get; set; } = 5.0;
+        public double AmbiguityAbsolute { get; set; } = 0.5;
 
         public MetadataRules Metadata { get; set; } = new MetadataRules();
     }

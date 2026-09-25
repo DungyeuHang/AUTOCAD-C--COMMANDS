@@ -1,5 +1,6 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using AUTOCAD_COMMANDS.Nesting.Recognition;
 using static AUTOCAD_COMMANDS.Nesting.SelfTests.NestingTestHarness;
 
@@ -35,6 +36,14 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "R23. Do day ngoai khoang 0.3-25 bi loai", R23_ThicknessRange);
             NestingTestHarness.Run(report, "R24. Chi tiet toan doan thang -> dung sai 0; co cung -> dung sai cung", R24_ToleranceFlag);
             NestingTestHarness.Run(report, "R25. Text gan 2 chi tiet khac nhau ro -> gan dung, khong mo ho", R25_ClearlyCloserNotAmbiguous);
+            NestingTestHarness.Run(report, "R26. Hai duong bao cham nhau -> bao kem TOA DO", R26_TouchingContoursReportWhere);
+            NestingTestHarness.Run(report, "R27. Hai duong bao TRUNG KHIT -> GOP lam 1, khong bao loi", R27_DuplicateContourIsMerged);
+            NestingTestHarness.Run(report, "R32. Hinh ho: gan kin thi giu, net thua thi bo", R32_OpenGeometryKeptOnlyIfAlmostClosed);
+            NestingTestHarness.Run(report, "R33. Chu CAT trong phoi di theo phoi; chu THONG TIN thi khong", R33_InsideCutTextTravelsWithPart);
+            NestingTestHarness.Run(report, "R28. Chu khac trong chi tiet -> gan de XUAT, khong phai marking", R28_EngravingInsideAttaches);
+            NestingTestHarness.Run(report, "R29. Chu khac ngoai moi chi tiet -> khong gan", R29_EngravingOutsideNotAttached);
+            NestingTestHarness.Run(report, "R30. Chu khac o chi tiet long nhau -> chi tiet TRONG CUNG", R30_EngravingInnermostWins);
+            NestingTestHarness.Run(report, "R31. Nhieu chu khac / nhieu chi tiet -> khong lan nhau", R31_EngravingManyPartsSeparate);
         }
 
         private static void R20_SlInsideMaterialOutside()
@@ -133,6 +142,253 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             List<Pt> pts = new List<Pt>();
             for (int i = 0; i + 1 < xy.Length; i += 2) pts.Add(new Pt(xy[i], xy[i + 1]));
             return new CurveChain(_src++, pts, closed);
+        }
+
+        /// <summary>
+        /// HOI QUY (ban ve that cua nguoi dung, GHOPPHOI TEST-1.dxf):
+        /// mot chi tiet dai 2446 mm co 27 lo bi bao "duong bao cat/cham duong bao khac" ma
+        /// KHONG noi cham o dau - khong the tim ra cho sai de sua ban ve. Moi ban ghi INVALID
+        /// khac deu co toa do ("dau ho tai (x, y)"), rieng cai nay thi khong.
+        ///
+        /// Phep thu: dung hai duong bao chac chan cat nhau, doi thong bao phai co toa do nam
+        /// trong vung giao. Chi kiem phan CHAN DOAN - ket luan hop le / khong hop le khong doi.
+        /// </summary>
+        private static void R26_TouchingContoursReportWhere()
+        {
+            // Hai hinh vuong chong len nhau mot goc.
+            List<CurveChain> c = new List<CurveChain> { Box(0, 0, 100, 100), Box(60, 60, 100, 100) };
+            RecognitionResult r = Recognize(c);
+
+            RecognizedPart bad = null;
+            foreach (RecognizedPart part in r.Parts)
+            {
+                if (part.Status == PartStatus.InvalidGeometry) bad = part;
+            }
+
+            True(bad != null, "hai duong bao cat nhau phai bi bao la hinh hoc loi");
+
+            string note = string.Join(" | ", bad.Notes.ToArray());
+            True(note.IndexOf("cat/cham", StringComparison.Ordinal) >= 0,
+                "phai dung ly do cat/cham, nhan duoc: " + note);
+            True(note.IndexOf(" - tai (", StringComparison.Ordinal) >= 0,
+                "phai noi CHO cham, nhan duoc: " + note);
+
+            // Toa do bao ra phai nam trong vung hai hinh chong nhau (60..100 theo ca hai truc),
+            // cho phep sai so dung sai noi diem.
+            int at = note.IndexOf(" - tai (", StringComparison.Ordinal) + " - tai (".Length;
+            string pair = note.Substring(at, note.IndexOf(')', at) - at);
+            string[] xy = pair.Split(',');
+            double x = double.Parse(xy[0].Trim(), CultureInfo.InvariantCulture);
+            double y = double.Parse(xy[1].Trim(), CultureInfo.InvariantCulture);
+
+            True(x >= 55 && x <= 105 && y >= 55 && y <= 105,
+                "toa do phai nam o vung hai hinh chong nhau, nhan duoc (" + pair + ")");
+        }
+
+        /// <summary>
+        /// HOI QUY (ban ve that GHOPPHOI TEST-1.dxf, chi tiet P15): hai CIRCLE ve trung khit
+        /// len nhau (cung tam, cung ban kinh) lam ca chi tiet bi bao la hinh hoc loi. Thong
+        /// bao cu la "cat/cham duong bao khac" khien nguoi dung di tim mot cho GIAO NHAU
+        /// khong he ton tai - trong khi viec can lam chi la xoa bot mot duong trung.
+        /// </summary>
+        private static void R27_DuplicateContourIsMerged()
+        {
+            List<CurveChain> c = new List<CurveChain>
+            {
+                Box(0, 0, 400, 200),          // duong bao ngoai
+                Box(100, 60, 80, 80),         // mot lo
+                Box(100, 60, 80, 80)          // CHINH lo do, ve them mot lan nua
+            };
+
+            RecognitionResult r = Recognize(c);
+
+            Equal(1, Valid(r).Count, "van la MOT chi tiet, khong phai hai");
+            RecognizedPart p = Valid(r)[0];
+
+            True(p.Status != PartStatus.InvalidGeometry,
+                "ve trung len nhau KHONG con lam hong chi tiet: " + p.NotesText);
+            Equal(1, p.Holes.Count, "hai duong trung khit chi con MOT lo");
+
+            bool told = false;
+            foreach (string w in r.GlobalWarnings)
+            {
+                if (w.IndexOf("TRUNG KHIT", StringComparison.Ordinal) >= 0) told = true;
+            }
+
+            True(told, "van phai BAO la da gop, khong duoc lang le: " + string.Join(" | ", r.GlobalWarnings.ToArray()));
+        }
+
+        /// <summary>
+        /// Ban ve san xuat that co hang chuc net thua (duong dan, ghi chu) nam ngoai moi chi
+        /// tiet - bat nguoi dung xac nhan tung cai la vo ich, nen bo tu dong.
+        ///
+        /// Nhung KHONG duoc bo tat: mot duong bao dinh ve kin ma bi ho mot khe nho cung roi
+        /// vao day, va do lai chinh la thu nguoi dung CAN thay de sua ban ve.
+        /// </summary>
+        private static void R32_OpenGeometryKeptOnlyIfAlmostClosed()
+        {
+            // (a) hop 100x50 ho khe 2 mm -> GIU, bao loi kem toa do
+            List<CurveChain> almost = new List<CurveChain>
+            {
+                Chain(false, 0, 0, 100, 0),
+                Chain(false, 100, 0, 100, 50),
+                Chain(false, 100, 50, 0, 50),
+                Chain(false, 0, 50, 0, 2)
+            };
+
+            RecognitionResult a = Recognize(almost);
+            Equal(1, a.Parts.Count, "duong bao dinh ve kin ma ho khe thi PHAI giu lai de sua");
+            Equal(PartStatus.InvalidGeometry, a.Parts[0].Status, "va bao la hinh hoc loi");
+
+            // (b) mot net thang thua -> BO, nhung co dem
+            RecognitionResult b = Recognize(new List<CurveChain> { Chain(false, 0, 0, 200, 80) });
+            Equal(0, b.Parts.Count, "net thua phai bi bo, khong bat nguoi dung xac nhan");
+
+            bool counted = false;
+            foreach (string w in b.GlobalWarnings)
+            {
+                if (w.IndexOf("nam ngoai moi chi tiet", StringComparison.Ordinal) >= 0) counted = true;
+            }
+
+            True(counted, "bo thi phai DEM va bao, khong duoc lang le");
+
+            // (c) chu L thua (hai dau xa nhau) -> BO
+            RecognitionResult d = Recognize(new List<CurveChain>
+            {
+                Chain(false, 0, 0, 200, 0),
+                Chain(false, 200, 0, 200, 150)
+            });
+
+            Equal(0, d.Parts.Count, "hai dau xa nhau thi khong phai chi tiet");
+        }
+
+        /// <summary>
+        /// Chu tren layer khac nam TRONG chi tiet: phai duoc gan de XUAT ra ban ve, nhung
+        /// khong duoc dem vao MarkingSources (con so do duoc bao cho nguoi dung la "co N
+        /// duong ho ben trong", ma chu khac thi khong phai duong ho).
+        ///
+        /// Va quan trong nhat: KHONG duoc dua vao hinh ghep - chu khac la hinh khac len be
+        /// mat, khong phai duong cat.
+        /// </summary>
+        private static void R28_EngravingInsideAttaches()
+        {
+            RecognitionResult r = Recognize(new List<CurveChain> { Box(0, 0, 400, 200) });
+            RecognizedPart part = r.Parts[0];
+
+            int outerPointsBefore = part.Outer.Points.Count;
+            int holesBefore = part.Holes.Count;
+
+            True(PartRecognizer.AttachEngraving(r.Parts, 901, new Pt(200, 100)), "phai gan duoc");
+
+            True(part.EngravingSources.Contains(901), "phai vao EngravingSources");
+            True(part.GeometrySources.Contains(901), "phai vao GeometrySources de duoc xuat");
+            True(!part.MarkingSources.Contains(901), "KHONG duoc dem vao MarkingSources");
+
+            Equal(outerPointsBefore, part.Outer.Points.Count, "duong bao ngoai khong doi");
+            Equal(holesBefore, part.Holes.Count, "so lo khong doi - chu khac khong phai lo");
+        }
+
+        /// <summary>Chu khac khong nam trong chi tiet nao thi khong gan - de nguoi goi bao ra.</summary>
+        private static void R29_EngravingOutsideNotAttached()
+        {
+            RecognitionResult r = Recognize(new List<CurveChain> { Box(0, 0, 400, 200) });
+
+            True(!PartRecognizer.AttachEngraving(r.Parts, 902, new Pt(900, 900)), "ngoai het -> khong gan");
+            True(!PartRecognizer.AttachEngraving(r.Parts, 903, new Pt(-5, 100)), "ngay ben canh cung khong gan");
+            Equal(0, r.Parts[0].EngravingSources.Count, "khong co chu khac nao duoc gan");
+        }
+
+        /// <summary>
+        /// Chi tiet nho nam trong LO cua chi tiet lon (truong hop da duoc ho tro): chu khac
+        /// dat trong chi tiet nho phai thuoc ve chi tiet NHO, khong phai chi tiet bao ngoai.
+        /// </summary>
+        private static void R30_EngravingInnermostWins()
+        {
+            List<CurveChain> c = new List<CurveChain>
+            {
+                Box(0, 0, 400, 400),        // chi tiet lon
+                Box(50, 50, 300, 300),      // lo cua no
+                Box(120, 120, 160, 160)     // chi tiet nho nam trong lo
+            };
+
+            RecognitionResult r = Recognize(c);
+            Equal(2, Valid(r).Count, "hai chi tiet");
+
+            True(PartRecognizer.AttachEngraving(r.Parts, 904, new Pt(200, 200)), "gan duoc");
+
+            RecognizedPart small = null, big = null;
+            foreach (RecognizedPart p in Valid(r))
+            {
+                if (p.Outer.Area < 200.0 * 200.0) small = p;
+                else big = p;
+            }
+
+            True(small != null && big != null, "tim duoc ca hai chi tiet");
+            True(small.EngravingSources.Contains(904), "chu khac thuoc chi tiet NHO");
+            True(!big.EngravingSources.Contains(904), "chi tiet lon KHONG duoc nhan");
+        }
+
+        /// <summary>Nhieu chu khac tren nhieu chi tiet: moi chu ve dung chi tiet cua no.</summary>
+        private static void R31_EngravingManyPartsSeparate()
+        {
+            RecognitionResult r = Recognize(new List<CurveChain>
+            {
+                Box(0, 0, 200, 100),
+                Box(400, 0, 200, 100)
+            });
+
+            RecognizedPart a = Valid(r).Find(p => p.MinX < 1);
+            RecognizedPart b = Valid(r).Find(p => p.MinX > 1);
+
+            True(PartRecognizer.AttachEngraving(r.Parts, 910, new Pt(50, 50)), "A1");
+            True(PartRecognizer.AttachEngraving(r.Parts, 911, new Pt(150, 50)), "A2");
+            True(PartRecognizer.AttachEngraving(r.Parts, 912, new Pt(500, 50)), "B1");
+
+            Equal(2, a.EngravingSources.Count, "chi tiet A co 2 chu khac");
+            Equal(1, b.EngravingSources.Count, "chi tiet B co 1 chu khac");
+            True(a.EngravingSources.Contains(910) && a.EngravingSources.Contains(911), "dung 2 chu cua A");
+            True(b.EngravingSources.Contains(912), "dung chu cua B");
+
+            // Gan lai cung mot nguon khong duoc nhan doi.
+            PartRecognizer.AttachEngraving(r.Parts, 910, new Pt(50, 50));
+            Equal(2, a.EngravingSources.Count, "gan lai khong duoc nhan doi");
+        }
+
+        /// <summary>
+        /// Chu nam TRONG duong bao la CHU CAT tren chi tiet (ma chi tiet) - may se cat no that,
+        /// nen no phai di theo chi tiet ra ban ve moi va xoay / lat cung chi tiet.
+        ///
+        /// Nhung chu doc ra duoc SL / vat lieu thi la THONG TIN, khong phai thu de cat - chi doc
+        /// roi thoi. Phan biet bang chinh noi dung, khong bat nguoi dung them layer.
+        /// </summary>
+        private static void R33_InsideCutTextTravelsWithPart()
+        {
+            // A: ma chi tiet nam trong phoi   B: SL nam trong phoi
+            List<CurveChain> c = new List<CurveChain> { Box(0, 0, 400, 200), Box(600, 0, 400, 200) };
+            RecognitionResult r = Recognize(c,
+                Text("P-L-347-566-1", 200, 100),
+                Text("SL: 5", 800, 100));
+
+            RecognizedPart a = Valid(r).Find(p => p.MinX < 1);
+            RecognizedPart b = Valid(r).Find(p => p.MinX > 1);
+            True(a != null && b != null, "hai chi tiet");
+
+            // A: ma chi tiet -> chu CAT, phai di theo
+            Equal(1, a.EngravingSources.Count, "ma chi tiet trong phoi phai di theo phoi");
+            True(a.GeometrySources.Contains(a.EngravingSources[0]),
+                "phai nam trong GeometrySources thi moi duoc xuat ra ban ve");
+            True(a.Name.IndexOf("P-L-347-566-1", StringComparison.Ordinal) >= 0,
+                "va van dung lam ten cho de nhan mat, nhan duoc: " + a.Name);
+
+            // B: SL -> thong tin, chi doc, KHONG cat
+            Equal(5, b.Quantity, "SL van phai doc duoc");
+            Equal(0, b.EngravingSources.Count, "chu THONG TIN khong duoc mang di cat");
+
+            // Chu nam NGOAI moi phoi thi cung khong duoc mang di cat.
+            RecognitionResult outside = Recognize(
+                new List<CurveChain> { Box(0, 0, 400, 200) },
+                Text("GHI CHU CHUNG", 900, 900));
+            Equal(0, Valid(outside)[0].EngravingSources.Count, "chu ngoai phoi khong di theo phoi nao");
         }
 
         private static CurveChain Box(double x, double y, double w, double h)

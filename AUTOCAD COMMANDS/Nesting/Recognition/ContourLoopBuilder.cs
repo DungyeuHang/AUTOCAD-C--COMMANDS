@@ -21,6 +21,15 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
     {
         private readonly RecognitionSettings _settings;
 
+        /// <summary>So duong bao trung khit da duoc gop lam 1 (xem <see cref="AddLoop"/>).</summary>
+        public int MergedDuplicateLoops { get; private set; }
+
+        /// <summary>Vi tri mot duong bao trung khit, de nguoi dung con biet duong ma don ban ve.</summary>
+        public string FirstDuplicateAt { get; private set; }
+
+        /// <summary>So nhom hinh HO nam ngoai moi chi tiet da bi bo qua.</summary>
+        public int DroppedOpenGroups { get; private set; }
+
         public ContourLoopBuilder(RecognitionSettings settings)
         {
             _settings = settings ?? new RecognitionSettings();
@@ -82,10 +91,19 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             List<Edge> dangling = new List<Edge>();
             List<int> open = new List<int>();
             HashSet<int> openNodes = new HashSet<int>();
+
+            // openNodes se gom MOI nut lo ra trong luc tia dan (boc tung lop). De biet mot nhom
+            // hinh ho co phai la duong bao dinh ve kin hay khong thi can DAU HO THAT SU - tuc
+            // la nut co bac 1 ngay tu dau, truoc khi tia.
+            HashSet<int> freeEnds = new HashSet<int>();
             Queue<int> queue = new Queue<int>();
             for (int n = 0; n < nodes.Count; n++)
             {
-                if (degree[n] == 1) queue.Enqueue(n);
+                if (degree[n] == 1)
+                {
+                    queue.Enqueue(n);
+                    freeEnds.Add(n);
+                }
             }
 
             while (queue.Count > 0)
@@ -205,9 +223,14 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 for (int j = i + 1; j < loops.Count; j++)
                 {
                     if (!BoxOverlap(loops[i].Data, loops[j].Data)) continue;
-                    if (GeometryMath.RingsTouch(loops[i].Ring, loops[j].Ring))
+                    IntPoint touch;
+                    if (GeometryMath.RingsTouch(loops[i].Ring, loops[j].Ring, out touch))
                     {
-                        string msg = "Duong bao cat/cham duong bao khac (lo cham bien hoac 2 chi tiet chong nhau)";
+                        // Duong bao TRUNG KHIT da duoc gop lam 1 tu truoc (xem AddLoop), nen den
+                        // day chi con truong hop cham / cat that su.
+                        string msg = string.Format(CultureInfo.InvariantCulture,
+                            "Duong bao cat/cham duong bao khac (lo cham bien hoac 2 chi tiet chong nhau) - tai ({0:0.##}, {1:0.##})",
+                            NestUnits.ToMm(touch.X), NestUnits.ToMm(touch.Y));
                         loops[i].Part.Escalate(PartStatus.InvalidGeometry, msg);
                         loops[j].Part.Escalate(PartStatus.InvalidGeometry, msg);
                     }
@@ -217,13 +240,13 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             // ---- 6. open / branching geometry ----
             foreach (List<Edge> group in GroupDangling(dangling))
             {
-                AssignOpenGeometry(group, parts, records, "Duong bao HO (khong kin)", openNodes, nodes);
+                AssignOpenGeometry(group, parts, records, "Duong bao HO (khong kin)", openNodes, freeEnds, nodes);
             }
 
             for (int k = 0; k < branchingComponents.Count; k++)
             {
                 AssignOpenGeometry(branchingComponents[k], parts, records,
-                    "Hinh hoc re nhanh tai " + branchPoints[k] + " (hon 2 doi tuong gap nhau 1 diem)", null, nodes);
+                    "Hinh hoc re nhanh tai " + branchPoints[k] + " (hon 2 doi tuong gap nhau 1 diem)", null, null, nodes);
             }
 
             records.InsertRange(0, parts);
@@ -259,6 +282,24 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 invalid = "Duong bao tu cat (self-intersecting)";
             }
 
+            // Duong bao TRUNG KHIT voi mot duong da co (ve de len nhau hai lan) khong phai la
+            // mot chi tiet / mot lo thu hai - no la CHINH cai do. Gop lam 1 va bo ban sao di:
+            // giu lai thi hai duong bao se "cham nhau" o moi diem va ca chi tiet bi bao la
+            // hinh hoc loi, con neu xuat ca hai thi may CNC se cat hai lan cung mot duong.
+            foreach (Loop existing in loops)
+            {
+                if (!SameLoop(existing.Data, data)) continue;
+
+                MergedDuplicateLoops++;
+                if (FirstDuplicateAt == null)
+                {
+                    FirstDuplicateAt = string.Format(CultureInfo.InvariantCulture,
+                        "({0:0.##}, {1:0.##})", data.MinX, data.MinY);
+                }
+
+                return;
+            }
+
             loops.Add(new Loop { Data = data, Ring = ring, Invalid = invalid != null, InvalidReason = invalid });
         }
 
@@ -272,7 +313,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
 
         private void AssignOpenGeometry(
             List<Edge> group, List<RecognizedPart> parts, List<RecognizedPart> records, string reason,
-            HashSet<int> openNodes, List<Pt> nodes)
+            HashSet<int> openNodes, HashSet<int> freeEnds, List<Pt> nodes)
         {
             // Smallest part whose outline contains every point of the group -> marking.
             RecognizedPart owner = null;
@@ -335,7 +376,49 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 }
             }
 
+            // Hinh nam ngoai MOI chi tiet. Tren ban ve san xuat that co hang chuc thu nhu the
+            // (duong dan, ghi chu, net thua) - bat nguoi dung xac nhan tung cai la vo ich.
+            //
+            // Nhung KHONG duoc bo tat: mot duong bao dinh ve kin ma bi ho mot khe nho cung roi
+            // vao day, va do moi la thu nguoi dung CAN thay de sua. Phan biet bang chinh hai
+            // dau ho: gan nhau so voi kich thuoc cua no thi la duong bao ho (giu lai, bao loi);
+            // xa nhau thi khong phai chi tiet (bo).
+            if (freeEnds != null && !LooksLikeAlmostClosed(group, freeEnds, nodes, minX, minY, maxX, maxY))
+            {
+                DroppedOpenGroups++;
+                return;
+            }
+
             records.Add(InvalidRecord(sources, minX, minY, maxX, maxY, reason + where));
+        }
+
+        /// <summary>
+        /// Nhom hinh ho nay co giong mot duong bao dinh ve KIN ma bi ho khe khong?
+        ///
+        /// Dieu kien: dung HAI dau ho, va khoang cach giua chung khong qua 5% duong cheo hop
+        /// bao cua chinh nhom do. Quy tac nay khong phu thuoc don vi hay ty le ban ve: khe ho
+        /// 2 mm tren chi tiet 100x50 la 1.8% (giu lai), con mot duong dan thi hai dau cach
+        /// nhau gan bang chieu dai cua no (bo di).
+        /// </summary>
+        private static bool LooksLikeAlmostClosed(
+            List<Edge> group, HashSet<int> freeEnds, List<Pt> nodes,
+            double minX, double minY, double maxX, double maxY)
+        {
+            List<int> ends = new List<int>();
+            foreach (Edge e in group)
+            {
+                if (freeEnds.Contains(e.A) && !ends.Contains(e.A)) ends.Add(e.A);
+                if (freeEnds.Contains(e.B) && !ends.Contains(e.B)) ends.Add(e.B);
+                if (ends.Count > 2) return false;
+            }
+
+            if (ends.Count != 2) return false;
+
+            double gap = nodes[ends[0]].DistanceTo(nodes[ends[1]]);
+            double w = maxX - minX, h = maxY - minY;
+            double diagonal = Math.Sqrt(w * w + h * h);
+
+            return diagonal > 0.0 && gap <= diagonal * 0.05;
         }
 
         private static bool PointInOrOn(Pt p, List<Pt> ring)
@@ -429,6 +512,31 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
         private static bool BoxContains(RecognizedLoop outer, RecognizedLoop inner)
         {
             return outer.MinX <= inner.MinX && outer.MinY <= inner.MinY && outer.MaxX >= inner.MaxX && outer.MaxY >= inner.MaxY;
+        }
+
+        /// <summary>
+        /// Hai duong bao co phai la MOT khong (ve trung len nhau): cung hop bao va cung dien
+        /// tich. Chi dung de CHON CAU CHU cho de hieu - ket luan hop le / khong hop le khong
+        /// he thay doi.
+        /// </summary>
+        private static bool SameLoop(RecognizedLoop a, RecognizedLoop b)
+        {
+            const double boxTolerance = 0.01;      // mm
+
+            // So dinh phai bang nhau: hai duong bao KHAC nhau ma trung ca hop bao lan dien tich
+            // la chuyen hiem, nhung gop nham hai lo khac nhau thi mat hinh - nen doi them dieu
+            // kien nay truoc khi dam gop.
+            if (a.Points.Count != b.Points.Count) return false;
+
+            if (Math.Abs(a.MinX - b.MinX) > boxTolerance) return false;
+            if (Math.Abs(a.MinY - b.MinY) > boxTolerance) return false;
+            if (Math.Abs(a.MaxX - b.MaxX) > boxTolerance) return false;
+            if (Math.Abs(a.MaxY - b.MaxY) > boxTolerance) return false;
+
+            double biggest = Math.Max(a.Area, b.Area);
+            if (biggest <= 0.0) return true;
+
+            return Math.Abs(a.Area - b.Area) / biggest <= 0.001;
         }
 
         private static bool BoxOverlap(RecognizedLoop a, RecognizedLoop b)

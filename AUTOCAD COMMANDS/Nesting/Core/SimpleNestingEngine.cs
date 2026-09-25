@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -44,7 +44,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             return (material ?? string.Empty).Trim().ToUpperInvariant();
         }
 
-        public NestingResult Nest(NestingRequest request, CancellationToken cancellation, Action<string> progress)
+        public NestingResult Nest(NestingRequest request, CancellationToken cancellation, Action<NestingProgress> progress)
         {
             if (request == null) throw new ArgumentNullException("request");
 
@@ -71,6 +71,12 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             }
 
             result.Statistics.PartGroupCount = request.Groups.Count;
+
+            // Tong so luot ghep cua CA LENH, biet truoc de ve duoc thanh tien trinh that:
+            // moi vat lieu chay cung mot so luot (moi thu tu xep x hai chinh sach dat).
+            int runsPerMaterial = MultiOrderOptimizer.RunCount(settings);
+            int totalRuns = Math.Max(1, byMaterial.Count * runsPerMaterial);
+            int materialIndex = 0;
 
             foreach (KeyValuePair<string, List<PartGroup>> entry in byMaterial)
             {
@@ -121,7 +127,23 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                     PrepareOrientations(job, g, sheet, collision);
                 }
 
-                OptimizationOutcome outcome = _optimizer.Optimize(job, cancellation, progress);
+                // Bo toi uu chi biet luot chay cua RIENG vat lieu nay, nen cong them phan cac
+                // vat lieu truoc do de con so bao ra la tien do cua ca lenh.
+                int done = materialIndex * runsPerMaterial;
+                Action<NestingProgress> relay = progress == null
+                    ? (Action<NestingProgress>)null
+                    : p => progress(new NestingProgress(p.Message, done + p.Done, totalRuns));
+
+                OptimizationOutcome outcome = _optimizer.Optimize(job, cancellation, relay);
+                materialIndex++;
+
+                // Vat lieu nay xong: day thanh tien trinh len dung moc, ke ca khi co luot bi
+                // bo qua vi het gio hay nguoi dung bam Dung - neu khong thanh se dung lung chung.
+                if (progress != null)
+                {
+                    progress(new NestingProgress(material + ": xong", materialIndex * runsPerMaterial, totalRuns));
+                }
+
                 ms.OrderingsTried = outcome.OrderingsTried;
                 ms.TimeBudgetHit = outcome.TimeBudgetHit;
                 if (outcome.Cancelled) result.Cancelled = true;

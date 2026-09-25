@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  GHOPHOI - tang AutoCAD, chay KHONG GIAO DIEN (accoreconsole).
+
+  Vi sao co project nay:
+    Plugin that ("AUTOCAD COMMANDS.dll") tham chieu acmgd + AdWindows va dung ribbon luc khoi
+    dong. accoreconsole khong co hai assembly do, nen NETLOAD plugin that vao accoreconsole se
+    lam host chet ngay o buoc khoi dong. Nhung toan bo tang GHOPHOI cham AutoCAD lai CHI can
+    acdbmgd (Database/Transaction/Entity) + accoremgd - khong can giao dien.
+
+    Project nay LINK dung nhung file .cs do cua plugin (khong chep lai dong nao) thanh mot DLL
+    nap duoc vao accoreconsole, de chay GHOPHOI_BATCH va GHOPHOI_TEST tren ban ve THAT.
+    Neu mot file trong danh sach duoi bat dau can den giao dien, project nay se khong bien dich
+    duoc - do chinh la canh bao kien truc can co.
+
+  Build:
+    msbuild NestingCad.Tests\NestingCad.Tests.csproj /p:Configuration=Debug /p:Platform=x64
+-->
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">x64</Platform>
+    <ProjectGuid>{3C9A1F42-7D6B-4A18-9C33-51E8B0D7A204}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>AUTOCAD_COMMANDS</RootNamespace>
+    <AssemblyName>NestingCad.Tests</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <LangVersion>7.3</LangVersion>
+    <FileAlignment>512</FileAlignment>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x64' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <PlatformTarget>x64</PlatformTarget>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x64' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <PlatformTarget>x64</PlatformTarget>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="accoremgd">
+      <HintPath>C:\Program Files\Autodesk\AutoCAD 2022\accoremgd.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="acdbmgd">
+      <HintPath>C:\Program Files\Autodesk\AutoCAD 2022\acdbmgd.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Loi thuat toan + nhan dang + bo test: khong cham AutoCAD. -->
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\Core\*.cs">
+      <Link>Linked\Core\%(Filename)%(Extension)</Link>
+    </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\Recognition\*.cs">
+      <Link>Linked\Recognition\%(Filename)%(Extension)</Link>
+    </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\SelfTests\*.cs">
+      <Link>Linked\SelfTests\%(Filename)%(Extension)</Link>
+    </Compile>
+
+    <!-- Helper dung chung cua plugin (layer / mtext) - cung khong can giao dien. -->
+    <Compile Include="..\AUTOCAD COMMANDS\Helpers\CadLayerHelper.cs">
+      <Link>Linked\CadLayerHelper.cs</Link>
+    </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Helpers\CadMTextHelper.cs">
+      <Link>Linked\CadMTextHelper.cs</Link>
+    </Compile>
+
+    <!-- Tang AutoCAD cua GHOPHOI: chi can acdbmgd, khong can giao dien. -->
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\GhoPhoiSettings.cs">
+      <Link>Linked\GhoPhoiSettings.cs</Link>
+    </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\GhoPhoiSettingsStore.cs">
+      <Link>Linked\GhoPhoiSettingsStore.cs</Link>
+    </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\NestingSelectionReader.cs">
+      <Link>Linked\NestingSelectionReader.cs</Link>
+    </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\NestingDwgWriter.cs">
+      <Link>Linked\NestingDwgWriter.cs</Link>
+    </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\GhoPhoiPipeline.cs">
+      <Link>Linked\GhoPhoiPipeline.cs</Link>
+    </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\GhoPhoiCadTests.cs">
+      <Link>Linked\GhoPhoiCadTests.cs</Link>
+    </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\GhoPhoiBatchCommand.cs">
+      <Link>Linked\GhoPhoiBatchCommand.cs</Link>
+    </Compile>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

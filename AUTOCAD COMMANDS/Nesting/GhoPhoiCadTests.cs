@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -26,6 +26,10 @@ namespace AUTOCAD_COMMANDS.Nesting
             NestingTestHarness.Run(report, "B7. Forensic DWG: nguon khong doi, ARC/LINE giu nguyen, SL, vat lieu, khung, nhan, khong rac", B7_OutputForensic);
             NestingTestHarness.Run(report, "B8. File da ton tai -> _2; ghi loi -> exception ro rang, khong file rac", B8_OutputPathAndWriteFailure);
             NestingTestHarness.Run(report, "B9. TEXT can giua chua adjust nam giua 2 chi tiet -> AMBIGUOUS", B9_UnadjustedJustifiedTextAmbiguous);
+            NestingTestHarness.Run(report, "B10. Layer khac: TEXT/MTEXT la hinh khac, layer bao van la thong tin", B10_EngravingLayerRouting);
+            NestingTestHarness.Run(report, "B11. Chu khac theo DUNG phep bien hinh cua chi tiet o ca 8 huong", B11_EngravingTransform);
+            NestingTestHarness.Run(report, "B12. Chi tiet CHUA XEP van mang theo hinh khac", B12_EngravingOnUnplacedPart);
+            NestingTestHarness.Run(report, "B13. Ve thang vao ban ve dang mo, da pha khoi, giu layer", B13_DrawIntoCurrentDrawing);
             NestingTestHarness.Summary(report);
             return report;
         }
@@ -73,6 +77,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             read = NestingSelectionReader.Read(tr, ModelSpaceIds(db, tr), s);
             RecognitionResult r = new PartRecognizer(s.ToRecognitionSettings()).Recognize(read.Chains, read.Texts);
             foreach (KeyValuePair<int, List<Pt>> m in read.Markings) PartRecognizer.AttachMarking(r.Parts, m.Key, m.Value);
+            GhoPhoiPipeline.AttachEngravings(read, r, s);
             return r;
         }
 
@@ -313,6 +318,563 @@ namespace AUTOCAD_COMMANDS.Nesting
             }
         }
 
+        /// <summary>
+        /// Phan loai chu theo LAYER, khong doan theo noi dung:
+        ///   _mss.khac  -> hinh khac len chi tiet, di theo chi tiet khi xuat
+        ///   _mss.bao   -> thong tin (SL / vat lieu), KHONG bao gio bi khac
+        /// Chu khac nam ngoai moi chi tiet thi khong bi nuot im lang ma duoc bao ra.
+        /// </summary>
+        private static void B10_EngravingLayerRouting()
+        {
+            using (Database db = new Database(true, true))
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                ObjectId engraveLayer = CadLayerHelper.EnsureLayer(db, tr, "_mss.khac");
+                ObjectId infoLayer = CadLayerHelper.EnsureLayer(db, tr, "_mss.bao");
+
+                Append(db, tr, RoundedRect(0, 0, 200, 100, 0.0001));        // chi tiet A
+                Append(db, tr, RoundedRect(400, 0, 200, 100, 0.0001));      // chi tiet B
+
+                // hinh khac
+                Append(db, tr, new DBText
+                {
+                    TextString = "H",
+                    Position = new Point3d(60, 40, 0),
+                    Height = 10,
+                    LayerId = engraveLayer
+                });
+                Append(db, tr, new MText
+                {
+                    Contents = "ABC-123",
+                    Location = new Point3d(500, 50, 0),
+                    TextHeight = 8,
+                    LayerId = engraveLayer
+                });
+
+                // thong tin - phai duoc doc chu KHONG duoc khac
+                Append(db, tr, new DBText
+                {
+                    TextString = "SL: 3",
+                    Position = new Point3d(20, 20, 0),
+                    Height = 10,
+                    LayerId = infoLayer
+                });
+                Append(db, tr, new MText
+                {
+                    Contents = "1.5MM",
+                    Location = new Point3d(430, 20, 0),
+                    TextHeight = 8,
+                    LayerId = infoLayer
+                });
+
+                // chu khac lac ngoai moi chi tiet
+                Append(db, tr, new DBText
+                {
+                    TextString = "LAC",
+                    Position = new Point3d(1500, 1500, 0),
+                    Height = 10,
+                    LayerId = engraveLayer
+                });
+
+                NestReadResult read;
+                RecognitionResult r = ReadAndRecognize(db, tr, Settings(), out read);
+
+                Equal(3, read.Engravings.Count, "3 chu tren layer khac");
+                Equal(2, read.Texts.Count, "2 chu thong tin - chu khac KHONG lot vao day");
+
+                RecognizedPart a = null, b = null;
+                foreach (RecognizedPart p in r.Parts)
+                {
+                    if (p.Outer == null) continue;
+                    if (p.MinX < 1) a = p;
+                    else b = p;
+                }
+
+                True(a != null && b != null, "nhan dang duoc 2 chi tiet");
+
+                Equal(1, a.EngravingSources.Count, "A co 1 hinh khac");
+                Equal(1, b.EngravingSources.Count, "B co 1 hinh khac");
+                Equal(0, a.MarkingSources.Count, "hinh khac KHONG duoc dem la duong ho");
+                Equal(0, b.MarkingSources.Count, "hinh khac KHONG duoc dem la duong ho");
+
+                Equal(3, a.Quantity, "SL van doc duoc tu layer bao");
+                Equal("1.5MM", b.Material, "vat lieu van doc duoc tu layer bao");
+
+                bool warned = false;
+                foreach (string w in r.GlobalWarnings)
+                {
+                    if (w.IndexOf("_mss.khac", StringComparison.OrdinalIgnoreCase) >= 0) warned = true;
+                }
+
+                True(warned, "chu khac lac ngoai chi tiet phai duoc bao, khong duoc nuot im lang");
+                tr.Abort();
+            }
+        }
+
+        /// <summary>
+        /// BAT BIEN CHINH cua tinh nang nay: hinh khac phai nhan DUNG phep bien hinh ma chi
+        /// tiet nhan - khong phai "cong them do doi cho".
+        ///
+        /// Cach kiem: voi ca 8 huong (4 goc xoay x lat guong), lay diem neo cua chu trong
+        /// block roi bien hinh bang BlockTransform cua AutoCAD, va so voi diem tinh DOC LAP
+        /// bang chinh phep bien hinh cua LOI (OrientationTransform.Apply). Hai con duong
+        /// hoan toan khac nhau phai ra cung mot diem.
+        ///
+        /// Dong thoi kiem noi dung block: dung 1 duong bao + 1 TEXT + 1 MTEXT khac, va
+        /// TUYET DOI khong co chu thong tin cua layer bao.
+        /// </summary>
+        private static void B11_EngravingTransform()
+        {
+            string path = Path.Combine(Path.GetTempPath(), "ghophoi_engrave_" + Guid.NewGuid().ToString("N") + ".dwg");
+            try
+            {
+                using (Database db = new Database(true, true))
+                {
+                    NestReadResult read;
+                    RecognitionResult rec;
+                    Point3d textPos = new Point3d(1060, 540, 0);
+                    Point3d mtextPos = new Point3d(1180, 520, 0);
+                    int sourceCountBefore;
+
+                    using (Transaction tr = db.TransactionManager.StartTransaction())
+                    {
+                        ObjectId engraveLayer = CadLayerHelper.EnsureLayer(db, tr, "_mss.khac");
+                        ObjectId infoLayer = CadLayerHelper.EnsureLayer(db, tr, "_mss.bao");
+
+                        // Chi tiet KHONG doi xung (co mot canh cung) de lat guong nhin ra ngay.
+                        Polyline pl = new Polyline();
+                        double[] xy = { 1000, 500, 1300, 500, 1300, 560, 1100, 560, 1100, 700, 1000, 700 };
+                        for (int i = 0; i < xy.Length; i += 2)
+                        {
+                            pl.AddVertexAt(i / 2, new Point2d(xy[i], xy[i + 1]), i == 2 ? 0.5 : 0.0, 0, 0);
+                        }
+
+                        pl.Closed = true;
+                        Append(db, tr, pl);
+
+                        // Chu khac: co goc xoay va can giua - hai thu de sai nhat.
+                        DBText t = new DBText
+                        {
+                            TextString = "H7",
+                            Height = 12,
+                            Rotation = 30.0 * Math.PI / 180.0,
+                            LayerId = engraveLayer
+                        };
+                        t.Position = textPos;
+                        t.HorizontalMode = TextHorizontalMode.TextCenter;
+                        t.VerticalMode = TextVerticalMode.TextVerticalMid;
+                        t.AlignmentPoint = textPos;
+                        Append(db, tr, t);
+
+                        Append(db, tr, new MText
+                        {
+                            Contents = "MA-99",
+                            Location = mtextPos,
+                            TextHeight = 9,
+                            LayerId = engraveLayer
+                        });
+
+                        // Thong tin - phai KHONG bao gio xuat hien trong block.
+                        Append(db, tr, new DBText
+                        {
+                            TextString = "SL: 8",
+                            Position = new Point3d(1020, 680, 0),
+                            Height = 10,
+                            LayerId = infoLayer
+                        });
+
+                        tr.Commit();
+                    }
+
+                    using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+                    {
+                        rec = ReadAndRecognize(db, tr, Settings(), out read);
+                        sourceCountBefore = ModelSpaceIds(db, tr).Count;
+                    }
+
+                    Equal(1, rec.Parts.Count, "mot chi tiet");
+                    Equal(2, rec.Parts[0].EngravingSources.Count, "TEXT + MTEXT deu la hinh khac");
+                    Equal(8, rec.Parts[0].Quantity, "SL van doc duoc tu layer bao");
+
+                    NestingRequest req = new NestingRequest { DefaultSheet = new SheetSpec("T", 3000, 1000) };
+                    req.Settings.AllowMirror = true;
+                    PartGroup g0 = PartRecognizer.ToPartGroups(rec.Parts, Settings().ArcToleranceMm)[0];
+                    PartGroup g = new PartGroup(g0.Id, g0.Shape, 8, g0.Material)
+                    {
+                        Name = g0.Name,
+                        SourceReference = g0.SourceReference
+                    };
+
+                    req.Groups.Add(g);
+
+                    NestingResult res = new NestingResult();
+                    SheetResult sheet = new SheetResult(0, g.Material, req.DefaultSheet) { NumberInMaterial = 1 };
+                    int k = 0;
+                    foreach (bool mirror in new[] { false, true })
+                    {
+                        foreach (double rot in new[] { 0.0, 90.0, 180.0, 270.0 })
+                        {
+                            OrientationTransform o = new OrientationTransform(rot, mirror);
+                            LongRect bb = g.Shape.Polygon.Transform(o, 0, 0).Bounds;
+                            long cx = NestUnits.ToUnits(200 + 350 * k), cy = NestUnits.ToUnits(500);
+                            sheet.Placements.Add(new Placement
+                            {
+                                InstanceId = g.Id + "#" + (k + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                                PartGroupId = g.Id,
+                                SheetIndex = 0,
+                                RotationDeg = rot,
+                                Mirror = mirror,
+                                TranslationX = cx - (bb.MinX + bb.MaxX) / 2,
+                                TranslationY = cy - (bb.MinY + bb.MaxY) / 2
+                            });
+
+                            k++;
+                        }
+                    }
+
+                    res.Sheets.Add(sheet);
+                    res.Validation = new NestingValidator().Validate(req, res);
+                    True(res.Validation.IsValid, "8 huong hop le");
+
+                    RecognizedPart rp = (RecognizedPart)g.SourceReference;
+                    Pt origin = PartRecognizer.LocalOrigin(rp);
+                    OutputPart op = new OutputPart { Group = g, Origin = new Point3d(origin.X, origin.Y, 0) };
+                    foreach (int s in rp.GeometrySources) op.SourceIds.Add(read.Sources[s].Id);
+
+                    GhoPhoiSettings settings = Settings();
+
+                    // BAT nhan ten chi tiet len: chi tiet da mang chu khac cua nguoi dung thi
+                    // KHONG duoc ve them nhan tu sinh - neu khong se thanh hai chu khac nhau,
+                    // va cai khong phai cua ho lai nam chinh giua chi tiet.
+                    settings.LabelParts = true;
+                    NestingDwgWriter.Write(db, path, req, res, new List<OutputPart> { op }, settings, "test");
+
+                    double cornerX = 0, cornerY = -req.DefaultSheet.WidthMm;
+
+                    using (Database check = new Database(false, true))
+                    {
+                        check.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare, true, string.Empty);
+                        using (Transaction tr = check.TransactionManager.StartTransaction())
+                        {
+                            List<BlockReference> refs = new List<BlockReference>();
+                            foreach (ObjectId id in ModelSpaceIds(check, tr))
+                            {
+                                BlockReference br = tr.GetObject(id, OpenMode.ForRead) as BlockReference;
+                                if (br != null) refs.Add(br);
+                            }
+
+                            Equal(8, refs.Count, "8 insert");
+
+                            int generatedLabels = 0;
+                            foreach (ObjectId id in ModelSpaceIds(check, tr))
+                            {
+                                Entity e = (Entity)tr.GetObject(id, OpenMode.ForRead);
+                                if (e is MText && string.Equals(e.Layer, NestingDwgWriter.LabelLayer, StringComparison.Ordinal))
+                                {
+                                    generatedLabels++;
+                                }
+                            }
+
+                            Equal(0, generatedLabels,
+                                "chi tiet da co chu khac thi khong duoc ve them nhan ten tu sinh");
+
+                            // ---- noi dung block: dung nhung gi can co ----
+                            BlockTableRecord def = (BlockTableRecord)tr.GetObject(refs[0].BlockTableRecord, OpenMode.ForRead);
+                            int polylines = 0, texts = 0, mtexts = 0;
+                            DBText engravedText = null;
+                            MText engravedMText = null;
+
+                            foreach (ObjectId id in def)
+                            {
+                                Entity e = (Entity)tr.GetObject(id, OpenMode.ForRead);
+                                if (e is Polyline) polylines++;
+                                else if (e is MText)
+                                {
+                                    mtexts++;
+                                    engravedMText = (MText)e;
+                                }
+                                else if (e is DBText)
+                                {
+                                    texts++;
+                                    engravedText = (DBText)e;
+                                }
+                            }
+
+                            Equal(1, polylines, "1 duong bao trong block");
+                            Equal(1, texts, "dung 1 TEXT khac trong block");
+                            Equal(1, mtexts, "dung 1 MTEXT khac trong block");
+
+                            True(engravedText.TextString == "H7", "noi dung TEXT giu nguyen");
+                            True(engravedMText.Contents.IndexOf("MA-99", StringComparison.Ordinal) >= 0,
+                                "noi dung MTEXT giu nguyen");
+                            True(Math.Abs(engravedText.Height - 12) < 1e-9, "chieu cao TEXT giu nguyen");
+                            True(Math.Abs(engravedMText.TextHeight - 9) < 1e-9, "chieu cao MTEXT giu nguyen");
+                            Equal("_mss.khac", engravedText.Layer, "TEXT giu nguyen layer");
+                            Equal("_mss.khac", engravedMText.Layer, "MTEXT giu nguyen layer");
+                            True(engravedText.TextString.IndexOf("SL", StringComparison.Ordinal) < 0,
+                                "chu thong tin KHONG duoc lot vao block");
+
+                            // ---- bien hinh: hai duong tinh doc lap phai trung nhau ----
+                            foreach (Placement pl in sheet.Placements)
+                            {
+                                Point3d expectedInsert = new Point3d(cornerX + pl.TranslationXMm, cornerY + pl.TranslationYMm, 0);
+                                BlockReference br = refs.Find(x => x.Position.DistanceTo(expectedInsert) < 1e-6);
+                                True(br != null, pl.InstanceId + ": co insert dung cho");
+
+                                string tag = pl.InstanceId + " (" + pl.Orientation + ")";
+
+                                CheckEngravedPoint(tag + " TEXT", engravedText.Position, textPos,
+                                    origin, pl, br, cornerX, cornerY);
+                                CheckEngravedPoint(tag + " TEXT-align", engravedText.AlignmentPoint, textPos,
+                                    origin, pl, br, cornerX, cornerY);
+                                CheckEngravedPoint(tag + " MTEXT", engravedMText.Location, mtextPos,
+                                    origin, pl, br, cornerX, cornerY);
+                            }
+
+                            tr.Commit();
+                        }
+                    }
+
+                    // ---- ban ve nguon khong duoc doi ----
+                    using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+                    {
+                        Equal(sourceCountBefore, ModelSpaceIds(db, tr).Count, "so doi tuong nguon khong doi");
+
+                        int stillThere = 0;
+                        foreach (ObjectId id in ModelSpaceIds(db, tr))
+                        {
+                            DBText t = tr.GetObject(id, OpenMode.ForRead) as DBText;
+                            if (t != null && t.TextString == "H7")
+                            {
+                                stillThere++;
+                                True(t.Position.DistanceTo(textPos) < 1e-9, "TEXT nguon khong bi di chuyen");
+                                Equal("_mss.khac", t.Layer, "TEXT nguon khong bi doi layer");
+                            }
+                        }
+
+                        Equal(1, stillThere, "TEXT khac nguon van con nguyen");
+                        tr.Commit();
+                    }
+                }
+            }
+            finally
+            {
+                TryDelete(path);
+            }
+        }
+
+        /// <summary>
+        /// So diem neo cua chu sau khi bien hinh theo HAI duong doc lap:
+        ///   (1) AutoCAD: diem trong block x BlockTransform cua BlockReference,
+        ///   (2) LOI    : OrientationTransform.Apply tren toa do dia phuong cua chi tiet.
+        /// Chung phai ra cung mot cho - do la dinh nghia cua "hinh khac nhan dung phep bien
+        /// hinh ma chi tiet nhan".
+        /// </summary>
+        /// <summary>
+        /// Chi tiet khong vua to nao van duoc ve rieng o duoi ban ve. No dung CHUNG dinh nghia
+        /// block voi chi tiet da xep, nen hinh khac phai di theo - khong duoc roi mat chi vi
+        /// chi tiet chua xep duoc.
+        /// </summary>
+        private static void B12_EngravingOnUnplacedPart()
+        {
+            string path = Path.Combine(Path.GetTempPath(), "ghophoi_unplaced_" + Guid.NewGuid().ToString("N") + ".dwg");
+            try
+            {
+                using (Database db = new Database(true, true))
+                {
+                    NestReadResult read;
+                    RecognitionResult rec;
+
+                    using (Transaction tr = db.TransactionManager.StartTransaction())
+                    {
+                        ObjectId engraveLayer = CadLayerHelper.EnsureLayer(db, tr, "_mss.khac");
+
+                        // 900 x 400: to thu nghiem chi co 500 x 300 nen khong the vua.
+                        Append(db, tr, RoundedRect(0, 0, 900, 400, 0.0001));
+                        Append(db, tr, new DBText
+                        {
+                            TextString = "KHAC-U",
+                            Position = new Point3d(450, 200, 0),
+                            Height = 20,
+                            LayerId = engraveLayer
+                        });
+
+                        tr.Commit();
+                    }
+
+                    using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+                    {
+                        rec = ReadAndRecognize(db, tr, Settings(), out read);
+                    }
+
+                    Equal(1, rec.Parts[0].EngravingSources.Count, "chi tiet co 1 hinh khac");
+
+                    NestingRequest req = new NestingRequest { DefaultSheet = new SheetSpec("T", 500, 300) };
+                    PartGroup g = PartRecognizer.ToPartGroups(rec.Parts, Settings().ArcToleranceMm)[0];
+                    req.Groups.Add(g);
+
+                    NestingResult res = new SimpleNestingEngine().Nest(req, CancellationToken.None, null);
+                    Equal(0, res.Statistics.PlacedQuantity, "khong the xep duoc");
+                    Equal(1, res.Statistics.UnplacedQuantity, "dung 1 chi tiet chua xep");
+
+                    RecognizedPart rp = (RecognizedPart)g.SourceReference;
+                    Pt origin = PartRecognizer.LocalOrigin(rp);
+                    OutputPart op = new OutputPart { Group = g, Origin = new Point3d(origin.X, origin.Y, 0) };
+                    foreach (int s in rp.GeometrySources) op.SourceIds.Add(read.Sources[s].Id);
+
+                    GhoPhoiSettings settings = Settings();
+                    settings.LabelParts = false;
+                    NestingDwgWriter.Write(db, path, req, res, new List<OutputPart> { op }, settings, "test");
+
+                    using (Database check = new Database(false, true))
+                    {
+                        check.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare, true, string.Empty);
+                        using (Transaction tr = check.TransactionManager.StartTransaction())
+                        {
+                            BlockReference br = null;
+                            foreach (ObjectId id in ModelSpaceIds(check, tr))
+                            {
+                                BlockReference b = tr.GetObject(id, OpenMode.ForRead) as BlockReference;
+                                if (b != null) br = b;
+                            }
+
+                            True(br != null, "chi tiet chua xep van duoc ve ra ban ve");
+
+                            BlockTableRecord def = (BlockTableRecord)tr.GetObject(br.BlockTableRecord, OpenMode.ForRead);
+                            int texts = 0;
+                            foreach (ObjectId id in def)
+                            {
+                                DBText t = tr.GetObject(id, OpenMode.ForRead) as DBText;
+                                if (t != null && t.TextString == "KHAC-U") texts++;
+                            }
+
+                            Equal(1, texts, "hinh khac van nam trong block cua chi tiet chua xep");
+                            tr.Commit();
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                TryDelete(path);
+            }
+        }
+
+        /// <summary>
+        /// Ve ket qua THANG vao ban ve dang mo tai diem chon, o che do DA PHA KHOI.
+        ///
+        /// Ba dieu phai dung:
+        ///   * khong con BlockReference nao - de nguyen khoi thi may CNC cat ca chu ben trong,
+        ///   * moi doi tuong GIU NGUYEN layer cua no, de xuat di cat con chon duoc layer,
+        ///   * hinh goc van nam nguyen cho cu, khong bi don di hay sua.
+        /// </summary>
+        private static void B13_DrawIntoCurrentDrawing()
+        {
+            using (Database db = new Database(true, true))
+            {
+                NestReadResult read;
+                RecognitionResult rec;
+                Point3d textAt = new Point3d(100, 50, 0);
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    ObjectId engrave = CadLayerHelper.EnsureLayer(db, tr, "_mss.khac");
+                    Append(db, tr, RoundedRect(0, 0, 200, 100, 0.0001));
+                    Append(db, tr, new DBText
+                    {
+                        TextString = "KH1",
+                        Position = textAt,
+                        Height = 10,
+                        LayerId = engrave
+                    });
+
+                    tr.Commit();
+                }
+
+                int sourceCount;
+                using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+                {
+                    rec = ReadAndRecognize(db, tr, Settings(), out read);
+                    sourceCount = ModelSpaceIds(db, tr).Count;
+                }
+
+                Equal(1, rec.Parts[0].EngravingSources.Count, "co hinh khac");
+
+                NestingRequest req = new NestingRequest { DefaultSheet = new SheetSpec("T", 1000, 600) };
+                PartGroup g = PartRecognizer.ToPartGroups(rec.Parts, Settings().ArcToleranceMm)[0];
+                req.Groups.Add(g);
+
+                NestingResult res = new SimpleNestingEngine().Nest(req, CancellationToken.None, null);
+                True(res.Statistics.PlacedQuantity == 1, "xep duoc 1 chi tiet");
+
+                RecognizedPart rp = (RecognizedPart)g.SourceReference;
+                Pt origin = PartRecognizer.LocalOrigin(rp);
+                OutputPart op = new OutputPart { Group = g, Origin = new Point3d(origin.X, origin.Y, 0) };
+                foreach (int s in rp.GeometrySources) op.SourceIds.Add(read.Sources[s].Id);
+
+                GhoPhoiSettings settings = Settings();
+                settings.LabelParts = false;
+                settings.OutputAsBlocks = false;        // pha khoi
+
+                Point3d at = new Point3d(5000, 7000, 0);
+                NestingDwgWriter.DrawIntoCurrent(db, at, req, res, new List<OutputPart> { op }, settings, "test");
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    List<ObjectId> ids = ModelSpaceIds(db, tr);
+                    True(ids.Count > sourceCount, "ban ve phai co them doi tuong moi");
+
+                    int inserts = 0, engravedText = 0, sourceTextStill = 0;
+                    double maxX = double.MinValue;
+
+                    foreach (ObjectId id in ids)
+                    {
+                        Entity e = (Entity)tr.GetObject(id, OpenMode.ForRead);
+                        if (e is BlockReference) inserts++;
+
+                        DBText t = e as DBText;
+                        if (t != null && t.TextString == "KH1")
+                        {
+                            if (t.Position.DistanceTo(textAt) < 1e-9) sourceTextStill++;
+                            else
+                            {
+                                engravedText++;
+                                Equal("_mss.khac", t.Layer, "chu khac giu nguyen layer");
+                            }
+                        }
+
+                        maxX = Math.Max(maxX, e.GeometricExtents.MaxPoint.X);
+                    }
+
+                    Equal(0, inserts, "da PHA KHOI: khong duoc con BlockReference nao");
+                    Equal(1, engravedText, "chu khac phai duoc ve ra dung 1 lan");
+                    Equal(1, sourceTextStill, "chu goc van nam nguyen cho cu");
+                    True(maxX > at.X, "ban ghep phai nam quanh diem da chon");
+
+                    tr.Commit();
+                }
+            }
+        }
+
+        private static void CheckEngravedPoint(
+            string tag, Point3d inBlock, Point3d original, Pt origin,
+            Placement placement, BlockReference reference, double cornerX, double cornerY)
+        {
+            Point3d actual = inBlock.TransformBy(reference.BlockTransform);
+
+            IntPoint local = IntPoint.FromMm(original.X - origin.X, original.Y - origin.Y);
+            IntPoint moved = placement.Orientation.Apply(local, placement.TranslationX, placement.TranslationY);
+            double expectedX = cornerX + NestUnits.ToMm(moved.X);
+            double expectedY = cornerY + NestUnits.ToMm(moved.Y);
+
+            True(Math.Abs(actual.X - expectedX) < 1e-3 && Math.Abs(actual.Y - expectedY) < 1e-3,
+                tag + ": hinh khac phai theo dung phep bien hinh cua chi tiet - mong doi ("
+                + expectedX.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + ", "
+                + expectedY.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "), nhan duoc ("
+                + actual.X.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + ", "
+                + actual.Y.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + ")");
+        }
+
         private static void TryDelete(string path)
         {
             try
@@ -513,6 +1075,12 @@ namespace AUTOCAD_COMMANDS.Nesting
                     List<string> before = Fingerprint(db);
 
                     GhoPhoiSettings settings = Settings();
+
+                    // Phep thu nay dem CA nhan ten chi tiet, nen phai tu BAT len chu khong dua
+                    // vao gia tri mac dinh - mac dinh gio la TAT (nhan tu sinh lam nguoi dung
+                    // tuong chuong trinh sua chu cua ho).
+                    settings.LabelParts = true;
+
                     NestReadResult read;
                     RecognitionResult rec;
                     using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())

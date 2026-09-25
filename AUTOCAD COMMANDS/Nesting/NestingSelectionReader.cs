@@ -24,6 +24,13 @@ namespace AUTOCAD_COMMANDS.Nesting
         /// <summary>Marking-layer geometry: source index -> sample points (attached to parts later).</summary>
         public readonly List<KeyValuePair<int, List<Pt>>> Markings = new List<KeyValuePair<int, List<Pt>>>();
 
+        /// <summary>
+        /// Engraving-layer TEXT / MTEXT: source index -> anchor point (the text centre, so that
+        /// justification is already accounted for). Attached to the containing part later.
+        /// These never reach <see cref="Texts"/>, so they are never read as SL / material.
+        /// </summary>
+        public readonly List<KeyValuePair<int, Pt>> Engravings = new List<KeyValuePair<int, Pt>>();
+
         public readonly List<string> Warnings = new List<string>();
         public int IgnoredCount;
     }
@@ -54,7 +61,8 @@ namespace AUTOCAD_COMMANDS.Nesting
                 int source = result.Sources.Count;
                 result.Sources.Add(new NestSource { Id = id, Kind = ent.GetType().Name, Layer = ent.Layer });
 
-                ReadEntity(ent, ent.Database, source, settings, result, ignoredKinds, ref nonPlanar, 0, settings.IsMarkingLayer(ent.Layer));
+                ReadEntity(ent, ent.Database, source, settings, result, ignoredKinds, ref nonPlanar, 0,
+                    settings.IsMarkingLayer(ent.Layer), settings.IsEngravingLayer(ent.Layer));
             }
 
             foreach (KeyValuePair<string, int> kv in ignoredKinds)
@@ -75,21 +83,27 @@ namespace AUTOCAD_COMMANDS.Nesting
 
         private static void ReadEntity(
             Entity ent, Database db, int source, GhoPhoiSettings settings, NestReadResult result,
-            Dictionary<string, int> ignored, ref int nonPlanar, int depth, bool marking)
+            Dictionary<string, int> ignored, ref int nonPlanar, int depth, bool marking, bool engraving)
         {
             double tol = Math.Max(1e-4, settings.ArcToleranceMm);
 
+            // Chu tren layer KHAC la hinh khac len chi tiet, khong phai thong tin: no di
+            // thang sang danh sach Engravings, khong bao gio duoc doc SL / vat lieu.
             MText mtext = ent as MText;
             if (mtext != null)
             {
-                result.Texts.Add(new TextItem(source, mtext.Text, TextCenter(ent, mtext.Location)));
+                Pt centre = TextCenter(ent, mtext.Location);
+                if (engraving) result.Engravings.Add(new KeyValuePair<int, Pt>(source, centre));
+                else result.Texts.Add(new TextItem(source, mtext.Text, centre));
                 return;
             }
 
             DBText text = ent as DBText;
             if (text != null)
             {
-                result.Texts.Add(new TextItem(source, text.TextString, DbTextCenter(text, db)));
+                Pt centre = DbTextCenter(text, db);
+                if (engraving) result.Engravings.Add(new KeyValuePair<int, Pt>(source, centre));
+                else result.Texts.Add(new TextItem(source, text.TextString, centre));
                 return;
             }
 
@@ -120,7 +134,8 @@ namespace AUTOCAD_COMMANDS.Nesting
                         if (child != null && child.Visible)
                         {
                             ReadEntity(child, db, source, settings, result, ignored, ref nonPlanar, depth + 1,
-                                marking || settings.IsMarkingLayer(child.Layer));
+                                marking || settings.IsMarkingLayer(child.Layer),
+                                engraving || settings.IsEngravingLayer(child.Layer));
                         }
 
                         o.Dispose();

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -30,7 +30,22 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             public Func<PartGroup, double> Key;       // larger key = placed earlier
         }
 
-        public OptimizationOutcome Optimize(MaterialJob job, CancellationToken cancellation, Action<string> progress)
+        /// <summary>
+        /// So luot ghep se chay cho MOT vat lieu: moi thu tu xep x hai chinh sach dat.
+        /// Biet truoc con so nay thi moi ve duoc thanh tien trinh that.
+        /// </summary>
+        public static int RunCount(NestingSettings settings)
+        {
+            int extra = settings != null ? Math.Max(0, settings.ExtraSeededOrderings) : 0;
+            return (BaseOrderingCount + extra) * PlacementPolicyCount;
+        }
+
+        /// <summary>So thu tu xep co dinh trong <see cref="BuildOrderings"/> (chua tinh nhieu).</summary>
+        private const int BaseOrderingCount = 5;
+
+        private const int PlacementPolicyCount = 2;
+
+        public OptimizationOutcome Optimize(MaterialJob job, CancellationToken cancellation, Action<NestingProgress> progress)
         {
             OptimizationOutcome outcome = new OptimizationOutcome();
             Stopwatch watch = Stopwatch.StartNew();
@@ -43,7 +58,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             // state, so runs execute in parallel. The winner is chosen afterwards in run-index
             // order with a strict "better than" - identical to the sequential result.
             DecodedLayout[] layouts = new DecodedLayout[total];
-            int started = 0, skippedByBudget = 0, skippedByCancel = 0;
+            int started = 0, completed = 0, skippedByBudget = 0, skippedByCancel = 0;
             int degree = job.Settings.MaxParallelism > 0 ? job.Settings.MaxParallelism : Environment.ProcessorCount;
             ParallelOptions options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Math.Min(degree, total)) };
 
@@ -64,17 +79,23 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
                 Ordering ordering = orderings[i / policies.Length];
                 PlacementPolicy policy = policies[i % policies.Length];
-                int n = Interlocked.Increment(ref started);
-                if (progress != null)
-                {
-                    progress(string.Format(CultureInfo.InvariantCulture,
-                        "{0}: thu tu {1}/{2} ({3}, {4})", job.Material, n, total, ordering.Name, policy));
-                }
+                Interlocked.Increment(ref started);
 
                 List<PartInstance> order = Order(job.Instances, ordering.Key);
                 DecodedLayout layout = _decoder.Decode(order, job, policy, cancellation);
                 layout.OrderingName = ordering.Name + " / " + policy;
                 layouts[i] = layout;
+
+                // Bao sau khi CHAY XONG, khong phai luc bat dau: cac luot chay song song nen
+                // neu bao luc bat dau thi thanh tien trinh nhay vot len gan het ngay tu dau
+                // roi dung yen - nhin con te hon la khong co.
+                int done = Interlocked.Increment(ref completed);
+                if (progress != null)
+                {
+                    progress(new NestingProgress(string.Format(CultureInfo.InvariantCulture,
+                        "{0}: thu tu {1}/{2} ({3}, {4})", job.Material, done, total, ordering.Name, policy),
+                        done, total));
+                }
             });
 
             DecodedLayout partial = null;
@@ -98,7 +119,21 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
             if (outcome.Best == null) outcome.Best = partial;
             if (skippedByCancel > 0) outcome.Cancelled = true;
-            if (skippedByBudget > 0) outcome.TimeBudgetHit = true;
+
+            // Phep kiem thoi gian o tren chi chan duoc mot lan chay CHUA BAT DAU. Mot lan da
+            // bat dau thi khong co gi dung no lai giua chung - bo giai ma chi dung khi nguoi
+            // dung bam Dung. Tren may co so nhan >= so lan chay (16 nhan / 16 lan chay), MOI
+            // lan chay deu kip bat dau khi dong ho con gan 0, nen skippedByBudget luon = 0 va
+            // truoc day nguoi dung KHONG he duoc bao gi, du da chay gap nhieu lan thoi gian
+            // cho phep (do duoc: dat 15 s, chay 169,7 s tren mot ban ve san xuat that).
+            //
+            // O day chi sua phan BAO CAO cho dung su that. Viec cat ngang mot lan chay dang
+            // do se lam ket qua phu thuoc toc do may - do la mot thay doi ve hanh vi, khong
+            // phai viec cua mot ban sua loi bao cao.
+            if (skippedByBudget > 0 || watch.Elapsed.TotalSeconds > job.Settings.TimeBudgetSeconds)
+            {
+                outcome.TimeBudgetHit = true;
+            }
             return outcome;
         }
 

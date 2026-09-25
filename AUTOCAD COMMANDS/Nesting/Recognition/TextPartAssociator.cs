@@ -54,10 +54,22 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 RecognizedPart inside = InnermostContaining(parts, text.Position);
                 if (facts.Count == 0)
                 {
-                    // Plain text inside a part = candidate part name.
-                    if (inside != null && !nameCandidates.ContainsKey(inside) && text.Text.Trim().Length > 0 && text.Text.Trim().Length <= 40)
+                    if (inside != null)
                     {
-                        nameCandidates[inside] = text.Text.Trim();
+                        // Chu nam TRONG duong bao ma khong doc ra SL / vat lieu nao: day la chu
+                        // CAT tren chinh chi tiet do (ma chi tiet). No phai di theo chi tiet ra
+                        // ban ve moi va xoay / lat cung chi tiet - vi may se cat no that.
+                        //
+                        // Khong bat nguoi dung chuyen no sang layer rieng: tren ban ve that no
+                        // nam ngay tren layer duong bao, dung nhu ban chat cua no.
+                        if (!inside.EngravingSources.Contains(text.SourceIndex)) inside.EngravingSources.Add(text.SourceIndex);
+                        if (!inside.GeometrySources.Contains(text.SourceIndex)) inside.GeometrySources.Add(text.SourceIndex);
+
+                        // ... va van dung lam ten ban ghi cho de nhan mat o bang kiem tra.
+                        if (!nameCandidates.ContainsKey(inside) && text.Text.Trim().Length > 0 && text.Text.Trim().Length <= 40)
+                        {
+                            nameCandidates[inside] = text.Text.Trim();
+                        }
                     }
 
                     continue;

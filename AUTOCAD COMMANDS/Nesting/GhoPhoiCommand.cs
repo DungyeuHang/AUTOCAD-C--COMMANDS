@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -96,6 +96,8 @@ namespace AUTOCAD_COMMANDS.Nesting
                     unattached, string.Join(", ", settings.MarkingLayers.ToArray())));
             }
 
+            GhoPhoiPipeline.AttachEngravings(read, recognition, settings);
+
             if (recognition.Parts.Count == 0)
             {
                 ed.WriteMessage("\nGHOPHOI: Khong nhan dang duoc chi tiet nao (can duong bao kin).");
@@ -138,7 +140,24 @@ namespace AUTOCAD_COMMANDS.Nesting
             if (catalogError != null) ed.WriteMessage("\nGHOPHOI: (!) " + catalogError);
 
             NestingRequest request = new NestingRequest();
-            using (NestingSettingsForm form = new NestingSettingsForm(settings, catalog, materials))
+            // Kich thuoc chi tiet LON NHAT cua tung vat lieu: bang cai dat dung no de tu chon
+            // san kho phoi du lon, thay vi de nguoi dung chay xong moi biet la khong vua.
+            Dictionary<string, double[]> biggest = new Dictionary<string, double[]>(StringComparer.Ordinal);
+            foreach (PartGroup g in groups)
+            {
+                double w = g.Shape.WidthMm, h = g.Shape.HeightMm;
+                double lng = Math.Max(w, h), shrt = Math.Min(w, h);
+
+                double[] cur;
+                if (!biggest.TryGetValue(g.Material, out cur)) biggest[g.Material] = new[] { lng, shrt };
+                else
+                {
+                    cur[0] = Math.Max(cur[0], lng);
+                    cur[1] = Math.Max(cur[1], shrt);
+                }
+            }
+
+            using (NestingSettingsForm form = new NestingSettingsForm(settings, catalog, materials, biggest))
             {
                 if (Application.ShowModalDialog(form) != WF.DialogResult.OK)
                 {
@@ -172,7 +191,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                 return;
             }
 
-            string report = BuildReport(request, result);
+            string report = GhoPhoiPipeline.BuildReport(request, result);
             foreach (string line in report.Split('\n')) ed.WriteMessage("\n" + line.TrimEnd('\r'));
 
             bool valid = result.Validation != null && result.Validation.IsValid;
@@ -189,8 +208,16 @@ namespace AUTOCAD_COMMANDS.Nesting
                 }
             }
 
-            // ---- 6. output: NEW drawing ----
-            List<OutputPart> outputs = BuildOutputParts(groups, read);
+            // ---- 6. output ----
+            List<OutputPart> outputs = GhoPhoiPipeline.BuildOutputParts(groups, read);
+
+            if (settings.OutputToCurrentDrawing)
+            {
+                DrawHere(doc, ed, db, request, result, outputs, settings);
+                return;
+            }
+
+            // ---- 6b. output: NEW drawing ----
             string path = NestingDwgWriter.DefaultOutputPath(db);
             string sourceName = string.IsNullOrEmpty(db.Filename) ? doc.Name : Path.GetFileName(db.Filename);
             NestingDwgWriteResult written;
@@ -225,6 +252,48 @@ namespace AUTOCAD_COMMANDS.Nesting
             if (settings.OpenOutputDrawing) OpenWhenIdle(written.Path);
         }
 
+        /// <summary>
+        /// Ve ket qua ghep thang vao ban ve dang mo tai diem nguoi dung chon.
+        ///
+        /// Khac voi duong xuat file moi, o day ban ve dang mo BI THEM entity. Van khong dong
+        /// vao hinh goc va Ctrl+Z hoan tac duoc, nhung phai noi ro ra cho nguoi dung biet.
+        /// </summary>
+        private static void DrawHere(
+            Document doc, Editor ed, Database db, NestingRequest request, NestingResult result,
+            List<OutputPart> outputs, GhoPhoiSettings settings)
+        {
+            PromptPointOptions options = new PromptPointOptions(
+                "\nGHOPHOI - chon DIEM DAT goc duoi trai cua ban ghep: ")
+            {
+                AllowNone = false
+            };
+
+            PromptPointResult pick = ed.GetPoint(options);
+            if (pick.Status != PromptStatus.OK)
+            {
+                ed.WriteMessage("\nGHOPHOI: Da huy - chua chon diem dat, ban ve giu nguyen.");
+                return;
+            }
+
+            string sourceName = string.IsNullOrEmpty(db.Filename) ? doc.Name : Path.GetFileName(db.Filename);
+            NestingDwgWriteResult written;
+            using (DocumentLock locked = doc.LockDocument())
+            {
+                written = NestingDwgWriter.DrawIntoCurrent(
+                    db, pick.Value, request, result, outputs, settings, sourceName);
+            }
+
+            ed.WriteMessage(string.Format(CultureInfo.InvariantCulture,
+                "\nGHOPHOI: Da ve {0} chi tiet tren {1} to vao ban ve hien tai tai ({2:0.##}, {3:0.##}).",
+                written.BlockReferenceCount, result.Sheets.Count, pick.Value.X, pick.Value.Y));
+            ed.WriteMessage(settings.OutputAsBlocks
+                ? "\n  Moi chi tiet la 1 BLOCK. Muon may CNC chi cat duong bao thi bo tick \"Moi chi tiet la 1 BLOCK\" de pha khoi."
+                : "\n  Da pha khoi: moi doi tuong giu nguyen LAYER cua no - xuat di cat thi chon dung layer can cat.");
+            ed.WriteMessage("\n  Khong vua y thi Ctrl+Z mot lan la het.");
+
+            foreach (string w in written.Warnings) ed.WriteMessage("\n  (!) " + w);
+        }
+
         private static ObjectId[] SelectEntities(Editor ed)
         {
             PromptSelectionResult implied = ed.SelectImplied();
@@ -240,140 +309,6 @@ namespace AUTOCAD_COMMANDS.Nesting
             };
             PromptSelectionResult sel = ed.GetSelection(options);
             return sel.Status == PromptStatus.OK ? sel.Value.GetObjectIds() : null;
-        }
-
-        private static List<OutputPart> BuildOutputParts(List<PartGroup> groups, NestReadResult read)
-        {
-            List<OutputPart> outputs = new List<OutputPart>();
-            foreach (PartGroup g in groups)
-            {
-                RecognizedPart r = (RecognizedPart)g.SourceReference;
-                Pt o = PartRecognizer.LocalOrigin(r);
-                OutputPart op = new OutputPart { Group = g, Origin = new Point3d(o.X, o.Y, 0) };
-                HashSet<ObjectId> seen = new HashSet<ObjectId>();
-                foreach (int s in r.GeometrySources)
-                {
-                    ObjectId id = read.Sources[s].Id;
-                    if (seen.Add(id)) op.SourceIds.Add(id);
-                }
-
-                outputs.Add(op);
-            }
-
-            return outputs;
-        }
-
-        internal static string BuildReport(NestingRequest request, NestingResult result)
-        {
-            CultureInfo ci = CultureInfo.InvariantCulture;
-            StringBuilder sb = new StringBuilder();
-            NestingStatistics st = result.Statistics;
-            Dictionary<string, PartGroup> groups = new Dictionary<string, PartGroup>(StringComparer.Ordinal);
-            foreach (PartGroup g in request.Groups) groups[g.Id] = g;
-
-            sb.AppendLine("==================================================");
-            sb.AppendLine(" GHOPHOI - KET QUA GHEP PHOI (V1)");
-            sb.AppendLine("==================================================");
-            sb.AppendLine(string.Format(ci, " Nhom chi tiet     : {0}", st.PartGroupCount));
-            sb.AppendLine(string.Format(ci, " Tong SL yeu cau   : {0}", st.RequestedQuantity));
-            sb.AppendLine(string.Format(ci, " Da xep            : {0}", st.PlacedQuantity));
-            sb.AppendLine(string.Format(ci, " Chua xep          : {0}", st.UnplacedQuantity));
-            sb.AppendLine(string.Format(ci, " So to phoi        : {0}", st.SheetCount));
-            sb.AppendLine(string.Format(ci, " Khe cat / le mep  : {0:0.##} / {1:0.##} mm   (lat guong: {2})",
-                request.Settings.GapMm, request.Settings.EdgeMarginMm, request.Settings.AllowMirror ? "CO" : "KHONG"));
-            sb.AppendLine(" Chi tiet trong lo kin: " + (request.Settings.AllowPartInsideHole ? "CHO PHEP" : "KHONG (hoc lom ho van duoc phep)"));
-            sb.AppendLine(string.Format(ci, " Thoi gian         : {0:0.0} s{1}", st.ElapsedSeconds, result.Cancelled ? "   (NGUOI DUNG DA DUNG SOM)" : string.Empty));
-
-            foreach (MaterialStatistics m in st.Materials)
-            {
-                sb.AppendLine();
-                sb.AppendLine(string.Format(ci, " [{0}]  kho {1}", m.Material, m.SheetName ?? "-"));
-                sb.AppendLine(string.Format(ci, "   So to {0} | xep {1}/{2} | dai da dung {3:0} mm | su dung {4:0.0}%",
-                    m.SheetCount, m.Placed, m.Requested, m.UsedLengthMm, m.Utilization * 100));
-                sb.AppendLine(string.Format(ci, "   Phe lieu uoc tinh {0:0.###} m2 | phan du (dai cuoi to) {1:0.###} m2",
-                    m.WasteAreaMm2 / 1e6, m.RemnantAreaMm2 / 1e6));
-                sb.AppendLine(string.Format(ci, "   Da thu {0} thu tu, tot nhat: {1}{2}",
-                    m.OrderingsTried, m.BestOrdering ?? "-", m.TimeBudgetHit ? "  (het thoi gian cho phep)" : string.Empty));
-
-                foreach (SheetResult s in result.Sheets)
-                {
-                    if (s.Material != m.Material) continue;
-                    sb.AppendLine(string.Format(ci, "   - To {0}: {1} chi tiet, dai dung {2:0} mm, su dung {3:0.0}% ({4:0.0}% ca to), phan du {5:0} mm",
-                        s.NumberInMaterial, s.Placements.Count, s.UsedLengthMm, s.Utilization * 100, s.SheetUtilization * 100, s.RemnantLengthMm));
-                }
-            }
-
-            sb.AppendLine();
-            sb.AppendLine(" SO LUONG THEO CHI TIET (yeu cau = da xep + chua xep):");
-            Dictionary<string, int> placed = new Dictionary<string, int>(StringComparer.Ordinal);
-            foreach (Placement p in result.Placements)
-            {
-                int n;
-                placed.TryGetValue(p.PartGroupId, out n);
-                placed[p.PartGroupId] = n + 1;
-            }
-
-            Dictionary<string, List<string>> reasons = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-            Dictionary<string, int> unplaced = new Dictionary<string, int>(StringComparer.Ordinal);
-            foreach (UnplacedPart u in result.Unplaced)
-            {
-                int n;
-                unplaced.TryGetValue(u.PartGroupId, out n);
-                unplaced[u.PartGroupId] = n + 1;
-                List<string> list;
-                if (!reasons.TryGetValue(u.PartGroupId, out list))
-                {
-                    list = new List<string>();
-                    reasons[u.PartGroupId] = list;
-                }
-
-                if (!list.Contains(u.Reason)) list.Add(u.Reason);
-            }
-
-            foreach (PartGroup g in request.Groups)
-            {
-                int p, u;
-                placed.TryGetValue(g.Id, out p);
-                unplaced.TryGetValue(g.Id, out u);
-                sb.AppendLine(string.Format(ci, "   {0,-20} {1,-8} yeu cau {2,4} | xep {3,4} | chua xep {4,4}",
-                    g.Name, g.Material, g.Quantity, p, u));
-                List<string> why;
-                if (reasons.TryGetValue(g.Id, out why))
-                {
-                    foreach (string w in why) sb.AppendLine("        ly do: " + w);
-                }
-            }
-
-            sb.AppendLine();
-            ValidationResult v = result.Validation;
-            if (v != null && v.IsValid)
-            {
-                sb.AppendLine(" VALIDATOR: DAT");
-                if (!double.IsNaN(v.MinPartDistanceMm)) sb.AppendLine(string.Format(ci, "   Khe nho nhat do duoc : {0:0.###} mm", v.MinPartDistanceMm));
-                if (!double.IsNaN(v.MinEdgeDistanceMm)) sb.AppendLine(string.Format(ci, "   Cach mep nho nhat    : {0:0.###} mm", v.MinEdgeDistanceMm));
-            }
-            else
-            {
-                sb.AppendLine(" VALIDATOR: KHONG DAT - KHONG DUOC DUNG KET QUA NAY DE CAT!");
-                if (v != null)
-                {
-                    int shown = 0;
-                    foreach (ValidationIssue i in v.Issues)
-                    {
-                        if (shown++ >= 30)
-                        {
-                            sb.AppendLine("   ... va " + (v.Issues.Count - 30).ToString(ci) + " loi khac");
-                            break;
-                        }
-
-                        sb.AppendLine("   (X) " + i);
-                    }
-                }
-            }
-
-            foreach (string w in result.Warnings) sb.AppendLine(" (!) " + w);
-            sb.AppendLine("==================================================");
-            return sb.ToString();
         }
 
         private static void SaveFixture(Editor ed, NestingRequest request, Database db)

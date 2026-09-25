@@ -402,6 +402,38 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         }
     }
 
+    /// <summary>
+    /// Mot lan bao tien do. Co CON SO chu khong chi co chu, de thanh tien trinh chay tu 0 den
+    /// 100% - nguoi dung nhin la biet con bao lau, thay vi mot vach chay qua chay lai.
+    /// </summary>
+    public sealed class NestingProgress
+    {
+        public NestingProgress(string message, int done, int total)
+        {
+            Message = message ?? string.Empty;
+            Done = done;
+            Total = total;
+        }
+
+        public string Message { get; private set; }
+
+        /// <summary>So luot ghep da chay xong.</summary>
+        public int Done { get; private set; }
+
+        /// <summary>Tong so luot ghep cua ca lenh (moi vat lieu x moi thu tu x moi chinh sach).</summary>
+        public int Total { get; private set; }
+
+        public int Percent
+        {
+            get
+            {
+                if (Total <= 0) return 0;
+                int p = (int)Math.Round(Done * 100.0 / Total);
+                return p < 0 ? 0 : (p > 100 ? 100 : p);
+            }
+        }
+    }
+
     public sealed class ValidationResult
     {
         public ValidationResult()

@@ -101,7 +101,9 @@ namespace AUTOCAD_COMMANDS.Nesting
                 case "MaxTextDistanceMm": if (TryD(val, out d) && d > 0) s.MaxTextDistanceMm = d; break;
                 case "DefaultMaterial": if (val.Length > 0) s.DefaultMaterial = val; break;
                 case "DefaultQuantity": if (int.TryParse(val, NumberStyles.Integer, ci, out n) && n >= 1) s.DefaultQuantity = n; break;
+                case "OutputToCurrentDrawing": if (bool.TryParse(val, out b)) s.OutputToCurrentDrawing = b; break;
                 case "MarkingLayers": s.MarkingLayers = SplitList(val); break;
+                case "EngravingLayers": s.EngravingLayers = SplitList(val); break;
                 case "DefaultSheetName": s.DefaultSheetName = val; break;
                 case "MaterialSheets":
                     s.MaterialSheets.Clear();
@@ -144,7 +146,9 @@ namespace AUTOCAD_COMMANDS.Nesting
                     "MaxTextDistanceMm\t" + s.MaxTextDistanceMm.ToString("R", ci),
                     "DefaultMaterial\t" + s.DefaultMaterial,
                     "DefaultQuantity\t" + s.DefaultQuantity.ToString(ci),
+                    "OutputToCurrentDrawing\t" + s.OutputToCurrentDrawing,
                     "MarkingLayers\t" + string.Join(";", s.MarkingLayers.ToArray()),
+                    "EngravingLayers\t" + string.Join(";", s.EngravingLayers.ToArray()),
                     "DefaultSheetName\t" + s.DefaultSheetName,
                     "MaterialSheets\t" + string.Join(";", pairs.ToArray()),
                     "OutputAsBlocks\t" + s.OutputAsBlocks,

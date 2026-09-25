@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 
@@ -16,7 +16,12 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
     public interface INestingEngine
     {
-        NestingResult Nest(NestingRequest request, CancellationToken cancellation, Action<string> progress);
+        /// <param name="progress">
+        /// Co the null. LUU Y: duoc goi TU NHIEU LUONG cung luc (cac luot ghep chay song song),
+        /// va thu tu goi KHONG dam bao tang dan - luot thu 10 co the bao truoc luot thu 9. Ben
+        /// nhan phai tu lo an toan luong, va neu ve thanh tien trinh thi lay gia tri lon nhat.
+        /// </param>
+        NestingResult Nest(NestingRequest request, CancellationToken cancellation, Action<NestingProgress> progress);
     }
 
     public interface IRotationCandidateProvider
@@ -51,7 +56,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
     public interface IOptimizer
     {
-        OptimizationOutcome Optimize(MaterialJob job, CancellationToken cancellation, Action<string> progress);
+        OptimizationOutcome Optimize(MaterialJob job, CancellationToken cancellation, Action<NestingProgress> progress);
     }
 
     public interface INestingValidator

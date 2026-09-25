@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -56,6 +56,8 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "C26. Xep hang: it to thang du utilization thap hon", C26_EvaluatorOrder);
             NestingTestHarness.Run(report, "C27. Transform: engine == validator == cong thuc (8 huong)", C27_TransformConsistency);
             NestingTestHarness.Run(report, "C28. Lat guong BAT: ket qua hop le, chi dung huong cho phep", C28_MirrorOnValid);
+            NestingTestHarness.Run(report, "C29. Vuot thoi gian cho phep thi phai bao", C29_TimeBudgetOvershootIsReported);
+            NestingTestHarness.Run(report, "C30. Tien do chay 0 -> 100%, khong lui", C30_ProgressReachesHundred);
         }
 
         // ==================================================================================
@@ -841,6 +843,86 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// HOI QUY (ban ve san xuat that): dat thoi gian cho phep 15 s, lan ghep chay 169,7 s
+        /// ma bao cao KHONG he noi gi - vi phep kiem thoi gian chi chan duoc nhung lan chay
+        /// chua bat dau, ma tren may 16 nhan thi ca 16 lan chay deu kip bat dau ngay.
+        ///
+        /// Bo fixture tong hop khong bat duoc loi nay vi moi fixture chi chay vai mili giay,
+        /// khong bao gio cham toi thoi gian cho phep.
+        ///
+        /// Phep thu nay kiem dung BAT BIEN da hua: chay lau hon thoi gian cho phep thi phai
+        /// duoc BAO. No khong doi hoi phai dung dung luc - viec cat ngang mot lan chay dang
+        /// do lai la chuyen khac.
+        /// </summary>
+        /// <summary>
+        /// Thanh tien trinh chi co nghia khi con so bao ra la that: khong duoc lui, va phai
+        /// den dung 100% khi xong. Phep thu nay con giu cho MultiOrderOptimizer.RunCount khong
+        /// lech voi so luot thuc su chay - neu ai do them mot thu tu xep moi ma quen sua hang
+        /// so thi tien do se khong bao gio den 100% va phep thu do ngay.
+        /// </summary>
+        private static void C30_ProgressReachesHundred()
+        {
+            NestingRequest r = Request(2500, 1250);
+            r.Settings.ExtraSeededOrderings = 2;
+            r.Groups.Add(Rect("A", 300, 200, 6));
+            r.Groups.Add(Rect("B", 180, 120, 5, "1.5MM"));      // vat lieu thu hai
+
+            // Ham bao tien do duoc goi TU NHIEU LUONG cung luc (cac luot ghep chay song song),
+            // nen cho nao nhan tien do cung phai tu lo an toan luong - ke ca phep thu nay.
+            List<NestingProgress> seen = new List<NestingProgress>();
+            object gate = new object();
+            NestingResult res = new SimpleNestingEngine().Nest(r, CancellationToken.None,
+                p => { lock (gate) { seen.Add(p); } });
+
+            AssertValid(res);
+            True(seen.Count > 0, "phai co bao tien do");
+
+            int expected = 2 * MultiOrderOptimizer.RunCount(r.Settings);
+            Equal(expected, seen[seen.Count - 1].Total, "tong so luot phai dung");
+
+            // Cac luot chay song song nen lan bao ve khong dam bao dung thu tu - bat buoc
+            // tung lan phai tang dan la doi hoi sai. Bat bien that la: moi con so deu nam
+            // trong khoang hop le, va gia tri LON NHAT phai cham day (do la cai hop thoai ve).
+            int high = 0;
+            foreach (NestingProgress p in seen)
+            {
+                True(p.Total > 0, "moi lan bao phai co tong");
+                True(p.Done >= 0 && p.Done <= p.Total, "khong duoc vuot tong: " + p.Done + "/" + p.Total);
+                Equal(expected, p.Total, "tong phai giong nhau o moi lan bao");
+                high = Math.Max(high, p.Done);
+            }
+
+            Equal(expected, high, "tien do phai cham 100% khi xong");
+        }
+
+        private static void C29_TimeBudgetOvershootIsReported()
+        {
+            NestingRequest r = Request(2500, 1250);
+            r.Settings.TimeBudgetSeconds = 0.05;
+            r.Settings.ExtraSeededOrderings = 3;
+
+            for (int i = 0; i < 20; i++)
+            {
+                r.Groups.Add(Rect("R" + i.ToString(CultureInfo.InvariantCulture), 90 + i, 60 + (i % 7), 3));
+            }
+
+            Stopwatch watch = Stopwatch.StartNew();
+            NestingResult res = Nest(r);
+            watch.Stop();
+
+            AssertValid(res);
+
+            // Neu lan ghep nay lai chay nhanh hon thoi gian cho phep thi phep thu thanh vo
+            // nghia - noi ro ra thay vi lang le di qua.
+            True(watch.Elapsed.TotalSeconds > r.Settings.TimeBudgetSeconds,
+                "phep thu chi co nghia khi lan ghep chay lau hon thoi gian cho phep");
+
+            Equal(1, res.Statistics.Materials.Count, "mot vat lieu");
+            True(res.Statistics.Materials[0].TimeBudgetHit,
+                "da chay qua thoi gian cho phep thi phai bao, khong duoc im lang");
         }
 
         private static void C28_MirrorOnValid()

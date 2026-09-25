@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,8 +18,12 @@ namespace AUTOCAD_COMMANDS.Nesting
         private readonly NestingRequest _request;
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private readonly Label _status;
+        private readonly ProgressBar _bar;
         private readonly System.Windows.Forms.Timer _timer;
         private volatile string _progress = "Dang chuan bi...";
+
+        /// <summary>Phan tram da xong; -1 = chua co so lieu (van de vach chay vo dinh).</summary>
+        private volatile int _percent = -1;
         private Task<NestingResult> _task;
         private DateTime _started;
 
@@ -37,7 +41,19 @@ namespace AUTOCAD_COMMANDS.Nesting
             ClientSize = new Size(460, 130);
 
             _status = new Label { Left = 12, Top = 12, Width = 436, Height = 36, Text = _progress };
-            ProgressBar bar = new ProgressBar { Left = 12, Top = 52, Width = 436, Height = 18, Style = ProgressBarStyle.Marquee };
+
+            // Bat dau bang vach chay vo dinh, doi lan bao tien do dau tien la chuyen sang
+            // thanh 0 -> 100 that. Trong luc chuan bi (chua chay luot nao) thi chua co so de bao.
+            _bar = new ProgressBar
+            {
+                Left = 12,
+                Top = 52,
+                Width = 436,
+                Height = 18,
+                Style = ProgressBarStyle.Marquee,
+                Minimum = 0,
+                Maximum = 100
+            };
             Button cancel = new Button { Text = "Dung (giu ket qua tot nhat)", Left = 248, Top = 84, Width = 200, Height = 30 };
             cancel.Click += (s, e) =>
             {
@@ -47,7 +63,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             };
 
             Controls.Add(_status);
-            Controls.Add(bar);
+            Controls.Add(_bar);
             Controls.Add(cancel);
 
             _timer = new System.Windows.Forms.Timer { Interval = 200 };
@@ -63,13 +79,43 @@ namespace AUTOCAD_COMMANDS.Nesting
             base.OnShown(e);
             _started = DateTime.Now;
             CancellationToken token = _cts.Token;
-            _task = Task.Run(() => _engine.Nest(_request, token, msg => _progress = msg));
+            _task = Task.Run(() => _engine.Nest(_request, token, p =>
+            {
+                _progress = p.Message;
+
+                // Cac luot chay song song nen lan bao ve KHONG dam bao dung thu tu: luot thu 10
+                // co the bao truoc luot thu 9. Lay gia tri LON NHAT da thay thi thanh tien trinh
+                // khong bao gio lui - lui mot cai la nguoi dung tuong treo may.
+                if (p.Total > 0 && p.Percent > _percent) _percent = p.Percent;
+            }));
             _timer.Start();
         }
 
         private void Timer_Tick(object sender, EventArgs e)
         {
-            _status.Text = string.Format("{0}\nThoi gian: {1:0} s", _progress, (DateTime.Now - _started).TotalSeconds);
+            int percent = _percent;
+            if (percent >= 0)
+            {
+                if (_bar.Style != ProgressBarStyle.Continuous) _bar.Style = ProgressBarStyle.Continuous;
+
+                // Thanh tien trinh cua Windows co hieu ung truot khi tang dan; dat vot len roi
+                // lui lai 1 se nhay den dung cho ngay, khong bi tre mot nhip.
+                int v = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
+                if (v < 100)
+                {
+                    _bar.Value = v + 1;
+                    _bar.Value = v;
+                }
+                else
+                {
+                    _bar.Value = 100;
+                }
+            }
+
+            _status.Text = string.Format("{0}\n{1}Thoi gian: {2:0} s",
+                _progress,
+                percent >= 0 ? percent.ToString(System.Globalization.CultureInfo.InvariantCulture) + "%   " : string.Empty,
+                (DateTime.Now - _started).TotalSeconds);
             if (_task == null || !_task.IsCompleted) return;
 
             _timer.Stop();

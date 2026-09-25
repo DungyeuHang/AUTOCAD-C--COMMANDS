@@ -399,6 +399,37 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             return false;
         }
 
+        /// <summary>
+        /// Diem giao cua hai doan DA BIET la co cham nhau.
+        ///
+        /// Phai la diem giao THAT chu khong phai dinh dau cua doan: tren mot chi tiet dai
+        /// 2446 mm, dinh dau co the cach cho cham hang tram mm, chi ra sai cho con te hon
+        /// la khong chi. Hai doan song song / trung nhau thi lay dau mut nam tren doan kia.
+        /// </summary>
+        public static IntPoint SegmentCrossPoint(IntPoint a, IntPoint b, IntPoint c, IntPoint d)
+        {
+            double abx = b.X - a.X, aby = b.Y - a.Y;
+            double cdx = d.X - c.X, cdy = d.Y - c.Y;
+            double denom = abx * cdy - aby * cdx;
+
+            if (Math.Abs(denom) > 1e-9)
+            {
+                double t = ((c.X - a.X) * cdy - (c.Y - a.Y) * cdx) / denom;
+                if (t < 0.0) t = 0.0;
+                else if (t > 1.0) t = 1.0;
+
+                return new IntPoint(
+                    (long)Math.Round(a.X + t * abx, MidpointRounding.AwayFromZero),
+                    (long)Math.Round(a.Y + t * aby, MidpointRounding.AwayFromZero));
+            }
+
+            // Song song hoac trung nhau: lay dau mut nao thuc su nam tren doan kia.
+            if (OnSegment(c, d, a)) return a;
+            if (OnSegment(c, d, b)) return b;
+            if (OnSegment(a, b, c)) return c;
+            return d;
+        }
+
         public static double PointSegmentDistanceSquared(double px, double py, double ax, double ay, double bx, double by)
         {
             double dx = bx - ax, dy = by - ay;
@@ -519,6 +550,20 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         /// <summary>True when any edge of ring r1 touches or crosses any edge of ring r2.</summary>
         public static bool RingsTouch(IList<IntPoint> r1, IList<IntPoint> r2)
         {
+            IntPoint ignored;
+            return RingsTouch(r1, r2, out ignored);
+        }
+
+        /// <summary>
+        /// Nhu tren, nhung noi luon CHO cham (dau mut doan dau tien cua r1 co va cham).
+        ///
+        /// Biet cho cham moi sua duoc ban ve: mot chi tiet dai 2446 mm voi 27 lo ma chi bao
+        /// "co cho cham" thi nguoi dung khong biet tim o dau.
+        /// </summary>
+        public static bool RingsTouch(IList<IntPoint> r1, IList<IntPoint> r2, out IntPoint at)
+        {
+            at = default(IntPoint);
+
             LongRect b1 = LongRect.FromPoints(r1), b2 = LongRect.FromPoints(r2);
             if (!b1.Overlaps(b2, 1)) return false;
 
@@ -534,7 +579,11 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 for (int j = 0; j < r2.Count; j++)
                 {
                     IntPoint c = r2[j], d = r2[(j + 1) % r2.Count];
-                    if (SegmentsIntersect(a, b, c, d)) return true;
+                    if (SegmentsIntersect(a, b, c, d))
+                    {
+                        at = SegmentCrossPoint(a, b, c, d);
+                        return true;
+                    }
                 }
             }
 
