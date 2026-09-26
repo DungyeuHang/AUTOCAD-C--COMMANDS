@@ -1,0 +1,12 @@
+# GHOPHOI - FIXTURE CHAT LUONG GHEP (hai chu U moc vao nhau)
+# Chu U 310x300, hai canh rong 100, long rong 110 sau 200. Xoay 180 do roi dich 105 mm
+# thi canh cua cai nay chui vao long cai kia (khe 5 mm moi phia) - cap U moc nhau
+# chiem 415 x 405. To rong 420 (dat duoc 410) nen hai U KHONG chong doc duoc
+# (300+5+300 > 410): khong moc thi moi U mot cot rieng.
+#   Moc dung 2 cap: 5 + 415 + 5 + 415 + 5 = 845 mm.  Khong moc: 4 cot = 1245 mm.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=60 extra=3
+SHEET name=420x2500 length=2500 width=420
+PART id=U qty=4 material=1.2MM tol=0 name=CHUU_MOC
+OUTER 0,0 310,0 310,300 210,300 210,100 100,100 100,300 0,300
+END
+EXPECT placed=4 unplaced=0 sheets=1 usedlength<=846 mingap>=5 minedge>=5

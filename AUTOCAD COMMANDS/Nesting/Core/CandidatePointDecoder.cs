@@ -526,14 +526,13 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
                 // Lui ra doc theo phap tuyen roi ep nguoc vao den khi cham. Dat thang vao diem
                 // tinh san chi trung khi goc hai ben khop nhau; lui ra truoc thi luon dung o
-                // dung cho cham, va cho nao that su bi chan thi cung thay ngay o buoc lui.
-                long backX = c.Tx + (long)Math.Round(c.Nx * ContactBackoff);
-                long backY = c.Ty + (long)Math.Round(c.Ny * ContactBackoff);
-                if (!IsValid(c.Shape, backX, backY, sheet.Items, spec, collision)) continue;
+                // dung cho cham.
+                long backX, backY, backoff;
+                if (!FindBackoff(c, sheet.Items, spec, collision, out backX, out backY, out backoff)) continue;
 
                 // Ep vao QUA ca diem tinh san: neu chi tiet HEP hon hoc thi cho cham that nam
                 // sau hon diem do. Chi nhan cac vi tri hop le nen ep sau chi co the sat hon.
-                SlideAlong(c.Shape, ref backX, ref backY, -c.Nx, -c.Ny, 2 * ContactBackoff, sheet.Items, spec, collision);
+                SlideAlong(c.Shape, ref backX, ref backY, -c.Nx, -c.Ny, backoff + ContactBackoff, sheet.Items, spec, collision);
                 c.Tx = backX;
                 c.Ty = backY;
                 c.Score = MakeScore(c.Shape, backX, backY, policy);
@@ -543,6 +542,36 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 c.Order = candidates.Count;
                 candidates.Add(c);
                 kept++;
+            }
+        }
+
+        /// <summary>
+        /// Tim cho LUI RA hop le: thu lui <see cref="ContactBackoff"/>, bi chan thi lui NGAN
+        /// dan (chia doi), cuoi cung thu dung diem tiep xuc tinh san (lui 0).
+        ///
+        /// Truoc day chi thu lui dung 20 mm, bi chan la bo ung vien. Nhung cho bi chan khi lui
+        /// thuong KHONG phai cho tiep xuc: chi tiet nam sat MEP TO (lui 20 mm la loi ra ngoai
+        /// to) hoac co chi tiet THU BA nam phia sau. Vi du hai tam rang cua long vao nhau tren
+        /// to vua du rong: diem tiep xuc tinh dung tung li (khe 7.81 mm theo phuong doc = 5 mm
+        /// theo phap tuyen), nhung lui 20 mm thi dinh tam vuot mep to -> ung vien bi vut, to
+        /// dai 535 mm thay vi 460 mm (fixture quality_zigzag_pair_01).
+        ///
+        /// Lan thu dau van la 20 mm nen moi ung vien truoc day duoc nhan thi nay van y het;
+        /// chi them co hoi cho nhung ung vien truoc day bi vut. Phep kiem va cham that van la
+        /// trong tai: vi tri lui 0 hop le nghia la chinh diem tiep xuc da hop le.
+        /// </summary>
+        private static bool FindBackoff(
+            Candidate c, List<PlacedItem> items, SheetSpec spec, ICollisionModel collision,
+            out long backX, out long backY, out long backoff)
+        {
+            for (long d = ContactBackoff; ; d /= 2)
+            {
+                if (d < MinSlideStep) d = 0;
+                backX = c.Tx + (long)Math.Round(c.Nx * d);
+                backY = c.Ty + (long)Math.Round(c.Ny * d);
+                backoff = d;
+                if (IsValid(c.Shape, backX, backY, items, spec, collision)) return true;
+                if (d == 0) return false;
             }
         }
 

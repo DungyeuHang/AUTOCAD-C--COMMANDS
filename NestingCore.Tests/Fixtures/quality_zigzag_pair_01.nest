@@ -1,0 +1,15 @@
+# GHOPHOI - FIXTURE CHAT LUONG GHEP (hai tam rang cua long vao nhau)
+# Tam 400 x 200 co mep tren rang cua (buoc 100, cao 60). Xoay 180 do va lech nua buoc
+# thi rang cai nay nam trong ke rang cai kia. Khe 5 mm do theo PHAP TUYEN canh xien,
+# tuc la lech doc 5 x sqrt(50^2+60^2)/50 = 7.81 mm -> cap long nhau cao 467.81, dai 450.
+# To rong 480 (dat duoc 470): hai tam khong chong doc duoc neu khong long rang
+# (260+5+260 = 525 > 470).
+#   Long rang: 5 + 450 + 5 = 460 mm.  Dat canh nhau: 5 + 400 + 5 + 400 + 5 = 815 mm.
+# Truoc khi sua buoc LUI RA cua ung vien tiep xuc: 535 mm (hai tam xoay 90 dat canh nhau) -
+# diem tiep xuc dung nhung lui 20 mm la vuot mep to nen bi vut. Xem FindBackoff.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=60 extra=3
+SHEET name=480x2500 length=2500 width=480
+PART id=Z qty=2 material=1.2MM tol=0 name=RANGCUA
+OUTER 0,0 400,0 400,200 350,260 300,200 250,260 200,200 150,260 100,200 50,260 0,200
+END
+EXPECT placed=2 unplaced=0 sheets=1 usedlength<=461 mingap>=5 minedge>=5

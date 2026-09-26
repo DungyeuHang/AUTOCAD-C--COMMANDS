@@ -60,6 +60,21 @@ namespace AUTOCAD_COMMANDS.Nesting
             LoadValues();
         }
 
+        /// <summary>Help cho o "Tim du so luot xep" va o "Thoi gian toi da".</summary>
+        internal const string DeterministicHelpText =
+            "TIM DU SO LUOT XEP\r\n" +
+            "\r\n" +
+            "BAT (mac dinh):\r\n" +
+            "  - Chay DU so luot xep da cau hinh, khong cat bot.\r\n" +
+            "  - Ket qua on dinh: cung du lieu + cung cai dat thi moi may ra cung mot bo cuc.\r\n" +
+            "  - Thoi gian thuc te CO THE VUOT \"Thoi gian toi da\" (o nay khi do KHONG phai gioi han cung).\r\n" +
+            "  - Muon dung som: bam nut \"Dung (giu ket qua tot nhat)\".\r\n" +
+            "\r\n" +
+            "TAT:\r\n" +
+            "  - Het \"Thoi gian toi da\" thi khong bat dau luot xep moi (luot dang chay van chay xong).\r\n" +
+            "  - May nhanh / cham co the chay duoc so luot khac nhau.\r\n" +
+            "  - Vi vay ket qua co the khac nhau giua cac may hoac giua cac lan chay.";
+
         public GhoPhoiSettings Settings { get { return _settings; } }
 
         public List<SheetSpec> Catalog { get { return _catalog; } }
@@ -163,6 +178,12 @@ namespace AUTOCAD_COMMANDS.Nesting
             };
             par.Controls.Add(_chkDeterministic, 0, 5);
             par.SetColumnSpan(_chkDeterministic, 4);
+
+            // Giai thich ro: khi BAT thi "Thoi gian toi da" KHONG con la gioi han cung.
+            ToolTip help = new ToolTip { AutoPopDelay = 30000, InitialDelay = 300, ReshowDelay = 100, ShowAlways = true };
+            Disposed += (s, e) => help.Dispose();
+            help.SetToolTip(_chkDeterministic, DeterministicHelpText);
+            help.SetToolTip(_numBudget, DeterministicHelpText);
 
             _ruleNote = new Label { Dock = DockStyle.Bottom, Height = 34, ForeColor = Color.FromArgb(0, 102, 204) };
             _numGap.ValueChanged += (s, e) => UpdateRuleNote();

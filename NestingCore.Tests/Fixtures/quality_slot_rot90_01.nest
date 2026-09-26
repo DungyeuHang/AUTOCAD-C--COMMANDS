@@ -1,0 +1,15 @@
+# GHOPHOI - FIXTURE CHAT LUONG GHEP (thanh phai XOAY 90 do moi vao duoc khe ngang)
+# Tam 450 x 400 co khe mo sang PHAI o giua chieu cao: X 150..450, Y 169..231 (cao 62).
+# Thanh 50 x 290 cho o dang DUNG; nam ngang (xoay 90) thi 290 x 50 lot vao khe
+# (khe 5 mm tren duoi con du 1 mm, thanh nam tron trong tam). To rong 410: tam chiem het be rong.
+#   Vao khe: moi cap 450 dai -> 2 cap = 5 + 450 + 5 + 450 + 5 = 915 mm.
+#   Khong vao khe: moi thanh them mot cot 55 mm -> 1025 mm.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=60 extra=3
+SHEET name=410x2500 length=2500 width=410
+PART id=G qty=2 material=1.2MM tol=0 name=TAMKHE
+OUTER 0,0 450,0 450,169 150,169 150,231 450,231 450,400 0,400
+END
+PART id=B qty=2 material=1.2MM tol=0 name=THANH
+OUTER 0,0 50,0 50,290 0,290
+END
+EXPECT placed=4 unplaced=0 sheets=1 usedlength<=916 mingap>=5 minedge>=5

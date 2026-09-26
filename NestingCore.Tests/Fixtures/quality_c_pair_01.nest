@@ -1,0 +1,11 @@
+# GHOPHOI - FIXTURE CHAT LUONG GHEP (hai chu C moc ngang, chi xoay 0/180)
+# Chu C 300x310 mo sang PHAI, hai canh day 100, mieng cao 110 sau 200. Chi cho xoay
+# 0/180 nen cai thu hai mo sang TRAI; moc ngang vao nhau chiem 405 x 415.
+# To rong 430 (dat duoc 420): hai C khong chong doc duoc (310+5+310 > 420).
+#   Moc dung: 5 + 405 + 5 = 415 mm.  Dat canh nhau: 5 + 300 + 5 + 300 + 5 = 615 mm.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,180 inhole=0 seed=1 budget=60 extra=3
+SHEET name=430x2500 length=2500 width=430
+PART id=C qty=2 material=1.2MM tol=0 name=CHUC_MOC
+OUTER 0,0 300,0 300,100 100,100 100,210 300,210 300,310 0,310
+END
+EXPECT placed=2 unplaced=0 sheets=1 usedlength<=416 mingap>=5 minedge>=5
