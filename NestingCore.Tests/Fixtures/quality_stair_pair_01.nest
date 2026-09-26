@@ -1,0 +1,8 @@
+# GHOPHOI - FIXTURE CHAT LUONG GHEP (bac thang khop nhau)
+# Hai bac thang 300x600: lat 180 do thi khop khit. Long dung thi to dai ~310.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,180 seed=1 budget=60 extra=3
+SHEET name=1250x2500 length=2500 width=1250
+PART id=S qty=2 material=1.2MM tol=0 name=BACTHANG
+OUTER 0.000,0.000 300.000,0.000 300.000,200.000 200.000,200.000 200.000,400.000 100.000,400.000 100.000,600.000 0.000,600.000
+END
+EXPECT placed=2 unplaced=0 sheets<=1 usedlength<=311 mingap>=5 minedge>=5

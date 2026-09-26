@@ -1,0 +1,17 @@
+# GHOPHOI - FIXTURE CHAT LUONG GHEP (hoc mo sang ngang)
+# Ranh chu V mo sang PHAI tren mep tam 600x400, va nem khop vao ranh do.
+# Ba tam chong nhau het be rong to nen chiem dung X [5..605]. Nhet duoc nem vao
+# ranh thi to van dai 610; khong nhet duoc thi phai mo them mot cot => 685.
+# Hoc mo sang ngang nen THA ROI tu tren xuong khong toi, con buoc nen chi truot
+# sang trai va xuong duoi nen cung khong vao duoc neu Y khong dung ngay tu dau -
+# ma khong mot gia tri Y nao suy ra tu hop bao hay dinh lom roi vao giua ranh.
+# Vi tri X=450..560 da duoc kiem bang vet can: hop le, khe con hon 10 mm.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,180 seed=1 budget=60 extra=3
+SHEET name=1250x2500 length=2500 width=1250
+PART id=G qty=3 material=1.2MM tol=0 name=TAMRANH
+OUTER 0.000,0.000 600.000,0.000 600.000,100.000 430.000,200.000 600.000,300.000 600.000,400.000 0.000,400.000
+END
+PART id=W qty=3 material=1.2MM tol=0 name=NEM
+OUTER 0.000,67.500 110.000,135.000 110.000,0.000
+END
+EXPECT placed=6 unplaced=0 sheets<=1 usedlength<=611 mingap>=5 minedge>=5

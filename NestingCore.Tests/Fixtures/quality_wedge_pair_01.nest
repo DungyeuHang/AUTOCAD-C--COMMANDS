@@ -1,0 +1,9 @@
+# GHOPHOI - FIXTURE CHAT LUONG GHEP (hai tam giac khop nhau)
+# Hai tam giac vuong 600x1200: lat 180 do thi khop thanh mot hinh chu nhat.
+# Long dung thi to dai ~610; moi cai mot hop bao rieng thi ~1215.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,180 seed=1 budget=60 extra=3
+SHEET name=1250x2500 length=2500 width=1250
+PART id=T qty=2 material=1.2MM tol=0 name=TAMGIAC
+OUTER 0.000,0.000 600.000,0.000 0.000,1200.000
+END
+EXPECT placed=2 unplaced=0 sheets<=1 usedlength<=611 mingap>=5 minedge>=5

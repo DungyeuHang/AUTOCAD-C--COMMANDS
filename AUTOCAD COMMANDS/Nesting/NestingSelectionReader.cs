@@ -13,6 +13,14 @@ namespace AUTOCAD_COMMANDS.Nesting
         public ObjectId Id;
         public string Kind;
         public string Layer;
+
+        /// <summary>
+        /// Ten don hang cua luot quet da chon doi tuong nay. Rong = chay mot don (nhu truoc).
+        ///
+        /// Gan tu ben ngoai theo LUOT QUET, khong bao gio doc tu ban ve: khong suy tu chu,
+        /// khong suy tu layer, khong suy tu hinh hoc.
+        /// </summary>
+        public string Order = string.Empty;
     }
 
     internal sealed class NestReadResult
@@ -49,6 +57,15 @@ namespace AUTOCAD_COMMANDS.Nesting
 
         public static NestReadResult Read(Transaction tr, IEnumerable<ObjectId> ids, GhoPhoiSettings settings)
         {
+            return Read(tr, ids, settings, null);
+        }
+
+        /// <param name="orderByEntity">
+        /// Doi tuong -> ten don hang, lay tu luot quet da chon no. Null = chay mot don.
+        /// </param>
+        public static NestReadResult Read(
+            Transaction tr, IEnumerable<ObjectId> ids, GhoPhoiSettings settings, IDictionary<ObjectId, string> orderByEntity)
+        {
             NestReadResult result = new NestReadResult();
             Dictionary<string, int> ignoredKinds = new Dictionary<string, int>();
             int nonPlanar = 0;
@@ -58,8 +75,11 @@ namespace AUTOCAD_COMMANDS.Nesting
                 Entity ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
                 if (ent == null) continue;
 
+                string order;
+                if (orderByEntity == null || !orderByEntity.TryGetValue(id, out order)) order = string.Empty;
+
                 int source = result.Sources.Count;
-                result.Sources.Add(new NestSource { Id = id, Kind = ent.GetType().Name, Layer = ent.Layer });
+                result.Sources.Add(new NestSource { Id = id, Kind = ent.GetType().Name, Layer = ent.Layer, Order = order });
 
                 ReadEntity(ent, ent.Database, source, settings, result, ignoredKinds, ref nonPlanar, 0,
                     settings.IsMarkingLayer(ent.Layer), settings.IsEngravingLayer(ent.Layer));

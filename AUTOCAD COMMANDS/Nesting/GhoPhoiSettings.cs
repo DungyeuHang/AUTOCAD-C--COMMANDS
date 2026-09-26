@@ -34,6 +34,17 @@ namespace AUTOCAD_COMMANDS.Nesting
 
         public double TimeBudgetSeconds { get; set; } = 30.0;
 
+        /// <summary>
+        /// Tim DU so luot xep, khong cat bot theo dong ho. MAC DINH BAT.
+        ///
+        /// Bat: may nhanh hay cham deu chay dung tung ay luot va ra DUNG cung mot ket qua.
+        /// Chay lau hon han muc thi cu de chay - muon dung thi bam nut dung.
+        ///
+        /// Tat: quay ve hanh vi cu - co tran thoi gian, doi lai ket qua co the khac nhau giua
+        /// cac may (da do duoc chenh 2% tren ban ve that).
+        /// </summary>
+        public bool DeterministicSearch { get; set; } = true;
+
         public int Seed { get; set; } = 1;
 
         public int ExtraSeededOrderings { get; set; } = 3;
@@ -75,18 +86,23 @@ namespace AUTOCAD_COMMANDS.Nesting
         public bool OutputAsBlocks { get; set; } = true;
 
         /// <summary>
-        /// Ve them mot nhan ten chi tiet vao GIUA moi chi tiet tren to.
+        /// Ghi ma P + so thu tu vao GIUA moi chi tiet tren to ("P01", "P02", ...).
         ///
-        /// MAC DINH TAT. Nhan nay la chu do GHOPHOI tu dat ra ("P11 D-D-347-566-1" = so thu tu
-        /// cua chuong trinh GHEP voi chu cua nguoi dung), dat o TAM chi tiet voi co chu tu tinh
-        /// (den 15 mm). Tren ban ve san xuat that, nguoi dung nhin thay no va tuong chuong trinh
-        /// da SUA chu cua ho roi phong to mang ra giua - trong khi chu goc van nam yen cho cu.
-        /// Khong ai yeu cau cai nhan nay, nen khong bat san.
+        /// Nhan nay nam tren layer KHONG IN va KHONG CAT, chi de doi chieu khi ra xuong:
+        /// "chi tiet P07 la cai nao tren to nay".
         ///
-        /// Muon co chu tren chi tiet thi dung <see cref="EngravingLayers"/>: chu cua chinh nguoi
-        /// dung, nguyen van, dung co, dung vi tri.
+        /// Truoc day nhan nay ghep SO THU TU voi CHU CUA NGUOI DUNG ("P11 D-D-347-566-1") va
+        /// phong to dat vao giua chi tiet, nen nhin tren ban ve cu tuong chuong trinh da sua
+        /// chu cua ho roi mang ra giua - vi vay no bi tat di. Gio nhan chi con DUNG ma P + so
+        /// thu tu, khong dinh gi den chu cua nguoi dung nua, nen bat lai duoc.
+        ///
+        /// Chi tiet nao DA CO chu cat cua chinh nguoi dung thi khong ve nhan - de khong thanh
+        /// hai dong chu chong len nhau.
+        ///
+        /// Muon co chu THAT tren chi tiet thi dung <see cref="EngravingLayers"/>: chu cua chinh
+        /// nguoi dung, nguyen van, dung co, dung vi tri.
         /// </summary>
-        public bool LabelParts { get; set; } = false;
+        public bool LabelParts { get; set; } = true;
 
         public double SheetSpacingMm { get; set; } = 300.0;
 
@@ -124,6 +140,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                 AllowMirror = AllowMirror,
                 AllowPartInsideHole = AllowPartInsideHole,
                 TimeBudgetSeconds = TimeBudgetSeconds,
+                DeterministicSearch = DeterministicSearch,
                 Seed = Seed,
                 ExtraSeededOrderings = ExtraSeededOrderings
             };

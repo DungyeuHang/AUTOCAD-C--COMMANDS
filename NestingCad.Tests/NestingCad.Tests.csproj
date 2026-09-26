@@ -92,8 +92,14 @@
     <Compile Include="..\AUTOCAD COMMANDS\Nesting\NestingDwgWriter.cs">
       <Link>Linked\NestingDwgWriter.cs</Link>
     </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\NestingOrderList.cs">
+      <Link>Linked\NestingOrderList.cs</Link>
+    </Compile>
     <Compile Include="..\AUTOCAD COMMANDS\Nesting\GhoPhoiPipeline.cs">
       <Link>Linked\GhoPhoiPipeline.cs</Link>
+    </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\GhoPhoiOrderCadTests.cs">
+      <Link>Linked\GhoPhoiOrderCadTests.cs</Link>
     </Compile>
     <Compile Include="..\AUTOCAD COMMANDS\Nesting\GhoPhoiCadTests.cs">
       <Link>Linked\GhoPhoiCadTests.cs</Link>

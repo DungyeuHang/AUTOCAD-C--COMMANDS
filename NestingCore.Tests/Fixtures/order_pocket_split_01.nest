@@ -1,0 +1,23 @@
+# Hai tam lon co hoc, moi to chi chua duoc MOT tam lon. Tam nho lot han vao hoc nen
+# khong lam to dai them mot mili nao - du nho cua don nao vao to nao thi so to, chieu
+# dai da dung va dien tich bao DEU BANG NHAU.
+#
+# Thu tu mac dinh (dien tich giam dan, hoa thi theo ma) day tam nho S1 cua don B vao to
+# cua tam lon don A => moi to deu co ca hai don. Uu tien gom don phai doi lai: nho cua
+# don nao thi vao to cua don do. Day dung la cho khoa phu duoc phep len tieng, vi no
+# khong lam ton them gi ca.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 seed=1 budget=60 extra=3
+SHEET name=1250x1250 length=1250 width=1250
+PART id=BA qty=1 material=1.2MM tol=0 name=LON_A order=DON-A
+OUTER 0.000,0.000 1200.000,0.000 1200.000,400.000 800.000,400.000 800.000,800.000 1200.000,800.000 1200.000,1200.000 0.000,1200.000
+END
+PART id=BB qty=1 material=1.2MM tol=0 name=LON_B order=DON-B
+OUTER 0.000,0.000 1200.000,0.000 1200.000,400.000 800.000,400.000 800.000,800.000 1200.000,800.000 1200.000,1200.000 0.000,1200.000
+END
+PART id=S1 qty=1 material=1.2MM tol=0 name=NHO_B order=DON-B
+OUTER 0.000,0.000 300.000,0.000 300.000,300.000 0.000,300.000
+END
+PART id=S2 qty=1 material=1.2MM tol=0 name=NHO_A order=DON-A
+OUTER 0.000,0.000 300.000,0.000 300.000,300.000 0.000,300.000
+END
+EXPECT placed=4 unplaced=0 sheets=2 mixing=0 mingap>=5 minedge>=5 usedlength<=2421

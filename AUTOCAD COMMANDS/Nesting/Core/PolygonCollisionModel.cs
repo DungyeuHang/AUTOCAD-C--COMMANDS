@@ -13,7 +13,27 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             Shape = shape;
             Bounds = shape.Bounds;
             PolygonEdges.Collect(shape, out EdgeA, out EdgeB);
+
+            double[] ignore;
+            ContactSampling.Sample(
+                shape.Outer, ContactSampling.DefaultSamples,
+                out ContactPoints, out ContactNormalX, out ContactNormalY, out ignore);
         }
+
+        /// <summary>
+        /// Diem tren duong bao ngoai (toa do rieng cua hinh, chua tinh tinh tien) de sinh ung
+        /// vien kieu NFP.
+        /// </summary>
+        internal readonly IntPoint[] ContactPoints;
+
+        /// <summary>
+        /// Phap tuyen don vi huong ra ngoai tai moi <see cref="ContactPoints"/>. Hai diem chi
+        /// co the AP vao nhau khi hai phap tuyen huong nguoc nhau - do la bo loc chinh de
+        /// khong phai thu moi cap diem.
+        /// </summary>
+        internal readonly double[] ContactNormalX;
+
+        internal readonly double[] ContactNormalY;
 
         public PartGroup Group { get; private set; }
 

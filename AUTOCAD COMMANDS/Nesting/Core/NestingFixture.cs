@@ -14,11 +14,13 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
     ///   SETTINGS  gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=30 extra=3
     ///             (legacy tol=X = default part tolerance for PART lines without tol=)
     ///   SHEET     name=1500x3000 length=3000 width=1500 [material=1.2MM]
-    ///   PART      id=P1 qty=12 material=1.2MM [tol=0.05] [name=...]   (tol = arc chord tolerance, mm)
+    ///   PART      id=P1 qty=12 material=1.2MM [tol=0.05] [name=...] [order=DON-A]
+    ///             (tol = arc chord tolerance, mm; order = ten don hang, bo trong = khong theo don)
     ///   OUTER     x,y x,y x,y ...          (mm)
     ///   HOLE      x,y x,y x,y ...          (0..n per part)
     ///   END
-    ///   EXPECT    placed=18 sheets<=2      (optional assertions for the runner)
+    ///   EXPECT    placed=18 sheets<=2 [mixing=0]   (optional assertions for the runner)
+    ///             mixing = tong so don PHAI tron them tren moi to (mot to mot don = 0)
     /// Values must not contain spaces (name is written with '_' instead of spaces).
     /// </summary>
     public static class NestingFixture
@@ -64,8 +66,9 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
             foreach (PartGroup g in request.Groups)
             {
-                sb.AppendLine(string.Format(ci, "PART id={0} qty={1} material={2} tol={4:0.####} name={3}",
-                    Token(g.Id), g.Quantity, Token(g.Material), Token(g.Name), g.Shape.ToleranceMm));
+                sb.AppendLine(string.Format(ci, "PART id={0} qty={1} material={2} tol={4:0.####} name={3}{5}",
+                    Token(g.Id), g.Quantity, Token(g.Material), Token(g.Name), g.Shape.ToleranceMm,
+                    string.IsNullOrEmpty(g.Order) ? string.Empty : " order=" + Token(g.Order)));
                 sb.AppendLine("OUTER " + RingText(g.Shape.Polygon.Outer));
                 foreach (IntPoint[] h in g.Shape.Polygon.Holes) sb.AppendLine("HOLE " + RingText(h));
                 sb.AppendLine("END");
@@ -171,8 +174,9 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                                 part["id"],
                                 new PartShape(PolyShape.Create(outer, hs), Num(part, "tol", defaultTol)),
                                 (int)Num(part, "qty", 1),
-                                part.ContainsKey("material") ? part["material"] : "1.2MM");
-                            if (part.ContainsKey("name")) g.Name = part["name"];
+                                part.ContainsKey("material") ? part["material"] : "1.2MM",
+                                part.ContainsKey("order") ? Untoken(part["order"]) : null);
+                            if (part.ContainsKey("name")) g.Name = Untoken(part["name"]);
                             req.Groups.Add(g);
                             part = null;
                             break;
@@ -205,9 +209,28 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 material != null ? " material=" + Token(material) : string.Empty);
         }
 
+        /// <summary>
+        /// Ma hoa mot gia tri de no khong lam vo cach tach dong (tach bang dau cach, cap
+        /// khoa=gia tri).
+        ///
+        /// Truoc day dau cach bi doi thanh gach duoi, tuc la doc lai KHONG ra duoc ten cu:
+        /// "DON ABC 001" thanh "DON_ABC_001". Ten don la du lieu cua nguoi dung, doi mot ky
+        /// tu cung la sai. Gio ma hoa kieu phan tram nen doc lai duoc nguyen van.
+        ///
+        /// Fixture cu viet gach duoi van doc binh thuong - giai ma chi dong den cac chuoi co
+        /// %20 / %3D / %25, ma nhung chuoi do thi truoc day khong sinh ra bao gio.
+        /// </summary>
         private static string Token(string s)
         {
-            return string.IsNullOrEmpty(s) ? "-" : s.Replace(' ', '_').Replace('=', '_');
+            if (string.IsNullOrEmpty(s)) return "-";
+            return s.Replace("%", "%25").Replace(" ", "%20").Replace("=", "%3D");
+        }
+
+        /// <summary>Nguoc cua <see cref="Token"/>.</summary>
+        private static string Untoken(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return s;
+            return s.Replace("%3D", "=").Replace("%20", " ").Replace("%25", "%");
         }
 
         private static string RingText(IntPoint[] ring)

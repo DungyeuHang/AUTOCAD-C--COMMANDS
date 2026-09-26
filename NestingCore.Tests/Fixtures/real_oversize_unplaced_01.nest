@@ -87,4 +87,4 @@ PART id=G038 qty=1 material=1.2MM tol=0 name=P38
 OUTER 1695,0 1695,2270 0,2270 0,0
 HOLE 20,20 20,2250 1675,2250 1675,20
 END
-EXPECT placed=24 unplaced=2 sheets<=1 mingap>=5 minedge>=5
+EXPECT placed=24 unplaced=2 sheets<=1 mingap>=5 minedge>=5 usedlength<=556

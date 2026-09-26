@@ -5,15 +5,29 @@ using System.Threading;
 namespace AUTOCAD_COMMANDS.Nesting.Core
 {
     /// <summary>
-    /// V1 decoder: candidate-point placement + real polygon collision + compaction.
-    /// For each part (in the given order) it tries the already open sheets first (first fit),
-    /// then opens a new sheet. On a sheet it:
-    ///   1. builds candidate positions for the part's bounding-box corner from the sheet
-    ///      boundary, the bounding boxes of placed parts and (sampled) vertices of placed parts,
-    ///   2. for every orientation sweeps the candidates, keeps the first valid Y for each X,
-    ///   3. compacts that position (slide left, slide down, repeat) with collision checks,
-    ///   4. keeps the best position according to the <see cref="PlacementPolicy"/>.
-    /// Not NFP, not a metaheuristic.
+    /// Bo DAT CHI TIET: sinh cac vi tri ung vien, kiem va cham bang da giac THAT, roi nen lai.
+    ///
+    /// Voi tung chi tiet (theo thu tu duoc giao) no thu cac to dang mo truoc, het cho thi mo
+    /// to moi. Tren mot to, ung vien den tu HAI nguon bo tuc cho nhau:
+    ///
+    ///   A. QUET NGANG DOC - cac cot X suy tu mep to, tu hop bao cac chi tiet da dat, tu dinh
+    ///      lom, cong mot luot quet deu khap chieu dai to. O moi cot: THA ROI tu tren xuong,
+    ///      va lay chieu cao hop le thap nhat.
+    ///
+    ///   B. VI TRI CHAM NHAU (kieu NFP) - ghep tung diem tren duong bao chi tiet DA DAT voi
+    ///      tung dinh cua chi tiet DANG XEP, chi giu cac cap quay lung vao nhau, roi lui ra
+    ///      theo phap tuyen va ep nguoc vao den khi cham. Xem <see cref="AddContactCandidates"/>.
+    ///
+    /// Nguon A tim ra phan lon cac cho; nguon B bu dung mot lo ma A khong voi toi: hoc mo sang
+    /// NGANG o giua chieu cao chi tiet - tha roi khong toi, ma nen trai/xuong cung khong vao
+    /// duoc neu chieu cao khong dung ngay tu dau.
+    ///
+    /// Vai chuc ung vien dan dau duoc NEN (truot trai roi truot xuong), roi cham diem LAI sau
+    /// khi nen - vi truoc khi nen thi hai cho cung cot X trong y het nhau.
+    ///
+    /// Day KHONG phai NFP dung nghia: khong dung Minkowski, khong hop cac vung cam, khong phu
+    /// cac vi tri cham kieu dinh-cham-canh. Do la mot tap UNG VIEN; phep kiem va cham that van
+    /// la trong tai duy nhat quyet dinh cho nao dat duoc. Cung khong co GA / SA.
     /// </summary>
     public sealed class CandidatePointDecoder : IPlacementDecoder
     {
@@ -23,11 +37,88 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         /// <summary>First compaction step (25 mm), halved on every blocked move.</summary>
         private const long InitialSlideStep = 25000;
 
-        /// <summary>How many of the best uncompacted candidates are compacted per part.</summary>
-        private const int CompactedCandidates = 6;
+        /// <summary>
+        /// Bao nhieu ung vien dan dau duoc dem di NEN (truot trai roi truot xuong).
+        ///
+        /// Diem cham TRUOC khi nen chi la uoc luong tho: hai cho cung mot cot X cho ra cung
+        /// mot diem, nhung sau khi nen thi mot cai truot han vao trong con cai kia bi chan
+        /// ngay. Nen it qua thi cai truot duoc lai roi ra ngoai danh sach.
+        ///
+        /// Da do tren ca bo fixture: 6 -> 8 -> 10 lam quality_arc_in_c_01 tu 758 xuong 730
+        /// roi 712 mm; tu 12 tro len khong go them duoc gi ma van ton them thoi gian.
+        /// Rieng con so nay ton khoang 1% thoi gian.
+        /// </summary>
+        private const int CompactedCandidates = 10;
+
+        /// <summary>
+        /// So diem X quet deu tren chieu dai to cho moi huong xoay.
+        ///
+        /// Cac vi tri X doan tu hop bao van duoc giu; day la phan quet THEM cho nhung cho nam
+        /// giua chung. 64 diem tren to 2500 mm la buoc ~39 mm - du day de tim ra cho, con lai
+        /// buoc nen se don sat den tung 0.05 mm.
+        /// </summary>
+        private const int XSweepSteps = 64;
 
         /// <summary>Score quantum for the LeftBottom policy (1 mm) so that tiny compaction noise does not dominate.</summary>
         private const long ScoreQuantum = 1000;
+
+        /// <summary>
+        /// So ung vien TIEP XUC duoc dem di kiem va cham that, theo thu tu diem tot dan.
+        ///
+        /// Sinh ung vien tiep xuc chi la phep tru nen re; kiem va cham moi dat. Vi vay sinh
+        /// that nhieu, cham diem bang hop bao (cung re), roi chi kiem that cho tung nay cai
+        /// dau bang. Dat 0 la tat han phan NFP - dung de do co/khong tren cung mot may.
+        ///
+        /// Da do: ha xuong 12 thi mat cho long trong fixture quality_side_v_pocket_01 (685 mm
+        /// thay vi 610); 16 la vua du, de 24 cho co bien.
+        /// </summary>
+        private const int ContactChecked = 24;
+
+        /// <summary>So ung vien tiep xuc HOP LE nhieu nhat duoc giu lai de thi voi cac ung vien quet.</summary>
+        private const int ContactKept = 8;
+
+        /// <summary>
+        /// Day them ra ngoai bao nhieu, ngoai khe ho bat buoc (0.05 mm - dung bang buoc nen nho
+        /// nhat). Diem tiep xuc tinh dung bang khe ho thi cham dung gioi han, lam tron sang so
+        /// nguyen la co the thieu mot don vi va bi loai oan.
+        /// </summary>
+        private const long ContactGuard = 50;
+
+        /// <summary>
+        /// Nguong AP MAT: tich vo huong cua hai phap tuyen phai nho hon so nay.
+        ///
+        /// Hai mep chi ap duoc vao nhau khi chung quay LUNG lai nhau - phap tuyen nguoc chieu,
+        /// tich vo huong bang -1. Ghep hai diem co phap tuyen cung chieu thi chi co the la mot
+        /// hinh dam xuyen qua hinh kia. Lay -0.35 (lech nhau tren 110 do) de van nhan cac goc,
+        /// vi tai mot goc phap tuyen phan giac lech kha xa phap tuyen cua tung canh.
+        /// </summary>
+        private const double ContactFacing = -0.35;
+
+        /// <summary>
+        /// Gop cac vi tri cach nhau duoi 0.5 mm lam mot khi chon ung vien di kiem.
+        ///
+        /// Nhieu cap diem khac nhau cho ra gan nhu cung mot cho dat; neu khong gop thi ca
+        /// ngan sach kiem va cham do het vao mot cho duy nhat. Gop xong, ngan sach trai deu
+        /// ra nhieu cho dat KHAC nhau. Vi tri giu nguyen khong lam tron - chi dung de gop.
+        /// </summary>
+        private const long ContactMergeStep = 500;
+
+        /// <summary>
+        /// Giu san bao nhieu ung vien tiep xuc tot nhat.
+        ///
+        /// Phai lon hon <see cref="ContactChecked"/> kha nhieu, vi buoc gop cho trung sau do se
+        /// loai bot: nhieu cap diem khac nhau cho ra gan nhu cung mot cho dat.
+        /// </summary>
+        private const int ContactPoolKeep = 128;
+
+        /// <summary>
+        /// Lui ra bao nhieu theo phuong phap tuyen truoc khi ep vao (20 mm).
+        ///
+        /// Diem tiep xuc tinh theo duong phan giac chi trung dich khi goc hai ben khop nhau.
+        /// Lech mot chut la ung vien nam sau qua, bi coi la khong hop le va bi vut di. Lui ra
+        /// truoc roi ep vao thi luon dung o dung cho cham nhau, bat ke goc co khop hay khong.
+        /// </summary>
+        private const long ContactBackoff = 20000;
 
         public DecodedLayout Decode(IList<PartInstance> order, MaterialJob job, PlacementPolicy policy, CancellationToken cancellation)
         {
@@ -39,7 +130,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 if (cancellation.IsCancellationRequested)
                 {
                     layout.Cancelled = true;
-                    layout.Unplaced.Add(new UnplacedPart(instance.Id, instance.PartGroupId, "Da huy boi nguoi dung."));
+                    layout.Unplaced.Add(new UnplacedPart(instance.Id, instance.PartGroupId, "Da huy boi nguoi dung.", instance.Order));
                     continue;
                 }
 
@@ -49,7 +140,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                     string reason;
                     job.UnfitReasons.TryGetValue(instance.PartGroupId, out reason);
                     layout.Unplaced.Add(new UnplacedPart(instance.Id, instance.PartGroupId,
-                        reason ?? "Khong co huong xoay nao vua kho phoi."));
+                        reason ?? "Khong co huong xoay nao vua kho phoi.", instance.Order));
                     continue;
                 }
 
@@ -72,7 +163,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 if (first == null)
                 {
                     layout.Unplaced.Add(new UnplacedPart(instance.Id, instance.PartGroupId,
-                        "Khong tim duoc vi tri hop le ngay ca tren to phoi trong."));
+                        "Khong tim duoc vi tri hop le ngay ca tren to phoi trong.", instance.Order));
                     continue;
                 }
 
@@ -187,6 +278,15 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                     }
                 }
 
+                // Quet deu khap chieu dai to: giua hai mep hop bao co the la dung cho vua khit
+                // ma khong co diem doan nao roi vao.
+                long span = maxXStart - inset;
+                if (span > 0)
+                {
+                    long sweep = Math.Max(ScoreQuantum, span / XSweepSteps);
+                    for (long x = inset + sweep; x < maxXStart; x += sweep) xs.Add(x);
+                }
+
                 SortUniqueInRange(xs, inset, maxXStart);
 
                 foreach (long x in xs)
@@ -224,6 +324,26 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
                     SortUniqueInRange(ys, inset, maxYStart);
 
+                    // THA ROI: dat chi tiet len tren cung roi ha xuong den khi bi chan. Day moi
+                    // la cho no thuc su dung o cot X nay - khac han voi viec chon mot trong vai
+                    // gia tri Y doan san tu hop bao.
+                    long dropX = x - shape.Bounds.MinX;
+                    long dropY = maxYStart - shape.Bounds.MinY;
+                    if (IsValid(shape, dropX, dropY, column, spec, collision))
+                    {
+                        Slide(shape, ref dropX, ref dropY, 0, -1, column, spec, collision);
+                        candidates.Add(new Candidate
+                        {
+                            Shape = shape,
+                            Tx = dropX,
+                            Ty = dropY,
+                            Score = MakeScore(shape, dropX, dropY, policy),
+                            Order = candidates.Count
+                        });
+                    }
+
+                    // Van giu cac ung vien cu: co nhung cho chi vao duoc TU BEN CANH (long chu
+                    // C nam ngang, hoc lom mo ngang) ma tha roi thang dung khong bao gio toi.
                     foreach (long y in ys)
                     {
                         long tx = x - shape.Bounds.MinX;
@@ -238,9 +358,11 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 }
             }
 
+            AddContactCandidates(orientations, sheet, spec, collision, inset, clearance, policy, candidates);
+
             if (candidates.Count == 0) return null;
 
-            candidates.Sort((a, b) => a.Score.BetterThan(b.Score) ? -1 : (b.Score.BetterThan(a.Score) ? 1 : a.Order.CompareTo(b.Order)));
+            candidates.Sort(CompareCandidates);
 
             Candidate chosen = null;
             for (int i = 0; i < candidates.Count && i < CompactedCandidates; i++)
@@ -248,13 +370,180 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 Candidate c = candidates[i];
                 long tx = c.Tx, ty = c.Ty;
                 Compact(c.Shape, ref tx, ref ty, sheet.Items, spec, collision);
+                c.Score = MakeScore(c.Shape, tx, ty, policy);
+
                 c.Tx = tx;
                 c.Ty = ty;
-                c.Score = MakeScore(c.Shape, tx, ty, policy);
                 if (chosen == null || c.Score.BetterThan(chosen.Score)) chosen = c;
             }
 
             return new PlacedItem(instance, chosen.Shape, chosen.Tx, chosen.Ty, collision.Place(chosen.Shape, chosen.Tx, chosen.Ty));
+        }
+
+        private static int CompareCandidates(Candidate a, Candidate b)
+        {
+            if (a.Score.BetterThan(b.Score)) return -1;
+            if (b.Score.BetterThan(a.Score)) return 1;
+            return a.Order.CompareTo(b.Order);
+        }
+
+        /// <summary>
+        /// Sinh ung vien theo kieu DA GIAC KHONG-VUA (NFP).
+        ///
+        /// Cach quet cu chi thu cac vi tri doc va ngang suy ra tu hop bao: mot chi tiet chi
+        /// duoc thu o nhung cot X va hang Y thang hang voi mep hop bao cua chi tiet da dat.
+        /// Vi vay hai hinh cong long vao nhau duoc thi cung khong bao gio duoc thu, tru khi
+        /// cho long do tinh co thang hang voi mot mep hop bao nao do.
+        ///
+        /// Tap hop MOI vi tri dat hai hinh cham nhau chinh la bien cua da giac khong-vua, va
+        /// moi dinh cua bien do co dang (mot diem tren hinh da dat) tru (mot dinh cua hinh
+        /// dang xep). Sinh thang tap do: voi moi cap diem, tinh tien de hai diem trung nhau,
+        /// sau khi da day diem thu nhat ra ngoai dung bang khe ho bat buoc.
+        ///
+        /// Day KHONG phai NFP dung: khong dung Minkowski, khong hop cac vung cam, va khong
+        /// phu cac vi tri cham kieu dinh-cham-canh. Do la mot tap ung vien - phep kiem va cham
+        /// that van la trong tai duy nhat quyet dinh cho nao dat duoc, va buoc nen van don sat
+        /// den tung 0.05 mm. Khong noi long dung sai o bat cu dau.
+        /// </summary>
+        private static void AddContactCandidates(
+            List<PreparedShape> orientations,
+            DecodedSheet sheet,
+            SheetSpec spec,
+            ICollisionModel collision,
+            long inset,
+            long[] clearance,
+            PlacementPolicy policy,
+            List<Candidate> candidates)
+        {
+            int n = sheet.Items.Count;
+            if (n == 0 || ContactChecked <= 0) return;
+
+            // Cac ung vien quet da co san mot cho tot nhat. Cho cham nao khong hon duoc cho do
+            // thi sinh ra cung vo ich - bo ngay truoc khi cap phat, vi so cap diem la hang chuc
+            // nghin va chinh viec cap phat moi la phan ton thoi gian.
+            Score limit;
+            limit.K1 = long.MaxValue;
+            limit.K2 = long.MaxValue;
+            limit.K3 = long.MaxValue;
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                if (candidates[i].Score.BetterThan(limit)) limit = candidates[i].Score;
+            }
+
+            long sheetL = spec.LengthUnits, sheetW = spec.WidthUnits;
+            Candidate[] pool = new Candidate[ContactPoolKeep];
+            int poolCount = 0, generated = 0;
+
+            foreach (PreparedShape shape in orientations)
+            {
+                IntPoint[] moving = shape.ContactPoints;
+                if (moving.Length == 0) continue;
+
+                LongRect box = shape.Bounds;
+                if (box.Width > sheetL - 2 * inset || box.Height > sheetW - 2 * inset) continue;
+
+                double[] mnx = shape.ContactNormalX, mny = shape.ContactNormalY;
+
+                for (int i = 0; i < n; i++)
+                {
+                    PlacedItem p = sheet.Items[i];
+                    long gap = clearance[i] + ContactGuard;
+
+                    IntPoint[] fixedPts = p.ContactPoints;
+                    double[] fnx = p.ContactNormalX, fny = p.ContactNormalY, fpush = p.ContactPush;
+
+                    for (int a = 0; a < fixedPts.Length; a++)
+                    {
+                        double nax = fnx[a], nay = fny[a];
+                        long ax = fixedPts[a].X + (long)Math.Round(nax * fpush[a] * gap);
+                        long ay = fixedPts[a].Y + (long)Math.Round(nay * fpush[a] * gap);
+
+                        for (int b = 0; b < moving.Length; b++)
+                        {
+                            // Chi giu cac cap AP MAT vao nhau; con lai la dam xuyen qua nhau.
+                            if (nax * mnx[b] + nay * mny[b] > ContactFacing) continue;
+
+                            long tx = ax - moving[b].X;
+                            long ty = ay - moving[b].Y;
+
+                            // Loai som bang hop bao - re hon phep kiem va cham hang nghin lan.
+                            if (box.MinX + tx < inset || box.MinY + ty < inset) continue;
+                            if (box.MaxX + tx > sheetL - inset || box.MaxY + ty > sheetW - inset) continue;
+
+                            Score score = MakeScore(shape, tx, ty, policy);
+                            if (!score.BetterThan(limit)) continue;
+
+                            // Day la cho nong nhat cua ca ham: chay hang chuc nghin lan moi
+                            // lan dat mot chi tiet. Khong hon duoc cai te nhat dang giu thi bo
+                            // ngay, truoc khi cap phat bat cu thu gi.
+                            if (poolCount == ContactPoolKeep && !score.BetterThan(pool[poolCount - 1].Score)) 
+                            {
+                                generated++;
+                                continue;
+                            }
+
+                            Candidate made = new Candidate
+                            {
+                                Shape = shape,
+                                Tx = tx,
+                                Ty = ty,
+                                Score = score,
+                                Order = generated++,
+                                Nx = nax,
+                                Ny = nay
+                            };
+
+                            // Chen giu thu tu. Hoa diem thi cai sinh TRUOC o lai, dung nhu mot
+                            // phep sap xep on dinh se lam.
+                            int at = poolCount < ContactPoolKeep ? poolCount++ : ContactPoolKeep - 1;
+                            while (at > 0 && made.Score.BetterThan(pool[at - 1].Score))
+                            {
+                                pool[at] = pool[at - 1];
+                                at--;
+                            }
+
+                            pool[at] = made;
+                        }
+                    }
+                }
+            }
+
+            if (poolCount == 0) return;
+
+            HashSet<long> seen = new HashSet<long>();
+            int kept = 0, checks = 0;
+            for (int i = 0; i < poolCount && checks < ContactChecked && kept < ContactKept; i++)
+            {
+                Candidate c = pool[i];
+
+                // Gop cac cho dat sat nhau: ngan sach kiem va cham phai trai ra nhieu cho
+                // KHAC nhau, chu khong do het vao mot chum diem gan nhu trung.
+                long cell = (c.Tx / ContactMergeStep + 4000000L) * 10000000L
+                          + (c.Ty / ContactMergeStep + 4000000L);
+                if (!seen.Add(cell)) continue;
+
+                checks++;
+
+                // Lui ra doc theo phap tuyen roi ep nguoc vao den khi cham. Dat thang vao diem
+                // tinh san chi trung khi goc hai ben khop nhau; lui ra truoc thi luon dung o
+                // dung cho cham, va cho nao that su bi chan thi cung thay ngay o buoc lui.
+                long backX = c.Tx + (long)Math.Round(c.Nx * ContactBackoff);
+                long backY = c.Ty + (long)Math.Round(c.Ny * ContactBackoff);
+                if (!IsValid(c.Shape, backX, backY, sheet.Items, spec, collision)) continue;
+
+                // Ep vao QUA ca diem tinh san: neu chi tiet HEP hon hoc thi cho cham that nam
+                // sau hon diem do. Chi nhan cac vi tri hop le nen ep sau chi co the sat hon.
+                SlideAlong(c.Shape, ref backX, ref backY, -c.Nx, -c.Ny, 2 * ContactBackoff, sheet.Items, spec, collision);
+                c.Tx = backX;
+                c.Ty = backY;
+                c.Score = MakeScore(c.Shape, backX, backY, policy);
+
+                // Xep sau cac ung vien quet: hoa diem thi cach cu thang, nen chi them lua
+                // chon chu khong lam doi ket qua da co.
+                c.Order = candidates.Count;
+                candidates.Add(c);
+                kept++;
+            }
         }
 
         private sealed class Candidate
@@ -264,6 +553,51 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             public long Ty;
             public Score Score;
             public int Order;
+
+            /// <summary>Phuong phap tuyen tai cho cham: lui ra theo huong nay roi ep nguoc vao.</summary>
+            public double Nx;
+
+            public double Ny;
+        }
+
+        /// <summary>
+        /// Truot theo mot phuong BAT KY (khong chi ngang hoac doc) cho den khi khong di tiep
+        /// duoc nua. Buoc dau bang <paramref name="room"/>, moi lan bi chan thi chia doi, dung
+        /// lai o 0.05 mm - giong het cach <see cref="Slide"/> lam voi hai truc.
+        /// </summary>
+        private static void SlideAlong(
+            PreparedShape shape,
+            ref long tx,
+            ref long ty,
+            double ux,
+            double uy,
+            long room,
+            List<PlacedItem> items,
+            SheetSpec spec,
+            ICollisionModel collision)
+        {
+            long x0 = tx, y0 = ty;
+            long moved = 0;
+            long step = room;
+            while (step >= MinSlideStep)
+            {
+                long d = moved + step;
+                if (d <= room)
+                {
+                    long nx = x0 + (long)Math.Round(ux * d);
+                    long ny = y0 + (long)Math.Round(uy * d);
+                    if (IsValid(shape, nx, ny, items, spec, collision))
+                    {
+                        moved = d;
+                        continue;
+                    }
+                }
+
+                step /= 2;
+            }
+
+            tx = x0 + (long)Math.Round(ux * moved);
+            ty = y0 + (long)Math.Round(uy * moved);
         }
 
         private static bool HoleCanHold(LongRect hole, long w, long h, long clearance)

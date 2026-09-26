@@ -22,6 +22,47 @@ namespace AUTOCAD_COMMANDS.Nesting
     internal static class GhoPhoiPipeline
     {
         /// <summary>
+        /// Gan TEN DON HANG cho tung ban ghi nhan dang, lay tu luot quet da chon duong bao
+        /// cua no.
+        ///
+        /// Khong doc tu chu, khong doc tu layer, khong suy tu hinh hoc: don hang la thu nguoi
+        /// dung khai o bang don, va chi di theo duong nguoi dung da quet.
+        ///
+        /// Neu mot chi tiet co duong bao ghep tu nhieu luot quet KHAC don nhau thi khong tu y
+        /// chon bua mot cai - danh dau MO HO de nguoi dung tu quyet o bang kiem tra.
+        /// </summary>
+        /// <returns>So ban ghi bi vat sang mo ho vi dinh vao hai don.</returns>
+        public static int AssignOrders(NestReadResult read, RecognitionResult recognition)
+        {
+            int conflicts = 0;
+            foreach (RecognizedPart part in recognition.Parts)
+            {
+                List<int> sources = part.Outer != null ? part.Outer.Sources : part.GeometrySources;
+                List<string> orders = new List<string>();
+                foreach (int src in sources)
+                {
+                    if (src < 0 || src >= read.Sources.Count) continue;
+                    string order = read.Sources[src].Order;
+                    if (string.IsNullOrEmpty(order) || orders.Contains(order)) continue;
+                    orders.Add(order);
+                }
+
+                if (orders.Count == 0) continue;
+
+                orders.Sort(StringComparer.Ordinal);
+                part.Order = orders[0];
+                if (orders.Count == 1) continue;
+
+                conflicts++;
+                part.Escalate(PartStatus.Ambiguous, string.Format(CultureInfo.InvariantCulture,
+                    "Duong bao ghep tu nhieu don ({0}) - chon lai don cho chi tiet nay.",
+                    string.Join(", ", orders.ToArray())));
+            }
+
+            return conflicts;
+        }
+
+        /// <summary>
         /// Attaches every engraving TEXT / MTEXT to the part that contains it, and reports the
         /// ones that belong to no part instead of dropping them quietly.
         ///
@@ -101,14 +142,36 @@ namespace AUTOCAD_COMMANDS.Nesting
                     m.SheetCount, m.Placed, m.Requested, m.UsedLengthMm, m.Utilization * 100));
                 sb.AppendLine(string.Format(ci, "   Phe lieu uoc tinh {0:0.###} m2 | phan du (dai cuoi to) {1:0.###} m2",
                     m.WasteAreaMm2 / 1e6, m.RemnantAreaMm2 / 1e6));
-                sb.AppendLine(string.Format(ci, "   Da thu {0} thu tu, tot nhat: {1}{2}",
-                    m.OrderingsTried, m.BestOrdering ?? "-", m.TimeBudgetHit ? "  (het thoi gian cho phep)" : string.Empty));
+                // Bao CA HAI con so: khoi luong viec da dinh (khong phu thuoc may) va thoi
+                // gian thuc te (phu thuoc may). Hai cai bang nhau tuc la da tim du.
+                sb.AppendLine(string.Format(ci, "   Da thu {0}/{1} thu tu xep trong {2:0.0}s, tot nhat: {3}",
+                    m.OrderingsTried, m.OrderingsPlanned, m.ElapsedSeconds, m.BestOrdering ?? "-"));
+
+                // Het gio thi mot so thu tu xep KHONG duoc chay, nen ket qua chua chac la cai
+                // tot nhat may co the tim ra. Phai noi ro hau qua, chu ghi moi chu "het thoi
+                // gian cho phep" o cuoi dong thi nguoi dung khong biet no anh huong den cai gi.
+                if (m.TimeBudgetHit)
+                {
+                    sb.AppendLine("   (!) HET THOI GIAN CHO PHEP - con thu tu xep chua duoc chay.");
+                    sb.AppendLine("       Ket qua van dung va an toan, nhung co the chua phai cach xep tiet kiem nhat,");
+                    sb.AppendLine("       va may khac toc do co the ra bo cuc khac.");
+                    sb.AppendLine(string.Format(ci,
+                        "       Cach xu ly: bat 'Tim du so luot xep' trong bang cai dat, hoac tang 'Thoi gian toi da' (dang de {0:0} giay).",
+                        request.Settings.TimeBudgetSeconds));
+                }
 
                 foreach (SheetResult s in result.Sheets)
                 {
                     if (s.Material != m.Material) continue;
                     sb.AppendLine(string.Format(ci, "   - To {0}: {1} chi tiet, dai dung {2:0} mm, su dung {3:0.0}% ({4:0.0}% ca to), phan du {5:0} mm",
                         s.NumberInMaterial, s.Placements.Count, s.UsedLengthMm, s.Utilization * 100, s.SheetUtilization * 100, s.RemnantLengthMm));
+
+                    // Ten don ghi DAY DU o day, khong rut gon: nhan ve tren to co the phai
+                    // cat bot cho vua, con ban bao cao thi khong duoc thieu ten don nao.
+                    if (s.Orders.Count > 0)
+                    {
+                        sb.AppendLine("     Don: " + string.Join(", ", s.Orders.ToArray()));
+                    }
                 }
             }
 
@@ -144,8 +207,11 @@ namespace AUTOCAD_COMMANDS.Nesting
                 int p, u;
                 placed.TryGetValue(g.Id, out p);
                 unplaced.TryGetValue(g.Id, out u);
-                sb.AppendLine(string.Format(ci, "   {0,-20} {1,-8} yeu cau {2,4} | xep {3,4} | chua xep {4,4}",
-                    g.Name, g.Material, g.Quantity, p, u));
+                // Ten don di kem tung dong: chay nhieu don thi cau hoi dau tien khi thay mot
+                // dong "chua xep" luon la "cua don nao?". Chay mot don thi cot nay rong.
+                string order = string.IsNullOrEmpty(g.Order) ? string.Empty : "  [" + g.Order + "]";
+                sb.AppendLine(string.Format(ci, "   {0,-20} {1,-8} yeu cau {2,4} | xep {3,4} | chua xep {4,4}{5}",
+                    g.Name, g.Material, g.Quantity, p, u, order));
                 List<string> why;
                 if (reasons.TryGetValue(g.Id, out why))
                 {

@@ -144,6 +144,14 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
         public ICollisionModel Collision { get; private set; }
 
+        /// <summary>
+        /// CA LENH nay co tu hai don hang tro len hay khong.
+        ///
+        /// Tinh theo toan bo yeu cau chu khong theo rieng vat lieu nay, de moi vat lieu chay
+        /// dung cung mot so luot - co thanh tien trinh moi bao dung.
+        /// </summary>
+        public bool OrderAware { get; set; }
+
         public List<PartGroup> Groups { get; private set; }
 
         public List<PartInstance> Instances { get; private set; }
@@ -170,11 +178,32 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         /// <summary>Reflex (concave) vertices of the outer ring - where other parts can tuck in.</summary>
         internal IntPoint[] ReflexVertices { get; private set; }
 
+        /// <summary>
+        /// Diem tren duong bao ngoai (toa do to phoi) de sinh ung vien kieu NFP: dat mot dinh
+        /// cua chi tiet dang xep vao day, sau khi day ra ngoai mot khe ho, la dat no CHAM vao
+        /// chi tiet nay. Moi vi tri long khit vao nhau deu la mot vi tri cham nhau.
+        /// </summary>
+        internal IntPoint[] ContactPoints { get; private set; }
+
+        /// <summary>Phap tuyen don vi huong ra ngoai tai moi <see cref="ContactPoints"/>.</summary>
+        internal double[] ContactNormalX { get; private set; }
+
+        internal double[] ContactNormalY { get; private set; }
+
+        /// <summary>
+        /// He so bu tai moi <see cref="ContactPoints"/>: day theo phap tuyen mot doan
+        /// khe_ho x he_so thi diem moi cach CA HAI canh ke dung bang khe ho.
+        /// </summary>
+        internal double[] ContactPush { get; private set; }
+
         internal LongRect[] HoleBounds { get; private set; }
 
         private void ComputeAnchors()
         {
-            const int maxAnchors = 48;
+            // Tren mot cung tron, hai dinh lom canh nhau cho ra hai neo gan nhu trung nhau -
+            // lay day dac chi lam phep kiem va cham tang vot ma khong them lua chon nao. Lay
+            // thua ra roi rut gon DEU: neo van trai deu ca long hoc, ma so luong thi co han.
+            const int maxAnchors = 4;
             IntPoint[] outer = Placed.Shape.Outer;
             int n = outer.Length;
             bool[] isReflex = new bool[n];
@@ -185,15 +214,18 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 isReflex[i] = GeometryMath.Cross(prev, outer[i], next) < 0;   // outer is CCW
             }
 
-            // A concave arc becomes a run of many reflex vertices; its end points are enough
-            // as anchors (the compaction step slides into the rest of the pocket).
+            // Moi dinh LOM deu la mot cho co the nhet hinh khac vao, nen lay HET roi thua
+            // thi rut gon deu.
+            //
+            // Truoc day chi lay HAI DAU cua moi doan lom, voi ly do "buoc nen se truot not vao
+            // trong hoc". Voi hoc VUONG thi dung, nhung mot cung LOM tron (luoi liem, long chu
+            // C) la MOT doan lom dai - lay hai dau tuc la ca long cung khong sinh ra mot neo
+            // nao, trong khi buoc nen chi truot duoc sang trai va xuong duoi nen khong bao gio
+            // bo vao duoc. Do la ly do hinh cong bi xep roi rac.
             List<IntPoint> reflex = new List<IntPoint>();
             for (int i = 0; i < n; i++)
             {
-                if (!isReflex[i]) continue;
-                bool runStart = !isReflex[(i + n - 1) % n];
-                bool runEnd = !isReflex[(i + 1) % n];
-                if (runStart || runEnd) reflex.Add(outer[i]);
+                if (isReflex[i]) reflex.Add(outer[i]);
             }
 
             if (reflex.Count > maxAnchors)
@@ -204,6 +236,14 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             }
 
             ReflexVertices = reflex.ToArray();
+
+            IntPoint[] contact;
+            double[] nx, ny, push;
+            ContactSampling.Sample(outer, ContactSampling.DefaultSamples, out contact, out nx, out ny, out push);
+            ContactPoints = contact;
+            ContactNormalX = nx;
+            ContactNormalY = ny;
+            ContactPush = push;
 
             HoleBounds = new LongRect[Placed.Shape.Holes.Length];
             for (int k = 0; k < HoleBounds.Length; k++) HoleBounds[k] = LongRect.FromPoints(Placed.Shape.Holes[k]);
@@ -255,8 +295,16 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
     {
         public DecodedLayout Best { get; set; }
 
+        /// <summary>So luot xep da chay xong.</summary>
         public int OrderingsTried { get; set; }
 
+        /// <summary>So luot xep DA DINH chay - "khoi luong viec" cua lan ghep nay.</summary>
+        public int RunsPlanned { get; set; }
+
+        /// <summary>Thoi gian thuc te da chay (giay).</summary>
+        public double ElapsedSeconds { get; set; }
+
+        /// <summary>Co luot bi BO vi het gio. O che do tat dinh thi khong bao gio.</summary>
         public bool TimeBudgetHit { get; set; }
 
         public bool Cancelled { get; set; }

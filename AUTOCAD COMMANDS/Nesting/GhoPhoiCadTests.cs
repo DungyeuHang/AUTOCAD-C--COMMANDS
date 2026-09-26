@@ -30,6 +30,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             NestingTestHarness.Run(report, "B11. Chu khac theo DUNG phep bien hinh cua chi tiet o ca 8 huong", B11_EngravingTransform);
             NestingTestHarness.Run(report, "B12. Chi tiet CHUA XEP van mang theo hinh khac", B12_EngravingOnUnplacedPart);
             NestingTestHarness.Run(report, "B13. Ve thang vao ban ve dang mo, da pha khoi, giu layer", B13_DrawIntoCurrentDrawing);
+            GhoPhoiOrderCadTests.Run(report);
             NestingTestHarness.Summary(report);
             return report;
         }

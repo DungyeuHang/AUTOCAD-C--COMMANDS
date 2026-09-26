@@ -1,0 +1,13 @@
+# GHOPHOI - FIXTURE CHAT LUONG GHEP (ranh cheo)
+# Ranh chu V cheo tren tam 600x400 va nem khop vao ranh (khe do theo phap tuyen).
+# Cho long khong thang hang voi bat ky mep hop bao hay dinh lom nao theo phuong
+# ngang / doc, nen chi tim ra bang cach do vi tri CHAM nhau.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 seed=1 budget=60 extra=3
+SHEET name=1250x2500 length=2500 width=1250
+PART id=G qty=3 material=1.2MM tol=0 name=TAMRANHCHEO
+OUTER 0.000,0.000 600.000,0.000 600.000,400.000 400.000,400.000 260.000,140.000 120.000,400.000 0.000,400.000
+END
+PART id=W qty=3 material=1.2MM tol=0 name=NEMCHEO
+OUTER 0.000,0.000 120.101,250.101 -120.101,250.101
+END
+EXPECT placed=6 unplaced=0 sheets<=1 usedlength<=816 mingap>=5 minedge>=5

@@ -4,4 +4,4 @@ SHEET name=S length=300 width=500
 PART id=A qty=1 material=1.2MM tol=0 name=A
 OUTER 0,0 400,0 400,100 0,100
 END
-EXPECT placed=1 sheets=1
+EXPECT placed=1 sheets=1 usedlength<=111

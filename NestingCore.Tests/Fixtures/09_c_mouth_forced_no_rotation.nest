@@ -7,4 +7,4 @@ END
 PART id=B qty=1 material=1.2MM tol=0 name=B
 OUTER 0,0 150,0 150,150 0,150
 END
-EXPECT placed=2 sheets=1 mingap>=5 minedge>=5
+EXPECT placed=2 sheets=1 mingap>=5 minedge>=5 usedlength<=311

@@ -240,7 +240,8 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                     "G" + r.Index.ToString("000", CultureInfo.InvariantCulture),
                     ToShape(r, arcToleranceMm),
                     r.Quantity,
-                    SimpleNestingEngine.NormalizeMaterial(r.Material));
+                    SimpleNestingEngine.NormalizeMaterial(r.Material),
+                    r.Order);
                 g.Name = r.Name;
                 g.SourceReference = r;
                 groups.Add(g);

@@ -4,4 +4,4 @@ SHEET name=S420 length=420 width=420
 PART id=A qty=7 material=1.2MM tol=0 name=A
 OUTER 0,0 200,0 200,200 0,200
 END
-EXPECT placed=7 sheets=2 mingap=5 minedge=5
+EXPECT placed=7 sheets=2 mingap=5 minedge=5 usedlength<=831

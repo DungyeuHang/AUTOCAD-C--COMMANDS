@@ -64,9 +64,28 @@ namespace AUTOCAD_COMMANDS.Nesting
         {
             GhoPhoiSettings settings = GhoPhoiSettingsStore.Load();
 
-            // ---- 1. selection ----
-            ObjectId[] ids = SelectEntities(ed);
-            if (ids == null || ids.Length == 0)
+            // ---- 1. don hang + chon chi tiet ----
+            IList<NestingOrderEntry> orders = AskOrders(ed, db, settings);
+            if (orders == null)
+            {
+                ed.WriteMessage("\nGHOPHOI: Da huy o bang don hang - ban ve giu nguyen.");
+                return;
+            }
+
+            // Moi doi tuong chi thuoc MOT don: don nao quet no truoc thi giu.
+            List<ObjectId> ids = new List<ObjectId>();
+            Dictionary<ObjectId, string> orderByEntity = new Dictionary<ObjectId, string>();
+            foreach (NestingOrderEntry order in orders)
+            {
+                foreach (ObjectId id in order.Ids)
+                {
+                    if (orderByEntity.ContainsKey(id)) continue;
+                    orderByEntity[id] = order.Name;
+                    ids.Add(id);
+                }
+            }
+
+            if (ids.Count == 0)
             {
                 ed.WriteMessage("\nGHOPHOI: Da huy - chua chon doi tuong.");
                 return;
@@ -76,7 +95,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             NestReadResult read;
             using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
             {
-                read = NestingSelectionReader.Read(tr, ids, settings);
+                read = NestingSelectionReader.Read(tr, ids, settings, orderByEntity);
             }
 
             RecognitionResult recognition = new PartRecognizer(settings.ToRecognitionSettings()).Recognize(read.Chains, read.Texts);
@@ -97,6 +116,14 @@ namespace AUTOCAD_COMMANDS.Nesting
             }
 
             GhoPhoiPipeline.AttachEngravings(read, recognition, settings);
+
+            int orderConflicts = GhoPhoiPipeline.AssignOrders(read, recognition);
+            if (orderConflicts > 0)
+            {
+                recognition.GlobalWarnings.Add(string.Format(CultureInfo.InvariantCulture,
+                    "{0} chi tiet co duong bao ghep tu nhieu don - chon lai don o bang kiem tra.",
+                    orderConflicts));
+            }
 
             if (recognition.Parts.Count == 0)
             {
@@ -292,6 +319,66 @@ namespace AUTOCAD_COMMANDS.Nesting
             ed.WriteMessage("\n  Khong vua y thi Ctrl+Z mot lan la het.");
 
             foreach (string w in written.Warnings) ed.WriteMessage("\n  (!) " + w);
+        }
+
+        /// <summary>
+        /// Hoi BANG DON HANG: moi dong mot don, quet chi tiet cho tung don.
+        ///
+        /// Neu nguoi dung da chon san truoc khi go lenh thi dien luon vao dong dau - khong bat
+        /// chon lai. Tra ve null khi nguoi dung huy.
+        /// </summary>
+        private static IList<NestingOrderEntry> AskOrders(Editor ed, Database db, GhoPhoiSettings settings)
+        {
+            Func<IList<ObjectId>, int[]> summarize = picked => Summarize(db, picked, settings);
+
+            using (NestingOrderForm form = new NestingOrderForm(ed, summarize))
+            {
+                PromptSelectionResult implied = ed.SelectImplied();
+                if (implied.Status == PromptStatus.OK && implied.Value != null && implied.Value.Count > 0)
+                {
+                    ed.SetImpliedSelection(new ObjectId[0]);
+                    form.FillFirstRow(implied.Value.GetObjectIds());
+                }
+
+                if (Application.ShowModalDialog(form) != WF.DialogResult.OK) return null;
+                return form.Orders;
+            }
+        }
+
+        /// <summary>
+        /// Nhan dang THU mot tap doi tuong de hien so chi tiet / SL tren bang don hang.
+        ///
+        /// Chi de nguoi dung nhin, khong phai con so chinh thuc: ket qua that duoc nhan dang
+        /// mot lan tren TOAN BO cac don cung luc, vi luc do viec gan chu moi day du.
+        /// </summary>
+        private static int[] Summarize(Database db, IList<ObjectId> ids, GhoPhoiSettings settings)
+        {
+            try
+            {
+                NestReadResult read;
+                using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+                {
+                    read = NestingSelectionReader.Read(tr, ids, settings);
+                }
+
+                RecognitionResult recognition = new PartRecognizer(settings.ToRecognitionSettings())
+                    .Recognize(read.Chains, read.Texts);
+
+                int parts = 0, qty = 0;
+                foreach (RecognizedPart p in recognition.Parts)
+                {
+                    if (!p.IsNestable) continue;
+                    parts++;
+                    qty += Math.Max(0, p.Quantity);
+                }
+
+                return new[] { parts, qty };
+            }
+            catch (Exception)
+            {
+                // Chi la con so xem truoc - hong thi de trong, khong duoc lam hong ca lenh.
+                return new[] { 0, 0 };
+            }
         }
 
         private static ObjectId[] SelectEntities(Editor ed)

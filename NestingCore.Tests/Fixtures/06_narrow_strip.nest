@@ -4,4 +4,4 @@ SHEET name=1250x2500 length=2500 width=1250
 PART id=S qty=10 material=1.2MM tol=0 name=STRIP
 OUTER 0,0 2000,0 2000,20 0,20
 END
-EXPECT placed=10 sheets=1 mingap=5 minedge=5
+EXPECT placed=10 sheets=1 mingap=5 minedge=5 usedlength<=2011

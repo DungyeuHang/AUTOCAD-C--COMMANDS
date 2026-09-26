@@ -124,6 +124,118 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
     }
 
     /// <summary>
+    /// Lay mot so diem rai deu tren duong bao ngoai, kem huong DAY RA NGOAI tai moi diem.
+    ///
+    /// Dung de sinh ung vien kieu NFP (da giac khong-vua): dat mot dinh cua chi tiet dang xep
+    /// vao mot diem tiep xuc da day ra ngoai mot khe ho, tuc la dat no CHAM vao chi tiet da co.
+    /// Moi vi tri long khit vao nhau deu la mot vi tri cham nhau.
+    ///
+    /// Phep quet ngang doc theo hop bao van tim ra phan lon cac cho long - da do tren ca bo
+    /// fixture. Cho no bo sot la khi cho long KHONG thang hang voi mot mep hop bao hay mot
+    /// dinh lom nao theo phuong ngang / doc, va cung khong toi duoc bang cach tha roi hay
+    /// truot sang trai: vi du mot hoc mo sang ngang o giua chieu cao chi tiet.
+    ///
+    /// Rai deu THEO CHI SO DINH chu khong theo chieu dai. Doan cong duoc bam thanh nhieu doan
+    /// thang nen co nhieu dinh, va do chinh la cho can lay day mau - canh thang dai chi co hai
+    /// dinh thi da duoc cac ung vien quet theo hop bao lo.
+    /// </summary>
+    internal static class ContactSampling
+    {
+        /// <summary>
+        /// He so day lon nhat. Tai mot dinh nhon (gai), duong phan giac gan nhu song song voi
+        /// ca hai canh nen he so bu tien toi vo cung - chan lai de khong nem ung vien di xa.
+        /// </summary>
+        private const double MaxPush = 4.0;
+
+        /// <summary>
+        /// So diem tiep xuc lay tren mot duong bao.
+        ///
+        /// Day la be rong cua phep tim vi tri long khit: cang nhieu diem thi cang nhieu kieu
+        /// ap vao nhau duoc thu. Sinh ra chung chi ton phep tru, con phep kiem va cham that -
+        /// phan dat tien - chi chay cho mot so it ung vien tot nhat, nen con so nay khong keo
+        /// theo thoi gian mot cach tuyen tinh.
+        /// </summary>
+        internal const int DefaultSamples = 16;
+
+        internal static void Sample(
+            IntPoint[] outer,
+            int count,
+            out IntPoint[] points,
+            out double[] normalX,
+            out double[] normalY,
+            out double[] push)
+        {
+            int n = outer != null ? outer.Length : 0;
+            int take = Math.Min(n, count);
+            if (take <= 0)
+            {
+                points = new IntPoint[0];
+                normalX = new double[0];
+                normalY = new double[0];
+                push = new double[0];
+                return;
+            }
+
+            points = new IntPoint[take];
+            normalX = new double[take];
+            normalY = new double[take];
+            push = new double[take];
+
+            for (int k = 0; k < take; k++)
+            {
+                int i = (int)((long)k * n / take);
+                IntPoint cur = outer[i];
+                points[k] = cur;
+
+                IntPoint prev = outer[(i + n - 1) % n];
+                IntPoint next = outer[(i + 1) % n];
+
+                // Vong ngoai di NGUOC chieu kim dong ho, nen phap tuyen huong RA NGOAI cua
+                // doan a->b la (dy, -dx).
+                double n1x, n1y, n2x, n2y;
+                Normal(cur.X - prev.X, cur.Y - prev.Y, out n1x, out n1y);
+                Normal(next.X - cur.X, next.Y - cur.Y, out n2x, out n2y);
+
+                double sx = n1x + n2x, sy = n1y + n2y;
+                double len = Math.Sqrt(sx * sx + sy * sy);
+                if (len > 1e-9)
+                {
+                    normalX[k] = sx / len;
+                    normalY[k] = sy / len;
+
+                    // |n1+n2| = 2.cos(phi) voi phi la nua goc giua hai phap tuyen. Day theo
+                    // duong phan giac mot doan d thi chi cach moi canh d.cos(phi); nhan
+                    // 1/cos(phi) de khoang cach den CA HAI canh ke dung bang doan yeu cau.
+                    push[k] = Math.Min(MaxPush, 2.0 / len);
+                }
+                else
+                {
+                    // Hai canh quay nguoc han nhau (dinh gai): khong co phan giac hop ly, lay
+                    // phap tuyen cua mot canh.
+                    normalX[k] = n1x;
+                    normalY[k] = n1y;
+                    push[k] = 1.0;
+                }
+            }
+        }
+
+        private static void Normal(long dx, long dy, out double nx, out double ny)
+        {
+            double len = Math.Sqrt((double)dx * dx + (double)dy * dy);
+            if (len > 0)
+            {
+                nx = dy / len;
+                ny = -(double)dx / len;
+            }
+            else
+            {
+                nx = 0;
+                ny = 0;
+            }
+        }
+    }
+
+    /// <summary>
     /// A part polygon: one outer ring plus zero or more hole rings. Rings are implicitly closed
     /// (last vertex connects to the first). Outer is stored CCW, holes CW.
     /// </summary>

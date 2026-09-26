@@ -4,4 +4,4 @@ SHEET name=1500x3000 length=3000 width=1500
 PART id=S qty=18 material=1.2MM name=STRIP
 OUTER 0,0 1000,0 1000,200 0,200
 END
-EXPECT placed=18 sheets=1
+EXPECT placed=18 sheets=1 usedlength<=2836

@@ -19,8 +19,8 @@ namespace AUTOCAD_COMMANDS.Nesting
     /// </summary>
     internal sealed class NestingReviewForm : Form
     {
-        private const int ColIndex = 0, ColName = 1, ColSize = 2, ColHoles = 3, ColQty = 4, ColMaterial = 5,
-                          ColStatus = 6, ColConfirm = 7, ColInclude = 8, ColNotes = 9;
+        private const int ColIndex = 0, ColOrder = 1, ColName = 2, ColSize = 3, ColHoles = 4, ColQty = 5,
+                          ColMaterial = 6, ColStatus = 7, ColConfirm = 8, ColInclude = 9, ColNotes = 10;
 
         private readonly List<RecognizedPart> _records;
         private readonly Action<RecognizedPart> _zoom;
@@ -84,6 +84,29 @@ namespace AUTOCAD_COMMANDS.Nesting
             };
 
             AddText("#", 40, true);
+
+            // Cot DON HANG: chi hien khi that su chay nhieu don. Chay mot don ma van bay ra
+            // mot cot rong thi chi to chat cho, khong noi them duoc dieu gi.
+            DataGridViewComboBoxColumn orderColumn = new DataGridViewComboBoxColumn
+            {
+                HeaderText = "Don hang",
+                Width = 120,
+                SortMode = DataGridViewColumnSortMode.NotSortable,
+                FlatStyle = FlatStyle.Flat,
+                DisplayStyle = DataGridViewComboBoxDisplayStyle.Nothing
+            };
+
+            List<string> orders = new List<string>();
+            foreach (RecognizedPart r in _records)
+            {
+                if (!string.IsNullOrEmpty(r.Order) && !orders.Contains(r.Order)) orders.Add(r.Order);
+            }
+
+            orders.Sort(StringComparer.Ordinal);
+            foreach (string o in orders) orderColumn.Items.Add(o);
+            orderColumn.Visible = orders.Count > 0;
+            _grid.Columns.Add(orderColumn);
+
             AddText("Chi tiet", 150, true);
             AddText("Kich thuoc (mm)", 120, true);
             AddText("Lo", 40, true);
@@ -147,6 +170,11 @@ namespace AUTOCAD_COMMANDS.Nesting
             _btnContinue = new Button { Text = "TIEP TUC >  (cai dat ghep)", Width = 200, Height = 30 };
             _btnContinue.Click += (s, e) =>
             {
+                // CHOT O DANG SUA TRUOC DA: nguoi dung go SL / vat lieu / don hang xong bam
+                // thang TIEP TUC thi o van con dang sua, va gia tri moi go van nam trong o
+                // soan thao chu chua vao ban ghi. Khong chot thi lan ghep chay bang so CU.
+                _grid.EndEdit();
+
                 if (!ValidateAll()) return;
                 DialogResult = DialogResult.OK;
                 Close();
@@ -218,6 +246,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             {
                 int i = _grid.Rows.Add(
                     r.Index.ToString(ci),
+                    r.Order,
                     r.Name,
                     string.Format(ci, "{0:0.#} x {1:0.#}", r.Width, r.Height),
                     r.Holes.Count.ToString(ci),
@@ -305,6 +334,19 @@ namespace AUTOCAD_COMMANDS.Nesting
             string value = (Convert.ToString(row.Cells[column].Value, CultureInfo.InvariantCulture) ?? string.Empty).Trim();
             row.ErrorText = string.Empty;
 
+            if (column == ColOrder)
+            {
+                // Sua duoc vi co ban ghi bi dinh vao hai don (duong bao ghep tu hai luot quet).
+                // Bat nguoi dung quet lai ca ban ve chi vi mot chi tiet thi qua nang tay.
+                if (value.Length > 0 && !string.Equals(value, r.Order, StringComparison.Ordinal))
+                {
+                    r.Order = value;
+                    MarkEdited(row, r, "Don hang sua tay = " + value);
+                }
+
+                return;
+            }
+
             if (column == ColQty)
             {
                 int q;
@@ -377,7 +419,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             DataGridViewRow row = _grid.Rows[e.RowIndex];
             RecognizedPart r = (RecognizedPart)row.Tag;
 
-            if (e.ColumnIndex == ColQty || e.ColumnIndex == ColMaterial)
+            if (e.ColumnIndex == ColQty || e.ColumnIndex == ColMaterial || e.ColumnIndex == ColOrder)
             {
                 ApplyValueEdit(row, e.ColumnIndex);
             }

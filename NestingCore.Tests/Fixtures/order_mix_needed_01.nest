@@ -1,0 +1,11 @@
+# Don A 6 tam, don B 2 tam. Tach ra thi ton 2 to, tron lai chi 1 to.
+# Uu tien gom don KHONG duoc phep lam tang so to.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 seed=1 budget=60 extra=3
+SHEET name=1250x2500 length=2500 width=1250
+PART id=A qty=6 material=1.2MM tol=0 name=A order=DON-A
+OUTER 0.000,0.000 600.000,0.000 600.000,600.000 0.000,600.000
+END
+PART id=B qty=2 material=1.2MM tol=0 name=B order=DON-B
+OUTER 0.000,0.000 600.000,0.000 600.000,600.000 0.000,600.000
+END
+EXPECT placed=8 unplaced=0 sheets=1 mingap>=5 minedge>=5 usedlength<=2426

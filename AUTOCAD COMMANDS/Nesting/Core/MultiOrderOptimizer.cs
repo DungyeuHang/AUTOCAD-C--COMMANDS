@@ -28,6 +28,9 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         {
             public string Name;
             public Func<PartGroup, double> Key;       // larger key = placed earlier
+
+            /// <summary>Xep het chi tiet cua mot don roi moi sang don khac.</summary>
+            public bool GroupByOrder;
         }
 
         /// <summary>
@@ -36,12 +39,29 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         /// </summary>
         public static int RunCount(NestingSettings settings)
         {
+            return RunCount(settings, false);
+        }
+
+        /// <param name="orderAware">
+        /// Co tu hai don hang tro len: khi do chay them may thu tu xep GOM THEO DON.
+        /// </param>
+        public static int RunCount(NestingSettings settings, bool orderAware)
+        {
             int extra = settings != null ? Math.Max(0, settings.ExtraSeededOrderings) : 0;
-            return (BaseOrderingCount + extra) * PlacementPolicyCount;
+            int grouped = orderAware ? OrderOrderingCount : 0;
+            return (BaseOrderingCount + extra + grouped) * PlacementPolicyCount;
         }
 
         /// <summary>So thu tu xep co dinh trong <see cref="BuildOrderings"/> (chua tinh nhieu).</summary>
         private const int BaseOrderingCount = 5;
+
+        /// <summary>
+        /// So thu tu xep GOM THEO DON, chi them vao khi co tu hai don tro len.
+        ///
+        /// Chay mot don thi chung trung y het thu tu goc nen chi ton thoi gian vo ich - do la
+        /// truong hop thuong gap nhat, khong duoc lam no cham di.
+        /// </summary>
+        private const int OrderOrderingCount = 2;
 
         private const int PlacementPolicyCount = 2;
 
@@ -71,7 +91,25 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                     return;
                 }
 
-                if (i > 0 && watch.Elapsed.TotalSeconds > job.Settings.TimeBudgetSeconds)
+                // KHOI LUONG VIEC, KHONG PHAI DONG HO.
+                //
+                // Khoi luong viec logic cua buoc nay chinh la SO LUOT XEP (total), va con so do
+                // chi phu thuoc cai dat: so thu tu xep co dinh, so luot nhieu, va co nhieu don
+                // hay khong. Vi vay o che do tat dinh, khong cat bot gi ca - may nhanh xong som,
+                // may cham xong muon, nhung CA HAI chay dung tung ay luot va ra dung cung mot
+                // ket qua.
+                //
+                // Cach cu (cat theo dong ho) lam tap luot chay duoc phu thuoc toc do may. Da do
+                // tren ban ve that (47 nhom, SL 85, han muc 30 giay):
+                //     song song: 16 + 16 luot, khong cham han muc -> 12779 mm
+                //     tuan tu  :  7 +  4 luot, CHAM han muc       -> 13050 mm (te hon 2%)
+                // Van giu lai cach do sau mot o cai dat, cho ai can tran thoi gian hon can ket
+                // qua giong nhau giua cac may.
+                //
+                // Duong thoat khi chay qua lau la NGUOI DUNG bam dung (cancellation), chu khong
+                // phai cai dong ho - nhu vay ai quyet dinh dung la ro rang.
+                if (i > 0 && !job.Settings.DeterministicSearch
+                    && watch.Elapsed.TotalSeconds > job.Settings.TimeBudgetSeconds)
                 {
                     Interlocked.Increment(ref skippedByBudget);
                     return;
@@ -81,7 +119,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 PlacementPolicy policy = policies[i % policies.Length];
                 Interlocked.Increment(ref started);
 
-                List<PartInstance> order = Order(job.Instances, ordering.Key);
+                List<PartInstance> order = Order(job.Instances, ordering.Key, ordering.GroupByOrder);
                 DecodedLayout layout = _decoder.Decode(order, job, policy, cancellation);
                 layout.OrderingName = ordering.Name + " / " + policy;
                 layouts[i] = layout;
@@ -130,10 +168,15 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             // O day chi sua phan BAO CAO cho dung su that. Viec cat ngang mot lan chay dang
             // do se lam ket qua phu thuoc toc do may - do la mot thay doi ve hanh vi, khong
             // phai viec cua mot ban sua loi bao cao.
-            if (skippedByBudget > 0 || watch.Elapsed.TotalSeconds > job.Settings.TimeBudgetSeconds)
+            // Chi bao "het gio" khi that su CO luot bi bo vi dong ho. O che do tat dinh thi
+            // khong bao gio co, du chay lau hon han muc - vi chay lau khong lam ket qua xau di.
+            if (skippedByBudget > 0)
             {
                 outcome.TimeBudgetHit = true;
             }
+
+            outcome.RunsPlanned = total;
+            outcome.ElapsedSeconds = watch.Elapsed.TotalSeconds;
             return outcome;
         }
 
@@ -159,6 +202,15 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 new Ordering { Name = "Ket hop", Key = combined }
             };
 
+            // Gom theo don: xep xong het mot don roi moi sang don khac. Dieu nay TU NO khong
+            // quyet dinh gi - no chi de ra them mot phuong an de bo xep hang chon. Neu phuong
+            // an gom don ton them to hoac them chieu dai thi no thua ngay o khoa 2 / khoa 3.
+            if (job.OrderAware)
+            {
+                list.Add(new Ordering { Name = "Theo don + dien tich giam dan", Key = g => g.Shape.Polygon.NetArea, GroupByOrder = true });
+                list.Add(new Ordering { Name = "Theo don + ket hop", Key = combined, GroupByOrder = true });
+            }
+
             for (int k = 0; k < Math.Max(0, job.Settings.ExtraSeededOrderings); k++)
             {
                 // System.Random with a fixed seed is deterministic on .NET Framework.
@@ -178,7 +230,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             return list;
         }
 
-        private static List<PartInstance> Order(List<PartInstance> instances, Func<PartGroup, double> key)
+        private static List<PartInstance> Order(List<PartInstance> instances, Func<PartGroup, double> key, bool groupByOrder)
         {
             List<PartInstance> order = new List<PartInstance>(instances);
             Dictionary<string, double> keys = new Dictionary<string, double>();
@@ -189,6 +241,12 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
             order.Sort((a, b) =>
             {
+                if (groupByOrder)
+                {
+                    int byOrder = string.CompareOrdinal(a.Order, b.Order);
+                    if (byOrder != 0) return byOrder;
+                }
+
                 int c = keys[b.PartGroupId].CompareTo(keys[a.PartGroupId]);
                 if (c != 0) return c;
                 c = string.CompareOrdinal(a.PartGroupId, b.PartGroupId);

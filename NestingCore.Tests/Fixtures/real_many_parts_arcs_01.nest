@@ -276,4 +276,4 @@ END
 PART id=G100 qty=1 material=1.2MM tol=0 name=P100
 OUTER 0,0 1.3,0 1.3,18 0,18
 END
-EXPECT placed=90 unplaced=0 sheets<=1 mingap>=5 minedge>=5
+EXPECT placed=90 unplaced=0 sheets<=1 mingap>=5 minedge>=5 usedlength<=1731

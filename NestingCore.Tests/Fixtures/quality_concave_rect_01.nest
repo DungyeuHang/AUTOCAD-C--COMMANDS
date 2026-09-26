@@ -1,0 +1,14 @@
+# GHOPHOI - FIXTURE CHAT LUONG GHEP (hinh lom / tam lot vao hoc)
+# Hinh co hoc lom 120 rong x 180 sau va tam 95x175 lot vao hoc do.
+# LUU Y: ban dau hoc chi rong 100, ma tam 95 con can khe 5mm moi ben = 105 - tuc la
+# KHONG THE lot. Fixture khi do chi khoa lai dung hanh vi san co chu khong thu gi.
+# Da noi hoc ra 120 de dieu no kiem dung la dieu ten no noi.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 seed=1 budget=60 extra=3
+SHEET name=1250x2500 length=2500 width=1250
+PART id=N qty=4 material=1.2MM tol=0 name=HOCLOM
+OUTER 0.000,0.000 400.000,0.000 400.000,300.000 260.000,300.000 260.000,120.000 140.000,120.000 140.000,300.000 0.000,300.000
+END
+PART id=P qty=4 material=1.2MM tol=0 name=TAM
+OUTER 0.000,0.000 95.000,0.000 95.000,175.000 0.000,175.000
+END
+EXPECT placed=8 unplaced=0 sheets<=1 usedlength<=411 mingap>=5 minedge>=5

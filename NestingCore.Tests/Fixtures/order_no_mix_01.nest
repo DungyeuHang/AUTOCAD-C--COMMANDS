@@ -1,0 +1,10 @@
+# Hai don, moi don vua dung MOT to: khong duoc tron lan nhau.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 seed=1 budget=60 extra=3
+SHEET name=1250x2500 length=2500 width=1250
+PART id=A qty=8 material=1.2MM tol=0 name=A order=DON-A
+OUTER 0.000,0.000 600.000,0.000 600.000,600.000 0.000,600.000
+END
+PART id=B qty=8 material=1.2MM tol=0 name=B order=DON-B
+OUTER 0.000,0.000 600.000,0.000 600.000,600.000 0.000,600.000
+END
+EXPECT placed=16 unplaced=0 sheets=2 mixing=0 mingap>=5 minedge>=5 usedlength<=4851

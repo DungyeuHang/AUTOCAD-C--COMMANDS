@@ -145,8 +145,11 @@ namespace AUTOCAD_COMMANDS.Nesting
                         CadMTextHelper.AddMText(ms, tr, textLayer,
                             new Point3d(corner.X, corner.Y + W + textH * 5.5, 0), L, SheetLabel(sheet, result), textH);
 
+                        int partNumber = 0;
                         foreach (Placement pl in sheet.Placements)
                         {
+                            partNumber++;
+
                             ObjectId blockId;
                             if (!blockIds.TryGetValue(pl.PartGroupId, out blockId)) continue;
 
@@ -154,14 +157,13 @@ namespace AUTOCAD_COMMANDS.Nesting
                             AddPlacement(ms, tr, blockId, position, pl, settings.OutputAsBlocks);
                             write.BlockReferenceCount++;
 
-                            // Nhan ten chi tiet chi de nhin cho de; chi tiet nao DA CO chu khac
-                            // cua chinh nguoi dung thi khong ve them nhan nua - ve them se thanh
-                            // hai chu khac nhau chong len nhau, va chu khong phai cua ho lai nam
-                            // giua chi tiet.
+                            // Ma P + STT chi de doi chieu khi ra xuong; chi tiet nao DA CO chu
+                            // cat cua chinh nguoi dung thi khong ve them - ve them se thanh hai
+                            // dong chu chong len nhau tren cung mot chi tiet.
                             if (settings.LabelParts && !HasOwnText(byGroup[pl.PartGroupId]))
                             {
                                 OutputPart op = byGroup[pl.PartGroupId];
-                                AddPartLabel(ms, tr, labelLayer, op.Group, pl, corner);
+                                AddPartLabel(ms, tr, labelLayer, op.Group, pl, corner, partNumber);
                             }
                         }
 
@@ -347,7 +349,15 @@ namespace AUTOCAD_COMMANDS.Nesting
             return r != null && r.EngravingSources.Count > 0;
         }
 
-        private static void AddPartLabel(BlockTableRecord ms, Transaction tr, ObjectId layer, PartGroup g, Placement pl, Point3d corner)
+        /// <summary>
+        /// Ghi ma P + so thu tu vao giua mot chi tiet. So thu tu dem TRONG TUNG TO, vi nguoi
+        /// dung dung no de doi chieu tren chinh to dang cam.
+        ///
+        /// KHONG ghep them chu cua nguoi dung vao day: lam vay thi nhin tren ban ve se tuong
+        /// chuong trinh da sua chu cua ho roi phong to mang ra giua chi tiet.
+        /// </summary>
+        private static void AddPartLabel(
+            BlockTableRecord ms, Transaction tr, ObjectId layer, PartGroup g, Placement pl, Point3d corner, int number)
         {
             PolyShape world = g.Shape.Polygon.Transform(pl.Orientation, pl.TranslationX, pl.TranslationY);
             double cx = corner.X + NestUnits.ToMm((world.Bounds.MinX + world.Bounds.MaxX) / 2);
@@ -360,7 +370,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                 Location = new Point3d(cx, cy, 0),
                 Attachment = AttachmentPoint.MiddleCenter,
                 TextHeight = h,
-                Contents = g.Name.Replace("\\", "\\\\").Replace("{", "\\{").Replace("}", "\\}"),
+                Contents = "P" + number.ToString("00", CultureInfo.InvariantCulture),
                 LayerId = layer
             };
             ms.AppendEntity(label);
@@ -417,7 +427,13 @@ namespace AUTOCAD_COMMANDS.Nesting
                 if (o.Material == s.Material) ofMaterial++;
             }
 
-            return string.Format(CultureInfo.InvariantCulture,
+            // Nhan don hang la DONG RIENG o tren cung, khong chen vao giua cac so lieu san co:
+            // ten don co the dai bao nhieu cung duoc ma khong day cai gi sang mot ben. Ca khoi
+            // chu nay duoc dat trong mot MText rong bang dung chieu dai to nen no tu xuong dong.
+            string orders = s.OrderLabel(2);
+            string head = orders.Length > 0 ? "Don: " + orders + "\n" : string.Empty;
+
+            return head + string.Format(CultureInfo.InvariantCulture,
                 "TO {0}/{1}  |  {2}  |  KHO {3} ({4})\n" +
                 "{5} chi tiet  |  Su dung {6:0.0}% (tren phan da dung)  |  {7:0.0}% ca to\n" +
                 "Chieu dai da dung {8:0} mm  |  Phan du {9:0} mm ({10:0.###} m2)  |  Phe lieu uoc tinh {11:0.###} m2",

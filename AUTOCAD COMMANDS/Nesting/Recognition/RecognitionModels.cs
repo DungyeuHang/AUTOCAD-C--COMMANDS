@@ -199,6 +199,14 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
 
         public string Material { get; set; }
 
+        /// <summary>
+        /// Ten don hang. Rong = chay mot don.
+        ///
+        /// Lay tu LUOT QUET da chon duong bao cua chi tiet nay - khong doc tu chu, khong doc
+        /// tu layer, khong lay ma P hien thi lam ma don.
+        /// </summary>
+        public string Order { get; set; } = string.Empty;
+
         public bool QuantityFromText { get; set; }
 
         public bool MaterialFromText { get; set; }

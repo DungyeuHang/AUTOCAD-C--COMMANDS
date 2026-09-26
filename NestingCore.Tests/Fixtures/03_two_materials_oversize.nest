@@ -10,4 +10,4 @@ END
 PART id=C qty=2 material=1.2MM name=C_TOO_LONG
 OUTER 0,0 2600,0 2600,100 0,100
 END
-EXPECT placed=16 unplaced=2 sheets=2
+EXPECT placed=16 unplaced=2 sheets=2 usedlength<=981

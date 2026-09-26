@@ -36,6 +36,7 @@ namespace AUTOCAD_COMMANDS.Nesting
         private CheckBox _chkHere;
         private CheckBox _chkBlocks;
         private CheckBox _chkLabels;
+        private CheckBox _chkDeterministic;
         private CheckBox _chkOpen;
         private CheckBox _chkFixture;
         private Label _ruleNote;
@@ -131,7 +132,7 @@ namespace AUTOCAD_COMMANDS.Nesting
 
             // ---- nesting parameters ----
             GroupBox gPar = new GroupBox { Text = "Thong so ghep", Dock = DockStyle.Fill };
-            TableLayoutPanel par = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 5 };
+            TableLayoutPanel par = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 6 };
             for (int i = 0; i < 4; i++) par.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
 
             _numGap = Num(0, 100, 2);
@@ -152,6 +153,17 @@ namespace AUTOCAD_COMMANDS.Nesting
             par.Controls.Add(_chkInsideHole, 0, 4);
             par.SetColumnSpan(_chkInsideHole, 4);
 
+            // Bat: may nhanh hay cham deu ra CUNG mot ket qua, doi lai co the chay qua han muc
+            // gio (muon dung thi bam nut dung). Tat: quay ve hanh vi cu, co tran gio nhung may
+            // cham co the ra bo cuc te hon - da do duoc chenh 2% tren ban ve that.
+            _chkDeterministic = new CheckBox
+            {
+                Text = "Tim du so luot xep (ket qua khong phu thuoc toc do may - co the chay qua thoi gian toi da)",
+                AutoSize = true
+            };
+            par.Controls.Add(_chkDeterministic, 0, 5);
+            par.SetColumnSpan(_chkDeterministic, 4);
+
             _ruleNote = new Label { Dock = DockStyle.Bottom, Height = 34, ForeColor = Color.FromArgb(0, 102, 204) };
             _numGap.ValueChanged += (s, e) => UpdateRuleNote();
             _numMargin.ValueChanged += (s, e) => UpdateRuleNote();
@@ -163,7 +175,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             FlowLayoutPanel outp = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
             _chkHere = new CheckBox { Text = "Ve thang vao ban ve nay (chon diem dat)", AutoSize = true };
             _chkBlocks = new CheckBox { Text = "Moi chi tiet la 1 BLOCK", AutoSize = true };
-            _chkLabels = new CheckBox { Text = "Ghi ten chi tiet", AutoSize = true };
+            _chkLabels = new CheckBox { Text = "Hien thi ma P + STT tren phoi", AutoSize = true };
             _chkOpen = new CheckBox { Text = "Mo ban ve sau khi tao", AutoSize = true };
             _chkFixture = new CheckBox { Text = "Luu fixture test (.nest)", AutoSize = true };
             _numSpacing = Num(0, 10000, 0);
@@ -247,6 +259,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             _chkHere.Checked = _settings.OutputToCurrentDrawing;
             _chkBlocks.Checked = _settings.OutputAsBlocks;
             _chkLabels.Checked = _settings.LabelParts;
+            _chkDeterministic.Checked = _settings.DeterministicSearch;
             _chkOpen.Checked = _settings.OpenOutputDrawing;
             _chkFixture.Checked = _settings.SaveFixture;
 
@@ -488,6 +501,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             _settings.OutputToCurrentDrawing = _chkHere.Checked;
             _settings.OutputAsBlocks = _chkBlocks.Checked;
             _settings.LabelParts = _chkLabels.Checked;
+            _settings.DeterministicSearch = _chkDeterministic.Checked;
             _settings.OpenOutputDrawing = _chkOpen.Checked;
             _settings.SaveFixture = _chkFixture.Checked;
             foreach (KeyValuePair<string, SheetSpec> kv in chosen)

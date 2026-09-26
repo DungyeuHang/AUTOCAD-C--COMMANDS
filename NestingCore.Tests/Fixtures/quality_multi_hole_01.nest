@@ -1,0 +1,18 @@
+# GHOPHOI - FIXTURE CHAT LUONG GHEP (mot chi tiet NHIEU LO)
+# Tam 800x600 khoet BON lo vuong 200x200; tam nho 150x150 lot vua vao tung lo
+# (150 + 5 mm khe moi ben = 160 <= 200).
+# Cho phep dat chi tiet trong lo kin (inhole=1), nen xep dung thi bon tam nho nam gon
+# trong bon lo va to KHONG dai them mot mili nao: 810 mm dung bang be ngang tam lon.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=1 seed=1 budget=60 extra=3
+SHEET name=1250x2500 length=2500 width=1250
+PART id=T qty=1 material=1.2MM tol=0 name=TAM_4_LO
+OUTER 0.000,0.000 800.000,0.000 800.000,600.000 0.000,600.000
+HOLE 100.000,80.000 300.000,80.000 300.000,280.000 100.000,280.000
+HOLE 500.000,80.000 700.000,80.000 700.000,280.000 500.000,280.000
+HOLE 100.000,320.000 300.000,320.000 300.000,520.000 100.000,520.000
+HOLE 500.000,320.000 700.000,320.000 700.000,520.000 500.000,520.000
+END
+PART id=N qty=4 material=1.2MM tol=0 name=NUT
+OUTER 0.000,0.000 150.000,0.000 150.000,150.000 0.000,150.000
+END
+EXPECT placed=5 unplaced=0 sheets=1 usedlength<=611 mingap>=5 minedge>=5

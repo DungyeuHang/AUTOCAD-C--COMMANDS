@@ -8,4 +8,4 @@ END
 PART id=S qty=1 material=1.2MM tol=0 name=SQUARE
 OUTER 0,0 100,0 100,100 0,100
 END
-EXPECT placed=2 sheets=2
+EXPECT placed=2 sheets=2 usedlength<=421

@@ -58,6 +58,7 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "C28. Lat guong BAT: ket qua hop le, chi dung huong cho phep", C28_MirrorOnValid);
             NestingTestHarness.Run(report, "C29. Vuot thoi gian cho phep thi phai bao", C29_TimeBudgetOvershootIsReported);
             NestingTestHarness.Run(report, "C30. Tien do chay 0 -> 100%, khong lui", C30_ProgressReachesHundred);
+            NestingTestHarness.Run(report, "C31. Han muc theo KHOI LUONG VIEC: song song == tuan tu du het gio", C31_WorkBudgetIsMachineIndependent);
         }
 
         // ==================================================================================
@@ -898,31 +899,104 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             Equal(expected, high, "tien do phai cham 100% khi xong");
         }
 
+        /// <summary>
+        /// Het gio thi phai BAO, khong duoc im lang - nhung "het gio" bay gio chi co nghia o
+        /// che do cu (co cat bot theo dong ho). O che do tat dinh, chay qua gio KHONG phai la
+        /// van de: khong luot nao bi bo, ket qua van day du va van lap lai duoc.
+        /// </summary>
         private static void C29_TimeBudgetOvershootIsReported()
         {
-            NestingRequest r = Request(2500, 1250);
-            r.Settings.TimeBudgetSeconds = 0.05;
-            r.Settings.ExtraSeededOrderings = 3;
-
-            for (int i = 0; i < 20; i++)
+            // Ep chay TUAN TU cho nhanh che do cu: chay song song thi moi luot deu kip khoi
+            // dong truoc khi het gio, nen gan nhu khong luot nao bi bo - dung cai da lam phep
+            // thu nay im lang di qua truoc day.
+            Func<bool, NestingResult> nest = deterministic =>
             {
-                r.Groups.Add(Rect("R" + i.ToString(CultureInfo.InvariantCulture), 90 + i, 60 + (i % 7), 3));
+                NestingRequest r = Request(2500, 1250);
+                r.Settings.TimeBudgetSeconds = 0.05;
+                r.Settings.ExtraSeededOrderings = 3;
+                r.Settings.DeterministicSearch = deterministic;
+                r.Settings.MaxParallelism = 1;
+
+                for (int i = 0; i < 20; i++)
+                {
+                    r.Groups.Add(Rect("R" + i.ToString(CultureInfo.InvariantCulture), 90 + i, 60 + (i % 7), 3));
+                }
+
+                Stopwatch watch = Stopwatch.StartNew();
+                NestingResult res = Nest(r);
+                watch.Stop();
+
+                AssertValid(res);
+
+                // Neu lan ghep nay lai chay nhanh hon thoi gian cho phep thi phep thu thanh vo
+                // nghia - noi ro ra thay vi lang le di qua.
+                True(watch.Elapsed.TotalSeconds > r.Settings.TimeBudgetSeconds,
+                    "phep thu chi co nghia khi lan ghep chay lau hon thoi gian cho phep");
+                Equal(1, res.Statistics.Materials.Count, "mot vat lieu");
+                return res;
+            };
+
+            // Che do cu: co cat bot, va phai bao la da cat.
+            MaterialStatistics old = nest(false).Statistics.Materials[0];
+            True(old.TimeBudgetHit, "che do cu: het gio thi phai bao, khong duoc im lang");
+            True(old.OrderingsTried < old.OrderingsPlanned,
+                "che do cu: het gio thi phai co luot bi bo (" + old.OrderingsTried + "/" + old.OrderingsPlanned + ")");
+
+            // Che do tat dinh: khong cat bot gi ca, nen khong co gi de bao.
+            MaterialStatistics now = nest(true).Statistics.Materials[0];
+            Equal(now.OrderingsPlanned, now.OrderingsTried, "che do tat dinh: phai chay DU so luot da dinh");
+            True(!now.TimeBudgetHit, "che do tat dinh: chay qua gio khong phai la mat mat, khong bao het gio");
+            True(now.ElapsedSeconds > 0, "phai bao ca thoi gian thuc te da chay");
+        }
+
+        /// <summary>
+        /// PHEP KIEM CHUNG BAT BUOC: cung dau vao + cung han muc KHOI LUONG VIEC + khac che do
+        /// chay (song song / tuan tu) => ket qua GIONG HET.
+        ///
+        /// Han muc gio de cuc nho co chu dich: theo cach cu thi chac chan bi cat bot, va tap
+        /// luot chay duoc se khac nhau giua hai che do - dung cai da lam ban ve that cua nguoi
+        /// dung ra hai ket qua lech nhau 2%.
+        /// </summary>
+        private static void C31_WorkBudgetIsMachineIndependent()
+        {
+            Func<int, bool, NestingResult> nest = (degree, deterministic) =>
+            {
+                NestingRequest r = Request(2500, 1250);
+                r.Settings.Seed = 11;
+                r.Settings.ExtraSeededOrderings = 3;
+                r.Settings.TimeBudgetSeconds = 0.001;
+                r.Settings.DeterministicSearch = deterministic;
+                r.Settings.MaxParallelism = degree;
+
+                for (int i = 0; i < 18; i++)
+                {
+                    r.Groups.Add(Rect("R" + i.ToString(CultureInfo.InvariantCulture), 110 + i * 3, 70 + (i % 5) * 4, 3));
+                }
+
+                NestingResult res = Nest(r);
+                AssertValid(res);
+                return res;
+            };
+
+            NestingResult sequential = nest(1, true);
+            NestingResult parallel = nest(0, true);
+            NestingResult threeThreads = nest(3, true);
+
+            Equal(Signature(sequential), Signature(parallel), "tuan tu == song song (toan bo nhan)");
+            Equal(Signature(sequential), Signature(threeThreads), "tuan tu == 3 luong");
+
+            // Va ly do no giong nhau: ca hai deu chay DU so luot da dinh.
+            foreach (NestingResult res in new[] { sequential, parallel, threeThreads })
+            {
+                MaterialStatistics m = res.Statistics.Materials[0];
+                Equal(m.OrderingsPlanned, m.OrderingsTried, "phai chay du so luot da dinh");
             }
 
-            Stopwatch watch = Stopwatch.StartNew();
-            NestingResult res = Nest(r);
-            watch.Stop();
-
-            AssertValid(res);
-
-            // Neu lan ghep nay lai chay nhanh hon thoi gian cho phep thi phep thu thanh vo
-            // nghia - noi ro ra thay vi lang le di qua.
-            True(watch.Elapsed.TotalSeconds > r.Settings.TimeBudgetSeconds,
-                "phep thu chi co nghia khi lan ghep chay lau hon thoi gian cho phep");
-
-            Equal(1, res.Statistics.Materials.Count, "mot vat lieu");
-            True(res.Statistics.Materials[0].TimeBudgetHit,
-                "da chay qua thoi gian cho phep thi phai bao, khong duoc im lang");
+            // Kiem nguoc: theo cach cu, chinh bo du lieu nay BI cat bot - tuc la phep thu tren
+            // that su dang kiem mot thu co the sai, chu khong phai mot thu luon dung.
+            MaterialStatistics oldWay = nest(1, false).Statistics.Materials[0];
+            True(oldWay.OrderingsTried < oldWay.OrderingsPlanned,
+                "phep thu chi co nghia neu cach cu that su cat bot (" + oldWay.OrderingsTried + "/" + oldWay.OrderingsPlanned + ")");
         }
 
         private static void C28_MirrorOnValid()

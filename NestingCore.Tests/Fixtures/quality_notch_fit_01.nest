@@ -1,0 +1,12 @@
+# GHOPHOI - FIXTURE CHAT LUONG GHEP (hoc lom mo len tren)
+# Hoc lom 120 rong x 180 sau, tam 100x170 => con du khe 10mm ngang va 5mm sau.
+# Bon tam chong nhau het be rong to, X [5..405]. Long het tam vao hoc thi to dai 410.
+SETTINGS gap=5 margin=5 mirror=0 rotations=0,90,180,270 seed=1 budget=60 extra=3
+SHEET name=1250x2500 length=2500 width=1250
+PART id=N qty=4 material=1.2MM tol=0 name=HOCLOM
+OUTER 0.000,0.000 400.000,0.000 400.000,300.000 260.000,300.000 260.000,120.000 140.000,120.000 140.000,300.000 0.000,300.000
+END
+PART id=P qty=4 material=1.2MM tol=0 name=TAM
+OUTER 0.000,0.000 100.000,0.000 100.000,170.000 0.000,170.000
+END
+EXPECT placed=8 unplaced=0 sheets<=1 usedlength<=411 mingap>=5 minedge>=5

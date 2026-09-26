@@ -11,4 +11,4 @@ END
 PART id=T qty=8 material=1.2MM name=TAB
 OUTER 0,0 80,0 80,60 0,60
 END
-EXPECT placed=24 unplaced=0 sheets<=1
+EXPECT placed=24 unplaced=0 sheets<=1 usedlength<=1626

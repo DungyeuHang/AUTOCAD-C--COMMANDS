@@ -74,7 +74,8 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
             // Tong so luot ghep cua CA LENH, biet truoc de ve duoc thanh tien trinh that:
             // moi vat lieu chay cung mot so luot (moi thu tu xep x hai chinh sach dat).
-            int runsPerMaterial = MultiOrderOptimizer.RunCount(settings);
+            bool orderAware = HasSeveralOrders(request.Groups);
+            int runsPerMaterial = MultiOrderOptimizer.RunCount(settings, orderAware);
             int totalRuns = Math.Max(1, byMaterial.Count * runsPerMaterial);
             int materialIndex = 0;
 
@@ -93,7 +94,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                         for (int k = 0; k < g.Quantity; k++)
                         {
                             result.Unplaced.Add(new UnplacedPart(InstanceId(g, k), g.Id,
-                                "Khong co kho phoi nao duoc chon cho vat lieu " + material + "."));
+                                "Khong co kho phoi nao duoc chon cho vat lieu " + material + ".", g.Order));
                         }
                     }
 
@@ -114,7 +115,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 NestingSettings jobSettings = settings.Clone();
                 jobSettings.TimeBudgetSeconds = Math.Max(0.0, settings.TimeBudgetSeconds - watch.Elapsed.TotalSeconds) / materialsLeft;
 
-                MaterialJob job = new MaterialJob(material, sheet, jobSettings, collision);
+                MaterialJob job = new MaterialJob(material, sheet, jobSettings, collision) { OrderAware = orderAware };
                 foreach (PartGroup g in entry.Value)
                 {
                     job.Groups.Add(g);
@@ -145,6 +146,8 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 }
 
                 ms.OrderingsTried = outcome.OrderingsTried;
+                ms.OrderingsPlanned = outcome.RunsPlanned;
+                ms.ElapsedSeconds = outcome.ElapsedSeconds;
                 ms.TimeBudgetHit = outcome.TimeBudgetHit;
                 if (outcome.Cancelled) result.Cancelled = true;
 
@@ -164,6 +167,25 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             result.Validation = _validator.Validate(request, result);
             result.Statistics.ElapsedSeconds = watch.Elapsed.TotalSeconds;
             return result;
+        }
+
+        /// <summary>
+        /// Yeu cau nay co tu hai ten don hang khac nhau tro len hay khong.
+        ///
+        /// Tinh mot lan cho CA LENH chu khong theo tung vat lieu: moi vat lieu phai chay cung
+        /// mot so luot thi thanh tien trinh moi bao dung tong.
+        /// </summary>
+        private static bool HasSeveralOrders(IEnumerable<PartGroup> groups)
+        {
+            string first = null;
+            foreach (PartGroup g in groups)
+            {
+                if (string.IsNullOrEmpty(g.Order)) continue;
+                if (first == null) first = g.Order;
+                else if (!string.Equals(first, g.Order, StringComparison.Ordinal)) return true;
+            }
+
+            return false;
         }
 
         private static string InstanceId(PartGroup g, int copy)
@@ -232,10 +254,16 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                         RotationDeg = item.Shape.Orientation.RotationDeg,
                         Mirror = item.Shape.Orientation.Mirror,
                         TranslationX = item.TranslationX,
-                        TranslationY = item.TranslationY
+                        TranslationY = item.TranslationY,
+                        OrderName = item.Instance.Order
                     });
                     sr.PartAreaMm2 += item.Instance.Group.Shape.NetAreaMm2;
+
+                    string order = item.Instance.Order;
+                    if (!string.IsNullOrEmpty(order) && !sr.Orders.Contains(order)) sr.Orders.Add(order);
                 }
+
+                sr.Orders.Sort(StringComparer.Ordinal);
 
                 sr.UsedLengthMm = Math.Min(sheetL, NestUnits.ToMm(ds.MaxX) + settings.EdgeMarginMm);
                 double usedArea = sr.UsedLengthMm * sheetW;

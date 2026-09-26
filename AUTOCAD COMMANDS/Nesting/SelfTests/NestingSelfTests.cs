@@ -22,6 +22,10 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             RecognitionSelfTests.Run(report);
 
             report.Lines.Add(string.Empty);
+            report.Lines.Add("---- DON HANG ----");
+            OrderSelfTests.Run(report);
+
+            report.Lines.Add(string.Empty);
             report.Lines.Add("---- FIXTURES ----");
             RunFixtures(report, fixtureFolder);
 
@@ -61,7 +65,12 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
                     NestingTestHarness.Equal(requested, res.Statistics.PlacedQuantity + res.Statistics.UnplacedQuantity, "accounted");
 
                     double usedLength = 0;
-                    foreach (SheetResult s in res.Sheets) usedLength += s.UsedLengthMm;
+                    int mixing = 0;
+                    foreach (SheetResult s in res.Sheets)
+                    {
+                        usedLength += s.UsedLengthMm;
+                        if (s.Orders.Count > 1) mixing += s.Orders.Count - 1;
+                    }
 
                     foreach (KeyValuePair<string, string> e in fx.Expectations)
                     {
@@ -78,6 +87,8 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
                             case "mingap>=": NestingTestHarness.True(gap >= v - 1e-9, "min gap " + gap + " < " + v); break;
                             case "minedge=": NestingTestHarness.Close(v, edge, 1e-6, "measured min edge distance"); break;
                             case "minedge>=": NestingTestHarness.True(edge >= v - 1e-9, "min edge " + edge + " < " + v); break;
+                            case "mixing=": NestingTestHarness.Equal((int)v, mixing, "tron don"); break;
+                            case "mixing<=": NestingTestHarness.True(mixing <= v, "tron don " + mixing + " > " + v); break;
                             default: throw new NestingAssertException("EXPECT khong ho tro: " + e.Key);
                         }
                     }
