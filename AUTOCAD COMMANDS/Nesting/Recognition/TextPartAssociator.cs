@@ -7,13 +7,18 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
 {
     /// <summary>
     /// Assigns metadata texts (SL / material) to parts. Never relies on selection order.
-    ///   1. text inside a part's outer contour -> that part (innermost when nested),
-    ///   2. otherwise the nearest part outline within MaxTextDistance,
+    ///   1. text inside a part's MATERIAL (outer contour, not inside one of its holes) -> that
+    ///      part (innermost when nested); a text in the hole of a frame is NOT inside the frame,
+    ///   2. otherwise the nearest part geometry (outline AND hole edges) within MaxTextDistance,
     ///   3. if the second-nearest part is nearly as close -> AMBIGUOUS (both parts flagged,
     ///      value NOT assigned to either),
     ///   4. too far from every part -> global warning,
     ///   5. parts without metadata keep the defaults (SL = 1, material = 1.2MM) with a note.
     /// Conflicting values assigned to one part (e.g. two different SL) -> AMBIGUOUS.
+    /// Text that LOOKS like metadata but is invalid ("SL: abc", "SL: 0", "-1.2MM") is routed
+    /// exactly like metadata and makes its part AMBIGUOUS with the offending text in the note -
+    /// it is never cut into the part and never silently replaced by a default.
+    /// Dimension text ("R12.5MM", "D10MM", "150MM") is neither metadata nor cut text: ignored.
     /// </summary>
     public sealed class TextPartAssociator
     {
@@ -28,7 +33,9 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
 
         private sealed class Assigned
         {
+            /// <summary>Gia tri hop le, HOAC <see cref="Issue"/> (chu co dang thong tin nhung sai).</summary>
             public MetadataFact Fact;
+            public MetadataIssue Issue;
             public TextItem Text;
             public string How;
         }
@@ -48,11 +55,16 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
 
             foreach (TextItem text in texts)
             {
-                List<MetadataFact> facts = _parser.Parse(text.Text);
+                MetadataReading reading = _parser.Classify(text.Text);
+                List<MetadataFact> facts = reading.Facts;
                 string shortText = Shorten(text.Text);
 
+                // Chu kich thuoc: khong phai thong tin, cung KHONG phai chu cat (truoc day "150MM",
+                // "R12.5MM" nam trong chi tiet se bi mang di cat).
+                if (reading.IsDimensionOnly) continue;
+
                 RecognizedPart inside = InnermostContaining(parts, text.Position);
-                if (facts.Count == 0)
+                if (!reading.IsMetadata)
                 {
                     if (inside != null)
                     {
@@ -75,9 +87,21 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                     continue;
                 }
 
+                List<Assigned> items = new List<Assigned>();
+                foreach (MetadataFact f in facts) items.Add(new Assigned { Fact = f, Text = text });
+                foreach (MetadataIssue i in reading.Issues)
+                {
+                    if (i.Kind != MetadataIssueKind.Dimension) items.Add(new Assigned { Issue = i, Text = text });
+                }
+
                 if (inside != null)
                 {
-                    foreach (MetadataFact f in facts) assigned[inside].Add(new Assigned { Fact = f, Text = text, How = "trong chi tiet" });
+                    foreach (Assigned x in items)
+                    {
+                        x.How = "trong chi tiet";
+                        assigned[inside].Add(x);
+                    }
+
                     inside.TextSources.Add(text.SourceIndex);
                     continue;
                 }
@@ -86,7 +110,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 double d1 = double.MaxValue, d2 = double.MaxValue;
                 foreach (RecognizedPart p in parts)
                 {
-                    double d = DistanceToOutline(p.Outer.Points, text.Position);
+                    double d = DistanceToPart(p, text.Position);
                     if (d < d1)
                     {
                         second = best;
@@ -122,14 +146,10 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                     continue;
                 }
 
-                foreach (MetadataFact f in facts)
+                foreach (Assigned x in items)
                 {
-                    assigned[best].Add(new Assigned
-                    {
-                        Fact = f,
-                        Text = text,
-                        How = string.Format(CultureInfo.InvariantCulture, "ngoai chi tiet, cach {0:0.#} mm", d1)
-                    });
+                    x.How = string.Format(CultureInfo.InvariantCulture, "ngoai chi tiet, cach {0:0.#} mm", d1);
+                    assigned[best].Add(x);
                 }
 
                 best.TextSources.Add(text.SourceIndex);
@@ -148,8 +168,21 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             MetadataRules rules = _settings.Metadata;
             List<string> quantities = new List<string>();
             List<string> materials = new List<string>();
+            bool badQuantity = false, badMaterial = false;
             foreach (Assigned a in facts)
             {
+                if (a.Issue != null)
+                {
+                    // Chu co dang thong tin nhung sai: bao DUNG chu do, bat nguoi dung sua / xac nhan.
+                    bool isQty = a.Issue.Kind == MetadataIssueKind.InvalidQuantity;
+                    if (isQty) badQuantity = true;
+                    else badMaterial = true;
+                    part.Escalate(PartStatus.Ambiguous, string.Format(CultureInfo.InvariantCulture,
+                        "{0} KHONG HOP LE trong chu \"{1}\" ({2}) - phai sua / xac nhan",
+                        isQty ? "SL" : "Vat lieu", a.Issue.Token, a.How));
+                    continue;
+                }
+
                 List<string> target = a.Fact.Kind == MetadataKind.Quantity ? quantities : materials;
                 if (!target.Contains(a.Fact.Value)) target.Add(a.Fact.Value);
             }
@@ -167,7 +200,11 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             else
             {
                 part.Quantity = rules.DefaultQuantity;
-                if (part.Status < PartStatus.Ambiguous)
+                if (badQuantity)
+                {
+                    part.Escalate(PartStatus.Ambiguous, "Chua co SL hop le -> TAM dat " + rules.DefaultQuantity.ToString(CultureInfo.InvariantCulture) + ", phai sua");
+                }
+                else if (part.Status < PartStatus.Ambiguous)
                 {
                     part.Escalate(PartStatus.Warning, "Khong tim thay SL -> mac dinh " + rules.DefaultQuantity.ToString(CultureInfo.InvariantCulture));
                 }
@@ -186,28 +223,40 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             else
             {
                 part.Material = rules.DefaultMaterial;
-                if (part.Status < PartStatus.Ambiguous)
+                if (badMaterial)
+                {
+                    part.Escalate(PartStatus.Ambiguous, "Chua co vat lieu hop le -> TAM dat " + rules.DefaultMaterial + ", phai sua");
+                }
+                else if (part.Status < PartStatus.Ambiguous)
                 {
                     part.Escalate(PartStatus.Warning, "Khong tim thay vat lieu -> mac dinh " + rules.DefaultMaterial);
                 }
             }
         }
 
+        /// <summary>
+        /// Chi tiet NHO NHAT ma diem nam trong VAT LIEU cua no. Diem nam trong lo cua khung khong
+        /// thuoc khung (truoc day chi xet vong ngoai nen chu cua chi tiet nho trong lo bi gan cho
+        /// khung - hoac bi mang di cat vao khoang trong).
+        /// </summary>
         private static RecognizedPart InnermostContaining(List<RecognizedPart> parts, Pt p)
         {
             RecognizedPart best = null;
-            IntPoint ip = IntPoint.FromMm(p.X, p.Y);
             foreach (RecognizedPart part in parts)
             {
-                if (p.X < part.Outer.MinX || p.X > part.Outer.MaxX || p.Y < part.Outer.MinY || p.Y > part.Outer.MaxY) continue;
                 if (best != null && part.Outer.Area >= best.Outer.Area) continue;
-
-                List<IntPoint> ring = new List<IntPoint>(part.Outer.Points.Count);
-                foreach (Pt q in part.Outer.Points) ring.Add(IntPoint.FromMm(q.X, q.Y));
-                if (GeometryMath.PointInRing(ip, ring) >= 0) best = part;
+                if (PartRecognizer.InMaterial(part, p)) best = part;
             }
 
             return best;
+        }
+
+        /// <summary>Khoang cach toi HINH cua chi tiet: vong ngoai VA mep lo (chu nam trong lo gan mep lo).</summary>
+        private static double DistanceToPart(RecognizedPart part, Pt p)
+        {
+            double d = DistanceToOutline(part.Outer.Points, p);
+            foreach (RecognizedLoop h in part.Holes) d = Math.Min(d, DistanceToOutline(h.Points, p));
+            return d;
         }
 
         private static double DistanceToOutline(List<Pt> ring, Pt p)

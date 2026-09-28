@@ -58,6 +58,14 @@ namespace AUTOCAD_COMMANDS.Nesting
             GhoPhoiSettings settings,
             string sourceName)
         {
+            // Bat bien cuoi cung: ket qua DA BIET la khong qua validator thi khong bao gio duoc
+            // ghi, ke ca khi ben goi quen chan. (Validation = null: ket qua dung tay o muc thap,
+            // vd. phep thu 8 huong - van cho ghi; duong san xuat luon co Validation.)
+            if (result.Validation != null && !result.Validation.IsValid)
+            {
+                throw new InvalidOperationException("Ket qua KHONG qua validator - khong tao ban ve san xuat.");
+            }
+
             NestingDwgWriteResult write = new NestingDwgWriteResult { Path = outputPath };
             Dictionary<string, OutputPart> byGroup = new Dictionary<string, OutputPart>(StringComparer.Ordinal);
             foreach (OutputPart p in parts) byGroup[p.Group.Id] = p;

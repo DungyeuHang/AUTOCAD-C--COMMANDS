@@ -34,6 +34,8 @@ namespace AUTOCAD_COMMANDS.Nesting
             NestingTestHarness.Run(report, "B15. Round-trip ve thang vao ban ve (mac dinh), goc am le", B15_RoundTripDrawIntoCurrent);
             NestingTestHarness.Run(report, "B16. Chi tiet da xep ma thieu hinh nguon -> tu choi, KHONG co file / khong dung ban ve", B16_WriterRefusesMissingSource);
             NestingTestHarness.Run(report, "B17. File cai dat: NaN / vo cuc / enum la bi bo qua, gia tri dung van doc", B17_SettingsRejectNonsense);
+            NestingTestHarness.Run(report, "B18. Metadata A-D qua duong san xuat: SL sai / kich thuoc KHONG vao block cat; chu trong lo", B18_MetadataThroughProductionPath);
+            NestingTestHarness.Run(report, "B19. Writer tu chan ket qua KHONG qua validator (ca ve thang)", B19_WriterRefusesInvalidResult);
             GhoPhoiOrderCadTests.Run(report);
             NestingTestHarness.Summary(report);
             return report;
@@ -1850,6 +1852,181 @@ namespace AUTOCAD_COMMANDS.Nesting
             double v;
             True(!GhoPhoiSettingsStore.TryD("Infinity", out v) && !GhoPhoiSettingsStore.TryD("NaN", out v), "TryD tu choi vo cuc / NaN (ca danh muc kho phoi)");
             True(GhoPhoiSettingsStore.TryD(" 1250 ", out v) && v == 1250, "TryD so thuong");
+        }
+
+        private static Polyline Rect(double x, double y, double w, double h)
+        {
+            Polyline pl = new Polyline();
+            pl.AddVertexAt(0, new Point2d(x, y), 0, 0, 0);
+            pl.AddVertexAt(1, new Point2d(x + w, y), 0, 0, 0);
+            pl.AddVertexAt(2, new Point2d(x + w, y + h), 0, 0, 0);
+            pl.AddVertexAt(3, new Point2d(x, y + h), 0, 0, 0);
+            pl.Closed = true;
+            return pl;
+        }
+
+        /// <summary>
+        /// A-D tren entity CAD THAT (DBText / MText / Polyline) qua NestingSelectionReader ->
+        /// nhan dang -> ghep -> ghi DWG -> doc lai block: chu SL sai va chu kich thuoc KHONG duoc
+        /// sao vao block cat; chu cat that van di theo; chu cua chi tiet nho trong lo cua khung
+        /// thuoc chi tiet nho.
+        /// </summary>
+        private static void B18_MetadataThroughProductionPath()
+        {
+            string path = Path.Combine(Path.GetTempPath(), "ghophoi_b18_" + Guid.NewGuid().ToString("N") + ".dwg");
+            try
+            {
+                using (Database db = new Database(true, true))
+                {
+                    using (Transaction tr = db.TransactionManager.StartTransaction())
+                    {
+                        Append(db, tr, Rect(0, 0, 200, 100));                                    // P1: SL sai
+                        Txt(db, tr, "SL: abc", 20, 60);
+                        Append(db, tr, new MText { Location = new Point3d(20, 40, 0), TextHeight = 10, Contents = "1.2MM" });
+
+                        Append(db, tr, Rect(500, 0, 200, 100));                                  // P2: dau phay + kich thuoc + chu cat
+                        Txt(db, tr, "SL: 2, 1.5MM", 520, 70);
+                        Txt(db, tr, "R12.5MM", 520, 40);
+                        Txt(db, tr, "KH-9", 620, 20);
+
+                        Append(db, tr, Rect(1000, 0, 400, 400));                                 // khung F
+                        Append(db, tr, Rect(1050, 50, 300, 300));                                // lo cua F
+                        Append(db, tr, Rect(1120, 120, 100, 100));                               // S trong lo
+                        Txt(db, tr, "SL: 3", 1010, 200);                                         // tren vat lieu F
+                        Txt(db, tr, "SL: 4", 1150, 160);                                         // trong S
+                        Txt(db, tr, "1.2MM", 1010, 20);
+                        Txt(db, tr, "1.2MM", 1150, 140);
+                        tr.Commit();
+                    }
+
+                    NestReadResult read;
+                    RecognitionResult rec;
+                    using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+                    {
+                        rec = ReadAndRecognize(db, tr, Settings(), out read);
+                    }
+
+                    List<RecognizedPart> parts = rec.Parts.FindAll(p => p.IsNestable);
+                    Equal(4, parts.Count, "4 chi tiet: " + string.Join(" | ", rec.Parts.ConvertAll(p => p.Name + " " + p.Status + " " + p.NotesText).ToArray()));
+                    RecognizedPart p1 = parts.Find(p => Math.Abs(p.MinX) < 1e-6);
+                    RecognizedPart p2 = parts.Find(p => Math.Abs(p.MinX - 500) < 1e-6);
+                    RecognizedPart frame = parts.Find(p => Math.Abs(p.MinX - 1000) < 1e-6);
+                    RecognizedPart small = parts.Find(p => Math.Abs(p.MinX - 1120) < 1e-6);
+
+                    Equal(PartStatus.Ambiguous, p1.Status, "P1: SL sai -> phai xac nhan");
+                    True(p1.NotesText.Contains("SL: abc"), "P1: ghi chu chi ra chu sai: " + p1.NotesText);
+                    Equal(0, p1.EngravingSources.Count, "P1: 'SL: abc' KHONG la chu cat");
+
+                    Equal(2, p2.Quantity, "P2: 'SL: 2, 1.5MM' -> SL 2");
+                    Equal("1.5MM", p2.Material, "P2: vat lieu 1.5MM");
+                    Equal(PartStatus.Ok, p2.Status, "P2: ro rang");
+                    Equal(1, p2.EngravingSources.Count, "P2: CHI 'KH-9' la chu cat (khong phai R12.5MM, khong phai SL)");
+
+                    Equal(3, frame.Quantity, "F: SL tren vat lieu khung");
+                    Equal(4, small.Quantity, "S: SL cua chi tiet nho trong lo");
+                    Equal(1, frame.Holes.Count, "F co lo");
+
+                    // Nguoi dung sua P1 trong bang kiem tra roi xac nhan -> di tiep.
+                    p1.Quantity = 1;
+                    p1.Confirmed = true;
+                    NestingRequest req = new NestingRequest { DefaultSheet = new SheetSpec("T", 2000, 1000) };
+                    req.SheetByMaterial["1.5MM"] = new SheetSpec("T15", 1000, 500);
+                    req.Groups.AddRange(PartRecognizer.ToPartGroups(rec.Parts, Settings().ArcToleranceMm));
+                    NestingResult res = new SimpleNestingEngine().Nest(req, CancellationToken.None, null);
+                    True(res.Validation.IsValid, "validator");
+                    Equal(1 + 2 + 3 + 4, res.Statistics.PlacedQuantity, "xep du");
+
+                    GhoPhoiSettings s = Settings();
+                    s.LabelParts = false;
+                    NestingDwgWriter.Write(db, path, req, res, GhoPhoiPipeline.BuildOutputParts(req.Groups, read), s, "b18");
+
+                    using (Database check = new Database(false, true))
+                    {
+                        check.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare, true, string.Empty);
+                        using (Transaction tr = check.TransactionManager.StartOpenCloseTransaction())
+                        {
+                            List<string> texts = new List<string>();
+                            BlockTable bt = (BlockTable)tr.GetObject(check.BlockTableId, OpenMode.ForRead);
+                            foreach (ObjectId id in bt)
+                            {
+                                BlockTableRecord btr = (BlockTableRecord)tr.GetObject(id, OpenMode.ForRead);
+                                if (!btr.Name.StartsWith("GHOPHOI_", StringComparison.Ordinal)) continue;
+                                foreach (ObjectId eid in btr)
+                                {
+                                    DBObject o = tr.GetObject(eid, OpenMode.ForRead);
+                                    if (o is DBText) texts.Add(((DBText)o).TextString);
+                                    if (o is MText) texts.Add(((MText)o).Text);
+                                }
+                            }
+
+                            True(texts.Contains("KH-9"), "chu cat that van nam trong block");
+                            foreach (string bad in new[] { "SL: abc", "R12.5MM", "SL: 2, 1.5MM", "SL: 3", "SL: 4", "1.2MM" })
+                            {
+                                True(!texts.Contains(bad), "'" + bad + "' KHONG duoc nam trong block cat");
+                            }
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                TryDelete(path);
+            }
+        }
+
+        private static void B19_WriterRefusesInvalidResult()
+        {
+            using (Database db = new Database(true, true))
+            {
+                RoundTripCase c = PrepareRoundTrip(db);
+                NestingResult invalid = CopyResult(c.Result);
+                invalid.Validation = new ValidationResult();
+                invalid.Validation.Issues.Add(new ValidationIssue(ValidationIssueKind.Overlap, "gia lap"));
+
+                string path = Path.Combine(Path.GetTempPath(), "ghophoi_b19_" + Guid.NewGuid().ToString("N") + ".dwg");
+                bool threw = false;
+                try
+                {
+                    NestingDwgWriter.Write(db, path, c.Request, invalid, c.Outputs, Settings(), "b19");
+                }
+                catch (InvalidOperationException)
+                {
+                    threw = true;
+                }
+                finally
+                {
+                    bool exists = File.Exists(path);
+                    TryDelete(path);
+                    True(!exists, "khong duoc co file");
+                }
+
+                True(threw, "ghi ket qua KHONG DAT phai bi tu choi");
+
+                threw = false;
+                try
+                {
+                    NestingDwgWriter.DrawIntoCurrent(db, Point3d.Origin, c.Request, invalid, c.Outputs, Settings(), "b19");
+                }
+                catch (InvalidOperationException)
+                {
+                    threw = true;
+                }
+
+                True(threw, "ve thang ket qua KHONG DAT phai bi tu choi");
+                Equal(c.SourceBefore, SourceSnapshot(db, null), "ban ve KHONG doi");
+
+                // Ket qua DAT van ghi binh thuong.
+                string ok = Path.Combine(Path.GetTempPath(), "ghophoi_b19ok_" + Guid.NewGuid().ToString("N") + ".dwg");
+                try
+                {
+                    NestingDwgWriter.Write(db, ok, c.Request, c.Result, c.Outputs, Settings(), "b19");
+                    True(File.Exists(ok), "ket qua DAT van ghi duoc");
+                }
+                finally
+                {
+                    TryDelete(ok);
+                }
+            }
         }
 
         private static void ExpectIssue(List<string> issues, string fragment, string what)

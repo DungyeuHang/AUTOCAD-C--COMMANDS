@@ -237,7 +237,8 @@ namespace AUTOCAD_COMMANDS.Nesting
             string blockReason = !valid ? "VALIDATOR KHONG DAT - khong tao ban ve san xuat."
                 : (!hasPlacements ? "Khong co chi tiet nao duoc xep." : string.Empty);
 
-            using (NestingResultForm resultForm = new NestingResultForm(report, valid && hasPlacements, blockReason))
+            string createText = settings.OutputToCurrentDrawing ? "VE VAO BAN VE NAY" : "TAO BAN VE MOI";
+            using (NestingResultForm resultForm = new NestingResultForm(report, valid && hasPlacements, blockReason, createText))
             {
                 if (Application.ShowModalDialog(resultForm) != WF.DialogResult.OK)
                 {

@@ -111,6 +111,36 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
         /// Attaches geometry from marking layers (bend lines, engraving) to the smallest part
         /// whose outline contains all its sample points. Returns false when no part contains it.
         /// </summary>
+        /// <summary>
+        /// Diem trong / tren mot vong (1 / 0 / -1), KIEM HOP BAO TRUOC. Ngoai hop bao dong thi chac
+        /// chan -1 (giong het PointInRing); trong hop bao thi moi hieu toa do deu nho hon kich
+        /// thuoc vong, nen tich so long khong the tran ke ca khi ban ve nam cach goc hang nghin km.
+        /// Truoc day PointInRing chay thang tren toa do the gioi: diem xa ~3e6 mm co the tran.
+        /// </summary>
+        internal static int PointInLoop(Pt p, RecognizedLoop loop)
+        {
+            if (p.X < loop.MinX || p.X > loop.MaxX || p.Y < loop.MinY || p.Y > loop.MaxY) return -1;
+            List<IntPoint> ring = new List<IntPoint>(loop.Points.Count);
+            foreach (Pt q in loop.Points) ring.Add(IntPoint.FromMm(q.X, q.Y));
+            return GeometryMath.PointInRing(IntPoint.FromMm(p.X, p.Y), ring);
+        }
+
+        /// <summary>
+        /// Diem nam trong VAT LIEU cua chi tiet: trong (hoac tren) vong ngoai va KHONG nam han
+        /// trong mot lo. Diem nam trong lo la khoang TRONG - khong thuoc chi tiet do (co the thuoc
+        /// chi tiet khac nam trong lo). Tren bien lo = tren bien vat lieu -> van tinh la trong.
+        /// </summary>
+        internal static bool InMaterial(RecognizedPart part, Pt p)
+        {
+            if (part.Outer == null || PointInLoop(p, part.Outer) < 0) return false;
+            foreach (RecognizedLoop h in part.Holes)
+            {
+                if (PointInLoop(p, h) > 0) return false;
+            }
+
+            return true;
+        }
+
         public static bool AttachMarking(IList<RecognizedPart> records, int sourceIndex, IList<Pt> samples)
         {
             RecognizedPart owner = null;
@@ -119,13 +149,10 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 if (part.Outer == null) continue;
                 if (owner != null && part.Outer.Area >= owner.Outer.Area) continue;
 
-                List<IntPoint> ring = new List<IntPoint>(part.Outer.Points.Count);
-                foreach (Pt q in part.Outer.Points) ring.Add(IntPoint.FromMm(q.X, q.Y));
-
                 bool inside = samples.Count > 0;
                 foreach (Pt p in samples)
                 {
-                    if (GeometryMath.PointInRing(IntPoint.FromMm(p.X, p.Y), ring) < 0)
+                    if (PointInLoop(p, part.Outer) < 0)
                     {
                         inside = false;
                         break;
@@ -144,8 +171,9 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
         /// <summary>
         /// Attaches one engraving TEXT / MTEXT to the part that contains it.
         ///
-        /// Same containment rule as <see cref="AttachMarking"/> - innermost part wins - because
-        /// engraving is physically on the part, so its anchor must lie inside the outline. Text
+        /// Innermost part wins, and the anchor must lie in the part's MATERIAL: engraving is
+        /// physically on the part, so an anchor inside a closed HOLE of a frame belongs to the
+        /// part sitting in that hole (or to nothing) - never to the frame around it. Text
         /// that sits outside every part is NOT attached and the caller reports it; silently
         /// dropping it would lose a marking the operator asked for.
         ///
@@ -160,11 +188,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             {
                 if (part.Outer == null) continue;
                 if (owner != null && part.Outer.Area >= owner.Outer.Area) continue;
-
-                List<IntPoint> ring = new List<IntPoint>(part.Outer.Points.Count);
-                foreach (Pt q in part.Outer.Points) ring.Add(IntPoint.FromMm(q.X, q.Y));
-
-                if (GeometryMath.PointInRing(IntPoint.FromMm(anchor.X, anchor.Y), ring) >= 0) owner = part;
+                if (InMaterial(part, anchor)) owner = part;
             }
 
             if (owner == null) return false;

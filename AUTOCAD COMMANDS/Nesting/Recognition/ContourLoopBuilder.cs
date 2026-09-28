@@ -423,6 +423,18 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
 
         private static bool PointInOrOn(Pt p, List<Pt> ring)
         {
+            // Hop bao truoc: ngoai hop bao dong thi chac chan ngoai (ket qua y het), va trong hop
+            // bao thi hieu toa do nho - PointInRing khong tran ke ca voi ban ve rat xa goc.
+            double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+            foreach (Pt q in ring)
+            {
+                if (q.X < minX) minX = q.X;
+                if (q.Y < minY) minY = q.Y;
+                if (q.X > maxX) maxX = q.X;
+                if (q.Y > maxY) maxY = q.Y;
+            }
+
+            if (p.X < minX || p.X > maxX || p.Y < minY || p.Y > maxY) return false;
             return GeometryMath.PointInRing(IntPoint.FromMm(p.X, p.Y), ToInts(ring)) >= 0;
         }
 

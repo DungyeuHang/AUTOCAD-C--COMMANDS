@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Text;
 using AUTOCAD_COMMANDS.Nesting.Recognition;
 using static AUTOCAD_COMMANDS.Nesting.SelfTests.NestingTestHarness;
 
@@ -50,6 +51,12 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "R37. 'SL: 2 SL: 3' trong 1 chu -> AMBIGUOUS", R37_TwoQuantitiesOneText);
             NestingTestHarness.Run(report, "R38. Nguong mo ho: chenh 0.4 mm -> AMBIGUOUS, 0.6 mm -> chi tiet gan hon", R38_AmbiguityBoundary);
             NestingTestHarness.Run(report, "R39. SL rieng ben trong + SL chi tiet ben canh gan vien -> bao, khong im lang", R39_NeighbourQuantityFlagged);
+            NestingTestHarness.Run(report, "R40. Phan loai SL: hop le / SAI / khong phai SL; dau phay sau SL", R40_QuantityClassification);
+            NestingTestHarness.Run(report, "R41. Vat lieu / kich thuoc (R, D, O, ngoai khoang) / so AM", R41_MaterialVersusDimension);
+            NestingTestHarness.Run(report, "R42. SL sai / vat lieu am -> MO HO co ghi chu, khong thanh chu cat; kich thuoc bi bo qua", R42_InvalidMetadataRecognition);
+            NestingTestHarness.Run(report, "R43. Chu trong LO cua khung: 10 truong hop topo", R43_TextInsideHoleTopology);
+            NestingTestHarness.Run(report, "R44. Toa do rat xa (+-1e6 .. 1e7 mm): cung ket qua nhan dang", R44_FarCoordinates);
+            NestingTestHarness.Run(report, "R45. Doi khang: dau hai cham full-width, 0MM, duoi MM la, sat bien 0.001, chu chong cho", R45_AdversarialMetadata);
         }
 
         private static void R20_SlInsideMaterialOutside()
@@ -649,6 +656,342 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             RecognitionResult r = Recognize(c, Text("SL: 3", 100, 50), Text("SL: 7", 220, 50));
             Equal(PartStatus.Ambiguous, At(r, 0).Status, "A: hai SL khac nhau -> phai bao");
             True(At(r, 300).Status != PartStatus.Ok, "B: khong co SL -> it nhat WARNING, khong im lang");
+        }
+
+        // ==================================================================================
+        // METADATA A-D: SL sai, dau phay, kich thuoc / so am, chu trong lo
+        // ==================================================================================
+
+        /// <summary>
+        /// Mot dong ky vong: qty = SL hop le (0 = khong co), mat = vat lieu hop le (null = khong
+        /// co), issue = chuoi loai van de mong doi ("Q" SL sai, "M" vat lieu am, "D" kich thuoc,
+        /// ghep lai theo thu tu; "" = khong co van de).
+        /// </summary>
+        private static void ExpectReading(MetadataParser p, string text, int qty, string mat, string issues)
+        {
+            MetadataReading r = p.Classify(text);
+            MetadataFact q = r.Facts.Find(f => f.Kind == MetadataKind.Quantity);
+            MetadataFact m = r.Facts.Find(f => f.Kind == MetadataKind.Material);
+            string got = string.Empty;
+            foreach (MetadataIssue i in r.Issues)
+            {
+                got += i.Kind == MetadataIssueKind.InvalidQuantity ? "Q" : i.Kind == MetadataIssueKind.InvalidMaterial ? "M" : "D";
+            }
+
+            string where = "'" + text + "'";
+            Equal(qty, q == null ? 0 : q.QuantityValue, where + " SL");
+            Equal(mat, m == null ? null : m.Value, where + " vat lieu");
+            Equal(issues, got, where + " van de");
+            Equal(qty == 0 ? 0 : 1, r.Facts.FindAll(f => f.Kind == MetadataKind.Quantity).Count, where + " so SL");
+        }
+
+        /// <summary>A + B: SL hop le / SL co dang nhung sai / khong phai SL; dau phay sau SL.</summary>
+        private static void R40_QuantityClassification()
+        {
+            MetadataParser p = new MetadataParser(new MetadataRules());
+
+            // SL co dang ro rang nhung gia tri SAI -> van de Q, khong co SL.
+            foreach (string bad in new[] { "SL: 0", "SL: -1", "SL: abc", "SL: 1.5", "SL: 99999999999", "SL:", "SL: ???", "SL: 1,5", "SL -1", "SL=+3", "SL: 100001", "SL: 00000" })
+            {
+                ExpectReading(p, bad, 0, null, "Q");
+            }
+
+            // Hop le (ke ca so 0 o dau, chu theo sau, chu thuong, khoang trang Unicode / tab).
+            ExpectReading(p, "SL: 10", 10, null, "");
+            ExpectReading(p, "SL: 0010", 10, null, "");
+            ExpectReading(p, "SL: 2 cai", 2, null, "");
+            ExpectReading(p, "sl: 2", 2, null, "");
+            ExpectReading(p, "SL : 2", 2, null, "");
+            ExpectReading(p, "SL : 2", 2, null, "");
+            ExpectReading(p, "SL:\t7", 7, null, "");
+            ExpectReading(p, "SL 5", 5, null, "");
+            ExpectReading(p, "SL=12", 12, null, "");
+            ExpectReading(p, "SL: 100000", 100000, null, "");
+            ExpectReading(p, "SL: 5MM", 5, null, "");
+
+            // Khong phai SL: tu khac, SL dinh chu, "SL" dung mot minh / theo sau la chu.
+            foreach (string plain in new[] { "SLOT", "SLIDE", "SLEEVE", "SLOT 5", "ASL 3", "SL ABC", "SL", "SLS: 2" })
+            {
+                ExpectReading(p, plain, 0, null, "");
+            }
+
+            // B: dau phay / khoang trang sau SL.
+            ExpectReading(p, "SL: 2, 1.2MM", 2, "1.2MM", "");
+            ExpectReading(p, "SL: 10,1.5MM", 10, "1.5MM", "");
+            ExpectReading(p, "SL: 0010, 1.2MM", 10, "1.2MM", "");
+            ExpectReading(p, "SL: 2 , 1.2MM", 2, "1.2MM", "");
+            ExpectReading(p, "SL: 2,", 2, null, "");
+            ExpectReading(p, "SL: 2, abc", 2, null, "");
+            ExpectReading(p, "SL: 2.5, 1.2MM", 0, "1.2MM", "Q");
+            ExpectReading(p, "SL: 0, 1.2MM", 0, "1.2MM", "Q");
+            ExpectReading(p, "SL: -2, 1.2MM", 0, "1.2MM", "Q");
+
+            // Hop dong cu cua Parse(): chi gia tri hop le.
+            Equal(0, p.Parse("SL: abc").Count, "Parse khong tra ve SL sai");
+            Equal(2, p.Parse("SL: 2, 1.2MM").Count, "Parse doc ca SL lan vat lieu");
+        }
+
+        /// <summary>C: vat lieu hop le / kich thuoc / so am / khong phai thong tin.</summary>
+        private static void R41_MaterialVersusDimension()
+        {
+            MetadataParser p = new MetadataParser(new MetadataRules());
+
+            ExpectReading(p, "1.2MM", 0, "1.2MM", "");
+            ExpectReading(p, "1.5MM", 0, "1.5MM", "");
+            ExpectReading(p, "2MM", 0, "2MM", "");
+            ExpectReading(p, "2.0MM", 0, "2MM", "");
+            ExpectReading(p, "1,2 mm", 0, "1.2MM", "");
+            ExpectReading(p, "1.2 MM", 0, "1.2MM", "");
+            ExpectReading(p, "1.2mm", 0, "1.2MM", "");
+            ExpectReading(p, "T1.2MM", 0, "1.2MM", "");
+            ExpectReading(p, "0.3MM", 0, "0.3MM", "");
+            ExpectReading(p, "25MM", 0, "25MM", "");
+            // Quy uoc CO SAN (R23, MaxThicknessMm = 25): so tron 0.3..25 mm la do day - tam 20 mm la
+            // vat lieu that. Chi co tien to R / D / O, hoac ngoai khoang, moi la kich thuoc.
+            ExpectReading(p, "20MM", 0, "20MM", "");
+
+            foreach (string dim in new[] { "R12.5MM", "R20MM", "D10MM", "D100MM", "100MM", "150MM", "Ø8MM", "r5mm", "0.1MM", "30MM", "1200 MM", "1.2345MM" })
+            {
+                ExpectReading(p, dim, 0, null, "D");
+            }
+
+            foreach (string neg in new[] { "-1.2MM", "-20MM", "-150MM", "-0.5MM" })
+            {
+                ExpectReading(p, neg, 0, null, "M");
+            }
+
+            // Khong co so -> khong phai thong tin (xu ly nhu chu thuong).
+            foreach (string plain in new[] { "abcMM", ".MM", "MM", "COMM", "12.5.3MM" })
+            {
+                ExpectReading(p, plain, 0, null, "");
+            }
+
+            ExpectReading(p, "SL: 2, R12.5MM", 2, null, "D");
+            ExpectReading(p, "SL: 2, D10MM", 2, null, "D");
+            ExpectReading(p, "SL: 2, -1.2MM", 2, null, "M");
+            ExpectReading(p, "1.2MM 1.5MM", 0, "1.2MM", "");
+            Equal(2, p.Classify("1.2MM 1.5MM").Facts.Count, "hai vat lieu trong mot chu -> hai gia tri (associator bao mo ho)");
+        }
+
+        /// <summary>A qua duong nhan dang: chu SL sai -> MO HO co ghi chu, KHONG thanh chu cat, khong gan im lang.</summary>
+        private static void R42_InvalidMetadataRecognition()
+        {
+            foreach (string bad in new[] { "SL: abc", "SL: 0", "SL: 1.5", "SL: 99999999999", "SL:", "SL: -1" })
+            {
+                RecognitionResult r = Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text(bad, 100, 50), Text("1.2MM", 100, 20));
+                RecognizedPart p = Valid(r)[0];
+                Equal(PartStatus.Ambiguous, p.Status, "'" + bad + "' trong chi tiet -> phai xac nhan");
+                Equal(0, p.EngravingSources.Count, "'" + bad + "' KHONG duoc thanh chu cat");
+                Equal(1, p.Quantity, "'" + bad + "' tam 1");
+                True(p.NotesText.Contains(bad.Trim()), "ghi chu phai chi ra chu '" + bad + "': " + p.NotesText);
+                True(p.Name.IndexOf(bad, StringComparison.Ordinal) < 0, "'" + bad + "' khong duoc thanh ten chi tiet");
+
+                bool threw = false;
+                try
+                {
+                    PartRecognizer.ToPartGroups(r.Parts, 0.05);
+                }
+                catch (InvalidOperationException)
+                {
+                    threw = true;
+                }
+
+                True(threw, "'" + bad + "': chua xac nhan thi KHONG duoc ghep");
+            }
+
+            // Ngoai chi tiet: truoc day bi bo IM LANG.
+            RecognitionResult outside = Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text("SL: abc", 100, -30));
+            Equal(PartStatus.Ambiguous, Valid(outside)[0].Status, "SL sai ngoai chi tiet (gan) -> van phai bao");
+
+            RecognitionResult far = Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text("SL: abc", 5000, 5000));
+            Equal(1, far.GlobalWarnings.Count, "SL sai qua xa -> canh bao chung");
+
+            // Mot SL dung + mot SL sai: van lay SL dung nhung PHAI xac nhan.
+            RecognizedPart mixed = Valid(Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text("SL: 2", 50, 50), Text("SL: abc", 150, 50)))[0];
+            Equal(2, mixed.Quantity, "SL dung van duoc doc");
+            Equal(PartStatus.Ambiguous, mixed.Status, "co chu SL sai -> phai xac nhan");
+
+            // Vat lieu am.
+            RecognizedPart neg = Valid(Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text("SL: 2", 50, 50), Text("-1.2MM", 150, 50)))[0];
+            Equal(PartStatus.Ambiguous, neg.Status, "vat lieu am -> phai xac nhan");
+            Equal("1.2MM", neg.Material, "tam mac dinh (khong phai doc tu chu am)");
+            True(!neg.MaterialFromText, "vat lieu KHONG duoc coi la doc tu chu");
+            True(neg.NotesText.Contains("-1.2MM"), "ghi chu chi ra chu am");
+            Equal(0, neg.EngravingSources.Count, "chu vat lieu am khong thanh chu cat");
+
+            // Kich thuoc trong chi tiet: khong phai thong tin, KHONG thanh chu cat.
+            foreach (string dim in new[] { "R12.5MM", "D10MM", "150MM" })
+            {
+                RecognizedPart d = Valid(Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text("SL: 3", 50, 50), Text(dim, 150, 50)))[0];
+                Equal(0, d.EngravingSources.Count, "'" + dim + "' khong duoc mang di cat");
+                Equal(3, d.Quantity, "SL van dung");
+                Equal("1.2MM", d.Material, "'" + dim + "' khong phai vat lieu");
+                Equal(PartStatus.Warning, d.Status, "thieu vat lieu -> WARNING nhu truoc, khong mo ho gia");
+            }
+
+            // B qua duong nhan dang.
+            RecognizedPart comma = Valid(Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text("SL: 2, 1.2MM", 100, 50)))[0];
+            Equal(2, comma.Quantity, "SL: 2, 1.2MM -> SL 2");
+            Equal("1.2MM", comma.Material, "... va 1.2MM");
+            Equal(PartStatus.Ok, comma.Status, "ro rang -> OK");
+        }
+
+        /// <summary>
+        /// Khung 400x400 co lo 300x300 (50..350), chi tiet nho trong lo. Cac chi tiet va chu dung
+        /// cho D (xem R43).
+        /// </summary>
+        private static List<CurveChain> FrameWithHole(double ox, double oy, params double[][] inner)
+        {
+            List<CurveChain> c = new List<CurveChain> { Box(ox, oy, 400, 400), Box(ox + 50, oy + 50, 300, 300) };
+            foreach (double[] b in inner) c.Add(Box(ox + b[0], oy + b[1], b[2], b[3]));
+            return c;
+        }
+
+        /// <summary>
+        /// D: chu trong LO cua khung. Uu tien: trong VAT LIEU cua chi tiet nho nhat -> chi tiet
+        /// do; khong thi chi tiet co HINH (vong ngoai hoac mep lo) gan nhat; hai ben ngang nhau -> mo
+        /// ho. Diem nam trong lo KHONG thuoc khung.
+        /// </summary>
+        private static void R43_TextInsideHoleTopology()
+        {
+            double[] small = { 120, 120, 100, 100 };
+
+            // 1. Chu cua khung, tren vat lieu khung.
+            RecognitionResult r1 = Recognize(FrameWithHole(0, 0, small), Text("SL: 3", 20, 200));
+            Equal(3, At(r1, 0).Quantity, "1: khung nhan chu tren vat lieu khung");
+            Equal(1, At(r1, 120).Quantity, "1: chi tiet nho khong nhan");
+
+            // 2. Chu cua chi tiet nho, trong chi tiet nho.
+            RecognitionResult r2 = Recognize(FrameWithHole(0, 0, small), Text("SL: 4", 170, 170));
+            Equal(4, At(r2, 120).Quantity, "2: chi tiet nho nhan chu cua no");
+            Equal(1, At(r2, 0).Quantity, "2: khung KHONG nhan");
+
+            // 3. Ca hai co chu rieng.
+            RecognitionResult r3 = Recognize(FrameWithHole(0, 0, small), Text("SL: 5", 20, 20), Text("SL: 6", 170, 170));
+            Equal(5, At(r3, 0).Quantity, "3: khung");
+            Equal(6, At(r3, 120).Quantity, "3: chi tiet nho");
+            Equal(PartStatus.Warning, At(r3, 0).Status, "3: khung khong mo ho (chi thieu vat lieu)");
+
+            // 4. Nhieu chi tiet nho trong cung lo.
+            RecognitionResult r4 = Recognize(FrameWithHole(0, 0, new double[] { 70, 70, 60, 60 }, new double[] { 250, 250, 60, 60 }),
+                Text("SL: 7", 100, 100), Text("SL: 8", 280, 280));
+            Equal(7, At(r4, 70).Quantity, "4: chi tiet nho thu nhat");
+            Equal(8, At(r4, 250).Quantity, "4: chi tiet nho thu hai");
+            Equal(1, At(r4, 0).Quantity, "4: khung khong nhan");
+
+            // 5. Lo long lo: khung > lo > S (co lo rieng) > T trong lo cua S.
+            List<CurveChain> nested = FrameWithHole(0, 0, new double[] { 100, 100, 200, 200 }, new double[] { 150, 150, 100, 100 }, new double[] { 180, 180, 40, 40 });
+            RecognitionResult r5 = Recognize(nested, Text("SL: 9", 200, 200), Text("SL: 2", 120, 120));
+            Equal(9, At(r5, 180).Quantity, "5: T (sau nhat) nhan chu cua no");
+            Equal(2, At(r5, 100).Quantity, "5: S nhan chu tren vat lieu S");
+            Equal(1, At(r5, 0).Quantity, "5: khung khong nhan");
+
+            // 6. Chu o khoang trong cua lo, xa chi tiet nho: gan MEP LO cua khung nhat -> khung.
+            RecognitionResult r6 = Recognize(FrameWithHole(0, 0, small), Text("SL: 2", 330, 330));
+            Equal(2, At(r6, 0).Quantity, "6: gan mep lo khung (20 mm) hon chi tiet nho (~156 mm) -> khung");
+            Equal(1, At(r6, 120).Quantity, "6: chi tiet nho khong nhan");
+
+            // 7. Gan ca khung lan chi tiet nho, ro rang gan chi tiet nho hon.
+            RecognitionResult r7 = Recognize(FrameWithHole(0, 0, small), Text("SL: 4", 235, 170));
+            Equal(4, At(r7, 120).Quantity, "7: cach chi tiet nho 15 mm, mep lo 115 mm -> chi tiet nho");
+            Equal(1, At(r7, 0).Quantity, "7: khung khong nhan");
+
+            // 8. Dung tren bien: bien chi tiet nho -> chi tiet nho; bien lo -> thuoc vat lieu khung.
+            RecognitionResult r8a = Recognize(FrameWithHole(0, 0, small), Text("SL: 4", 220, 170));
+            Equal(4, At(r8a, 120).Quantity, "8: tren bien chi tiet nho");
+            RecognitionResult r8b = Recognize(FrameWithHole(0, 0, small), Text("SL: 5", 50, 200));
+            Equal(5, At(r8b, 0).Quantity, "8: tren mep lo -> vat lieu khung");
+
+            // 9. Cach deu hai chi tiet nho -> MO HO, khong doan.
+            RecognitionResult r9 = Recognize(FrameWithHole(0, 0, new double[] { 100, 150, 50, 50 }, new double[] { 170, 150, 50, 50 }), Text("SL: 6", 160, 175));
+            Equal(PartStatus.Ambiguous, At(r9, 100).Status, "9: ben trai mo ho");
+            Equal(PartStatus.Ambiguous, At(r9, 170).Status, "9: ben phai mo ho");
+            Equal(1, At(r9, 100).Quantity, "9: khong gan");
+            Equal(1, At(r9, 170).Quantity, "9: khong gan");
+
+            // 10. SL + vat lieu cua chi tiet nho trong lo.
+            RecognitionResult r10 = Recognize(FrameWithHole(0, 0, small), Text("SL: 3", 170, 190), Text("1.5MM", 170, 140));
+            Equal(3, At(r10, 120).Quantity, "10: SL chi tiet nho");
+            Equal("1.5MM", At(r10, 120).Material, "10: vat lieu chi tiet nho");
+            Equal("1.2MM", At(r10, 0).Material, "10: khung giu mac dinh");
+
+            // Chu CAT (khong phai thong tin) nam trong khoang trong cua lo: khong phai chu cat cua khung.
+            RecognitionResult cut = Recognize(FrameWithHole(0, 0, small), Text("KH-01", 330, 330));
+            Equal(0, At(cut, 0).EngravingSources.Count, "chu trong lo khong duoc cat vao khung (khoang trong)");
+            RecognitionResult cutSmall = Recognize(FrameWithHole(0, 0, small), Text("KH-02", 170, 170));
+            Equal(1, At(cutSmall, 120).EngravingSources.Count, "chu cat trong chi tiet nho van di theo chi tiet nho");
+
+            // Chu tren layer khac: cung quy tac vat lieu.
+            RecognitionResult eng = Recognize(FrameWithHole(0, 0, small));
+            True(!PartRecognizer.AttachEngraving(eng.Parts, 901, new Pt(330, 330)), "chu khac trong khoang trong cua lo -> khong gan (se bao)");
+            True(PartRecognizer.AttachEngraving(eng.Parts, 902, new Pt(20, 20)), "tren vat lieu khung -> gan");
+            Equal(1, At(eng, 0).EngravingSources.Count, "khung chi nhan chu tren vat lieu cua no");
+        }
+
+        /// <summary>
+        /// R1: cung ban ve dat o goc toa do rat xa (+-1e6, -3e6, 1e7 mm) phai cho DUNG cung ket
+        /// qua: nhan dang lo / chi tiet trong lo, gan chu, mo ho. Truoc day PointInRing chay tren
+        /// toa do the gioi va co the tran long khi diem xa vong ~3e6 mm.
+        /// </summary>
+        private static void R44_FarCoordinates()
+        {
+            Func<double, double, string> run = (ox, oy) =>
+            {
+                List<CurveChain> c = FrameWithHole(ox, oy, new double[] { 120, 120, 100, 100 });
+                c.Add(Box(ox + 5000, oy, 200, 100));                                          // chi tiet thu ba o xa
+                RecognitionResult r = Recognize(c,
+                    Text("SL: 3", ox + 20, oy + 200), Text("SL: 4", ox + 170, oy + 170),
+                    Text("SL: 2", ox + 330, oy + 330), Text("SL: abc", ox + 5100, oy + 50),
+                    Text("SL: 9", ox + 3000000, oy + 3000000));                               // rat xa moi thu
+                StringBuilder sb = new StringBuilder();
+                List<RecognizedPart> parts = Valid(r);
+                parts.Sort((a, b) => a.Outer.MinX.CompareTo(b.Outer.MinX) != 0 ? a.Outer.MinX.CompareTo(b.Outer.MinX) : a.Outer.MinY.CompareTo(b.Outer.MinY));
+                foreach (RecognizedPart p in parts)
+                {
+                    sb.Append(p.Outer.MinX - ox).Append(',').Append(p.Holes.Count).Append(':').Append(p.Quantity).Append('/').Append(p.Status).Append(' ');
+                }
+
+                sb.Append("warn=").Append(r.GlobalWarnings.Count);
+                return sb.ToString();
+            };
+
+            string origin = run(0, 0);
+            // Khung: SL 3 tren vat lieu + SL 2 gan mep lo -> hai SL khac nhau -> mo ho (tam 1).
+            // Chi tiet nho: SL 4. Chi tiet xa: "SL: abc" -> mo ho. Chu cach 3e6 mm -> 1 canh bao chung.
+            Equal("0,1:1/Ambiguous 120,0:4/Warning 5000,0:1/Ambiguous warn=1", origin, "goc 0");
+            foreach (double[] o in new[] { new[] { 1e6, 1e6 }, new[] { -1e6, 2e6 }, new[] { -3e6, -3e6 }, new[] { 1e7, -1e7 } })
+            {
+                Equal(origin, run(o[0], o[1]), "goc (" + o[0] + ", " + o[1] + ") phai giong goc 0");
+            }
+        }
+
+        private static void R45_AdversarialMetadata()
+        {
+            MetadataParser p = new MetadataParser(new MetadataRules());
+            ExpectReading(p, "SL\uFF1A2", 2, null, "");                       // dau hai cham full-width
+            ExpectReading(p, "SL\uFF1Aabc", 0, null, "Q");
+            ExpectReading(p, "0MM", 0, null, "D");                             // do day 0 -> khong phai vat lieu
+            ExpectReading(p, "0.0MM", 0, null, "D");
+            ExpectReading(p, "1.2MMX", 0, null, "");                           // duoi la -> khong phai thong tin
+            ExpectReading(p, "1.2 MMS", 0, null, "");
+            ExpectReading(p, "  1.5   mm  ", 0, "1.5MM", "");
+            ExpectReading(p, "SL: 3 SL: abc", 3, null, "Q");                   // mot dung + mot sai
+            ExpectReading(p, "sl:0003,1.2mm", 3, "1.2MM", "");
+
+            // Sat bien 0.001 mm: trong / ngoai deu gan dung chi tiet do (khong co chi tiet thu hai).
+            RecognizedPart inner = Valid(Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text("SL: 4", 199.999, 50)))[0];
+            Equal(4, inner.Quantity, "trong bien 0.001 mm");
+            RecognizedPart outer = Valid(Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text("SL: 4", 200.001, 50)))[0];
+            Equal(4, outer.Quantity, "ngoai bien 0.001 mm (gan nhat)");
+
+            // Hai chu CHONG dung mot cho, gia tri khac nhau -> mo ho, khong chon bua.
+            RecognizedPart stacked = Valid(Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text("SL: 2", 100, 50), Text("SL: 5", 100, 50)))[0];
+            Equal(PartStatus.Ambiguous, stacked.Status, "hai chu chong cho, SL khac nhau");
+
+            // Chu full-width SL trong chi tiet: la THONG TIN, khong phai chu cat.
+            RecognizedPart fw = Valid(Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text("SL\uFF1A7", 100, 50)))[0];
+            Equal(7, fw.Quantity, "SL full-width");
+            Equal(0, fw.EngravingSources.Count, "khong thanh chu cat");
         }
 
         private static void R13_ConflictingQuantities()

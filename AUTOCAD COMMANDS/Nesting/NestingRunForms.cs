@@ -133,6 +133,25 @@ namespace AUTOCAD_COMMANDS.Nesting
             Close();
         }
 
+        /// <summary>
+        /// ControlBox = false bo nut dong nhung KHONG chan Alt+F4. Truoc day Alt+F4 dong form khi
+        /// luong ghep van chay: lenh bao "khong co ket qua", con luong ghep chay ngam tiep voi
+        /// CancellationTokenSource da bi Dispose. Gio dong form trong luc dang ghep = bam "Dung":
+        /// yeu cau dung, cho luong ghep ket thuc, roi form tu dong voi ket qua tot nhat da co.
+        /// </summary>
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (_task != null && !_task.IsCompleted)
+            {
+                e.Cancel = true;
+                if (!_cts.IsCancellationRequested) _cts.Cancel();
+                _progress = "Dang dung...";
+                return;
+            }
+
+            base.OnFormClosing(e);
+        }
+
         protected override void Dispose(bool disposing)
         {
             if (disposing)
@@ -148,7 +167,8 @@ namespace AUTOCAD_COMMANDS.Nesting
     /// <summary>Shows the statistics / validation report and gates the drawing creation.</summary>
     internal sealed class NestingResultForm : Form
     {
-        public NestingResultForm(string report, bool canCreate, string blockReason)
+        /// <param name="createText">Chu tren nut tao: phai noi DUNG cach xuat (ban ve moi / ve vao ban ve nay).</param>
+        public NestingResultForm(string report, bool canCreate, string blockReason, string createText = "TAO BAN VE MOI")
         {
             Text = "GHOPHOI - KET QUA GHEP PHOI";
             StartPosition = FormStartPosition.CenterParent;
@@ -171,7 +191,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             };
 
             FlowLayoutPanel buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 44, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(6) };
-            Button create = new Button { Text = "TAO BAN VE MOI", Width = 160, Height = 30, DialogResult = DialogResult.OK, Enabled = canCreate };
+            Button create = new Button { Text = createText, Width = 200, Height = 30, DialogResult = DialogResult.OK, Enabled = canCreate };
             Button close = new Button { Text = "Dong", Width = 90, Height = 30, DialogResult = DialogResult.Cancel };
             buttons.Controls.Add(create);
             buttons.Controls.Add(close);
