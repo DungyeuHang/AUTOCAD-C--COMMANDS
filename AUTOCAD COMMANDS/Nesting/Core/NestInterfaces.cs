@@ -289,11 +289,31 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         public List<UnplacedPart> Unplaced { get; private set; }
 
         public bool Cancelled { get; set; }
+
+        /// <summary>
+        /// Giai ma bi DUNG GIUA CHUNG vi da chac chan khong tot hon mot bo cuc cho truoc (xem
+        /// <see cref="CandidatePointDecoder.Decode(IList{PartInstance}, MaterialJob, PlacementPolicy, CancellationToken, DecodedLayout)"/>).
+        /// Bo cuc nay THIEU chi tiet - khong bao gio duoc chon.
+        /// </summary>
+        public bool Pruned { get; set; }
     }
 
     public sealed class OptimizationOutcome
     {
         public DecodedLayout Best { get; set; }
+
+        /// <summary>
+        /// Ket qua tot nhat cua cac luot xep V1, TRUOC buoc doi cho. O muc Nhanh la chinh
+        /// <see cref="Best"/>. Giu lai lam duong lui neu ket qua cuoi khong qua validator.
+        /// </summary>
+        public DecodedLayout BaseBest { get; set; }
+
+        /// <summary>So luot giai ma doi cho da chay (muc Can bang).</summary>
+        public int LocalSearchDecodes { get; set; }
+
+        public int LocalSearchImprovements { get; set; }
+
+        public int LocalSearchPruned { get; set; }
 
         /// <summary>So luot xep da chay xong.</summary>
         public int OrderingsTried { get; set; }

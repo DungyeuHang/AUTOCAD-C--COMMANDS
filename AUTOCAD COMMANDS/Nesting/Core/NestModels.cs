@@ -156,6 +156,19 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         }
     }
 
+    /// <summary>
+    /// Muc tim kiem cach xep.
+    ///
+    /// Fast = dung hanh vi V1 (cung bo cuc tren moi fixture). Balanced = sau khi co ket qua
+    /// tot nhat cua cac luot xep, chay them mot so luot DOI CHO TUNG CHI TIET (xem
+    /// <see cref="OrderLocalSearch"/>). Co the ngan hon mot chut, khong dam bao luon tot hon.
+    /// </summary>
+    public enum SearchEffort
+    {
+        Fast = 0,
+        Balanced = 1
+    }
+
     public sealed class NestingSettings
     {
         public double GapMm { get; set; } = 5.0;
@@ -201,6 +214,9 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
         /// <summary>Parallel decoder runs (0 = processor count, 1 = sequential). Does not change the result.</summary>
         public int MaxParallelism { get; set; } = 0;
+
+        /// <summary>Muc tim kiem. Mac dinh <see cref="Core.SearchEffort.Fast"/> = y het V1.</summary>
+        public SearchEffort SearchEffort { get; set; } = SearchEffort.Fast;
 
         public NestingSettings Clone()
         {
@@ -397,6 +413,15 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         public string BestOrdering { get; set; }
 
         public bool TimeBudgetHit { get; set; }
+
+        /// <summary>So luot giai ma DOI CHO da chay (muc Can bang). 0 o muc Nhanh.</summary>
+        public int LocalSearchDecodes { get; set; }
+
+        /// <summary>So lan doi cho cho ra ket qua tot hon.</summary>
+        public int LocalSearchImprovements { get; set; }
+
+        /// <summary>So luot doi cho bi CAT SOM vi chac chan khong tot hon (khong doi ket qua).</summary>
+        public int LocalSearchPruned { get; set; }
     }
 
     public sealed class NestingStatistics

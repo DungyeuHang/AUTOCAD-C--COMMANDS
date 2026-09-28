@@ -59,6 +59,17 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "C29. Vuot thoi gian cho phep thi phai bao", C29_TimeBudgetOvershootIsReported);
             NestingTestHarness.Run(report, "C30. Tien do chay 0 -> 100%, khong lui", C30_ProgressReachesHundred);
             NestingTestHarness.Run(report, "C31. Han muc theo KHOI LUONG VIEC: song song == tuan tu du het gio", C31_WorkBudgetIsMachineIndependent);
+            NestingTestHarness.Run(report, "C32. Muc Nhanh == V1 (ghim bo cuc HEAD 731002d)", C32_FastEqualsV1);
+            NestingTestHarness.Run(report, "C33. Muc Can bang khong bao gio te hon Nhanh", C33_BalancedNeverWorse);
+            NestingTestHarness.Run(report, "C34. Can bang: song song == tuan tu", C34_BalancedParallelEqualsSequential);
+            NestingTestHarness.Run(report, "C35. Can bang: chay lai 3 lan cung ket qua", C35_BalancedDeterministic);
+            NestingTestHarness.Run(report, "C36. Cat som == khong cat (cung ket qua)", C36_PruningDoesNotChangeResult);
+            NestingTestHarness.Run(report, "C37. Lan can doi cho: khac nhom, trong cua so, khong trung", C37_NeighbourGeneration);
+            NestingTestHarness.Run(report, "C38. Can bang khong qua validator -> lui ve nghiem V1", C38_InvalidBalancedFallsBackToV1);
+            NestingTestHarness.Run(report, "C39. Muc tim kiem: Clone + fixture ghi/doc", C39_SearchEffortSettingRoundTrip);
+            NestingTestHarness.Run(report, "C40. Can bang: tien do cham 100%", C40_BalancedProgressReachesHundred);
+            NestingTestHarness.Run(report, "C41. Can bang: bam Dung giu ket qua tot nhat", C41_BalancedCancelKeepsBest);
+            NestingTestHarness.Run(report, "C42. Can bang: dong ho chi co tac dung khi tat Tim du", C42_BalancedClockOnlyWhenNotDeterministic);
         }
 
         // ==================================================================================
@@ -1106,6 +1117,413 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             withUnplaced.Unplaced.Add(new UnplacedPart("x", "g", "r"));
             True(e.Compare(a, withUnplaced) < 0, "placing everything beats fewer sheets");
             Equal(0, e.Compare(b, b), "equal to itself");
+        }
+
+        // ==================================================================================
+        // MUC TIM KIEM (SearchEffort): Nhanh = V1, Can bang = V1 + doi cho tung chi tiet
+        // ==================================================================================
+
+        /// <summary>SHA1 (16 ky tu dau) cua <see cref="Signature"/> - de ghim bo cuc V1.</summary>
+        private static string SignatureHash(NestingResult res)
+        {
+            using (System.Security.Cryptography.SHA1 sha = System.Security.Cryptography.SHA1.Create())
+            {
+                byte[] h = sha.ComputeHash(Encoding.UTF8.GetBytes(Signature(res)));
+                return BitConverter.ToString(h).Replace("-", string.Empty).Substring(0, 16);
+            }
+        }
+
+        private static NestingResult Nest(NestingRequest r, bool pruning)
+        {
+            MultiOrderOptimizer optimizer = new MultiOrderOptimizer(new CandidatePointDecoder(), new LexicographicSolutionEvaluator())
+            {
+                LocalSearchPruning = pruning
+            };
+            SimpleNestingEngine engine = new SimpleNestingEngine(
+                new BasicRotationCandidateProvider(), s => new PolygonCollisionModel(s), optimizer, new NestingValidator());
+            return engine.Nest(r, CancellationToken.None, null);
+        }
+
+        // Ba yeu cau co dinh cho phep ghim V1: y het C18 / C18b / C31 (che do tat dinh).
+        private static NestingRequest PinRequest(int which)
+        {
+            NestingRequest r;
+            switch (which)
+            {
+                case 0:
+                    r = Request(1200, 600);
+                    r.Settings.Seed = 42;
+                    r.Settings.ExtraSeededOrderings = 3;
+                    r.Settings.AllowMirror = true;
+                    r.Groups.Add(Poly("L", 5, LShape));
+                    r.Groups.Add(Rect("A", 120, 70, 9));
+                    r.Groups.Add(Rect("B", 60, 45, 11));
+                    return r;
+                case 1:
+                    r = Request(1200, 600);
+                    r.Settings.Seed = 7;
+                    r.Settings.ExtraSeededOrderings = 3;
+                    r.Groups.Add(Poly("L", 6, LShape));
+                    r.Groups.Add(Poly("P", 4, Chiral));
+                    r.Groups.Add(Rect("A", 120, 70, 9));
+                    return r;
+                default:
+                    r = Request(2500, 1250);
+                    r.Settings.Seed = 11;
+                    r.Settings.ExtraSeededOrderings = 3;
+                    for (int i = 0; i < 18; i++)
+                    {
+                        r.Groups.Add(Rect("R" + i.ToString(CultureInfo.InvariantCulture), 110 + i * 3, 70 + (i % 5) * 4, 3));
+                    }
+
+                    return r;
+            }
+        }
+
+        /// <summary>Bo cuc cua V1 (HEAD 731002d) tren ba yeu cau ghim o tren.</summary>
+        private static readonly string[] V1PinnedHashes = { "D44EA337FDC55DC9", "BF448A0E40D00887", "725CD0A8EDE308ED" };
+
+        /// <summary>
+        /// Mot yeu cau nho ma buoc doi cho CO go duoc chieu dai (va co luot bi cat som) - de
+        /// cac phep thu Can bang kiem mot thu that su xay ra, khong phai mot vong lap rong.
+        /// </summary>
+        // Chi tiet chu U 250x140 (hoc 110x90) va tam giac vuong 200x150.
+        private static readonly double[] UHookShape = { 0, 0, 250, 0, 250, 140, 180, 140, 180, 50, 70, 50, 70, 140, 0, 140 };
+        private static readonly double[] TriLarge = { 0, 0, 200, 0, 0, 150 };
+
+        /// <remarks>Da do: Nhanh 500 mm, Can bang 475 mm (3 lan tot hon, co luot bi cat som).</remarks>
+        private static NestingRequest LocalSearchRequest()
+        {
+            NestingRequest r = Request(1200, 450);
+            r.Groups.Add(Poly("U", 2, UHookShape));
+            r.Groups.Add(Poly("T", 3, TriLarge));
+            r.Groups.Add(Rect("A", 160, 80, 4));
+            r.Groups.Add(Rect("C", 60, 60, 4));
+            return r;
+        }
+
+        private static NestingRequest Balanced(NestingRequest r)
+        {
+            r.Settings.SearchEffort = SearchEffort.Balanced;
+            return r;
+        }
+
+        /// <summary>
+        /// BAT BUOC: muc Nhanh (va mac dinh) phai ra DUNG bo cuc V1 - ghim bang ma bam lay tu
+        /// HEAD 731002d, khong phai so voi chinh no.
+        /// </summary>
+        private static void C32_FastEqualsV1()
+        {
+            Equal(SearchEffort.Fast, new NestingSettings().SearchEffort, "mac dinh phai la Nhanh");
+            for (int k = 0; k < V1PinnedHashes.Length; k++)
+            {
+                NestingResult byDefault = Nest(PinRequest(k));
+                AssertValid(byDefault);
+                Equal(V1PinnedHashes[k], SignatureHash(byDefault), "yeu cau " + k + ": mac dinh == V1");
+
+                NestingRequest fast = PinRequest(k);
+                fast.Settings.SearchEffort = SearchEffort.Fast;
+                NestingResult explicitFast = Nest(fast);
+                Equal(V1PinnedHashes[k], SignatureHash(explicitFast), "yeu cau " + k + ": Nhanh == V1");
+                Equal(0, explicitFast.Statistics.Materials[0].LocalSearchDecodes, "Nhanh khong chay doi cho");
+            }
+        }
+
+        /// <summary>
+        /// Can bang KHONG BAO GIO te hon Nhanh theo dung thu tu khoa cua bo xep hang: it chi
+        /// tiet chua xep hon, roi it to hon, roi chieu dai (dung sai 1 mm).
+        /// </summary>
+        private static void C33_BalancedNeverWorse()
+        {
+            List<NestingRequest> fast = new List<NestingRequest> { PinRequest(0), PinRequest(1), PinRequest(2), LocalSearchRequest() };
+            List<NestingRequest> bal = new List<NestingRequest> { Balanced(PinRequest(0)), Balanced(PinRequest(1)), Balanced(PinRequest(2)), Balanced(LocalSearchRequest()) };
+            bool anyBetter = false;
+            for (int k = 0; k < fast.Count; k++)
+            {
+                NestingResult f = Nest(fast[k]), b = Nest(bal[k]);
+                AssertValid(f);
+                AssertValid(b);
+                int c = CompareResults(b, f);
+                True(c <= 0, "yeu cau " + k + ": Can bang te hon Nhanh (" + UsedLength(b) + " vs " + UsedLength(f) + ")");
+                if (c < 0) anyBetter = true;
+                True(b.Statistics.Materials[0].LocalSearchDecodes > 0, "yeu cau " + k + ": Can bang phai chay doi cho");
+            }
+
+            True(anyBetter, "it nhat mot yeu cau phai tot hon - neu khong phep thu khong kiem gi");
+        }
+
+        private static double UsedLength(NestingResult res)
+        {
+            double sum = 0;
+            foreach (SheetResult s in res.Sheets) sum += s.UsedLengthMm;
+            return sum;
+        }
+
+        /// <summary>&lt; 0 khi a tot hon b (so theo khoa 1..3 cua LexicographicSolutionEvaluator).</summary>
+        private static int CompareResults(NestingResult a, NestingResult b)
+        {
+            if (a.Unplaced.Count != b.Unplaced.Count) return a.Unplaced.Count.CompareTo(b.Unplaced.Count);
+            if (a.Sheets.Count != b.Sheets.Count) return a.Sheets.Count.CompareTo(b.Sheets.Count);
+            double la = UsedLength(a), lb = UsedLength(b);
+            if (Math.Abs(la - lb) > 1.0 + 1e-9) return la.CompareTo(lb);
+            return 0;
+        }
+
+        private static void C34_BalancedParallelEqualsSequential()
+        {
+            Func<int, string> run = degree =>
+            {
+                NestingRequest r = Balanced(LocalSearchRequest());
+                r.Settings.MaxParallelism = degree;
+                NestingResult res = Nest(r);
+                AssertValid(res);
+                True(res.Statistics.Materials[0].LocalSearchImprovements > 0, "phai co lan doi cho tot hon");
+                return Signature(res);
+            };
+
+            string sequential = run(1);
+            Equal(sequential, run(0), "Can bang: song song (toan bo nhan) == tuan tu");
+            Equal(sequential, run(3), "Can bang: 3 luong == tuan tu");
+        }
+
+        private static void C35_BalancedDeterministic()
+        {
+            string a = Signature(Nest(Balanced(LocalSearchRequest())));
+            Equal(a, Signature(Nest(Balanced(LocalSearchRequest()))), "lan 2 giong het");
+            Equal(a, Signature(Nest(Balanced(LocalSearchRequest()))), "lan 3 giong het");
+        }
+
+        /// <summary>
+        /// Cat som CHI de nhanh hon: cung day lan can thi co cat va khong cat phai ra cung ket
+        /// qua. Kiem ca rang cat som that su xay ra - neu khong phep thu vo nghia.
+        /// </summary>
+        private static void C36_PruningDoesNotChangeResult()
+        {
+            int pruned = 0;
+            List<NestingRequest> set = new List<NestingRequest> { LocalSearchRequest(), PinRequest(0), PinRequest(1), PinRequest(2) };
+            for (int k = 0; k < set.Count; k++)
+            {
+                NestingResult with = Nest(Balanced(set[k]), true);
+                NestingRequest again = k == 0 ? LocalSearchRequest() : PinRequest(k - 1);
+                NestingResult without = Nest(Balanced(again), false);
+                AssertValid(with);
+                Equal(Signature(without), Signature(with), "yeu cau " + k + ": co cat == khong cat");
+                MaterialStatistics mw = with.Statistics.Materials[0], mo = without.Statistics.Materials[0];
+                Equal(mo.LocalSearchDecodes, mw.LocalSearchDecodes, "cung so luot doi cho");
+                Equal(mo.LocalSearchImprovements, mw.LocalSearchImprovements, "cung so lan tot hon");
+                Equal(0, mo.LocalSearchPruned, "tat cat som thi khong co luot nao bi cat");
+                pruned += mw.LocalSearchPruned;
+            }
+
+            True(pruned > 0, "phai co luot bi cat som");
+        }
+
+        /// <summary>
+        /// Lan can: chi hoan doi hai chi tiet KHAC nhom, cach nhau toi da Window, khong trung
+        /// chuoi ma nhom, dung thu tu sinh.
+        /// </summary>
+        private static void C37_NeighbourGeneration()
+        {
+            PartGroup a = Rect("A", 10, 10, 2), b = Rect("B", 10, 10, 1), c = Rect("C", 10, 10, 1);
+            List<PartInstance> cur = new List<PartInstance>
+            {
+                new PartInstance("A#1", a, 0), new PartInstance("A#2", a, 1), new PartInstance("B#1", b, 0), new PartInstance("C#1", c, 0)
+            };
+
+            List<string> got = new List<string>();
+            foreach (List<PartInstance> n in OrderLocalSearch.Neighbours(cur))
+            {
+                StringBuilder sb = new StringBuilder();
+                foreach (PartInstance i in n) sb.Append(i.Id).Append(' ');
+                got.Add(sb.ToString().Trim());
+            }
+
+            // (0,1) cung nhom -> bo. (0,2) A B -> B A A C. (0,3) -> C A B A. (1,2) -> A B A C.
+            // (1,3) -> A C B A. (2,3) -> A A C B. Khong co cap trung chuoi ma nhom o day.
+            string[] expected =
+            {
+                "B#1 A#2 A#1 C#1",
+                "C#1 A#2 B#1 A#1",
+                "A#1 B#1 A#2 C#1",
+                "A#1 C#1 B#1 A#2",
+                "A#1 A#2 C#1 B#1"
+            };
+            Equal(string.Join(" | ", expected), string.Join(" | ", got.ToArray()), "lan can");
+
+            // Xen ke hai nhom A B A B: (0,2) va (1,3) cung nhom -> bo; con lai moi lan can mot
+            // chuoi ma nhom rieng.
+            List<PartInstance> dup = new List<PartInstance>
+            {
+                new PartInstance("A#1", a, 0), new PartInstance("B#1", b, 0), new PartInstance("A#2", a, 1), new PartInstance("X", b, 1)
+            };
+            HashSet<string> keys = new HashSet<string>();
+            foreach (List<PartInstance> n in OrderLocalSearch.Neighbours(dup))
+            {
+                StringBuilder sb = new StringBuilder();
+                foreach (PartInstance i in n) sb.Append(i.PartGroupId);
+                True(keys.Add(sb.ToString()), "lan can trung chuoi ma nhom: " + sb);
+            }
+
+            // (0,1) BAAB, (0,3) BBAA, (1,2) AABB, (2,3) ABBA - (0,2) va (1,3) cung nhom.
+            Equal(4, keys.Count, "so lan can khong trung");
+            Equal(0, OrderLocalSearch.Neighbours(new List<PartInstance> { new PartInstance("A#1", a, 0), new PartInstance("A#2", a, 1) }).Count,
+                "mot nhom duy nhat -> khong co lan can");
+        }
+
+        /// <summary>
+        /// Duong lui: neu ket qua Can bang khong qua validator thi phai dung lai tu nghiem V1,
+        /// kiem lai va canh bao. Muc Nhanh thi khong co gi de lui - loi phai hien nguyen.
+        /// </summary>
+        private sealed class BrokenBestOptimizer : IOptimizer
+        {
+            private readonly MultiOrderOptimizer _inner =
+                new MultiOrderOptimizer(new CandidatePointDecoder(), new LexicographicSolutionEvaluator());
+
+            public OptimizationOutcome Optimize(MaterialJob job, CancellationToken cancellation, Action<NestingProgress> progress)
+            {
+                OptimizationOutcome o = _inner.Optimize(job, cancellation, progress);
+
+                // Dat chi tiet dau tien HAI LAN cung mot cho: chong hinh + trung placement.
+                DecodedLayout broken = new DecodedLayout { OrderingName = "hong" };
+                DecodedSheet sheet = new DecodedSheet();
+                foreach (PlacedItem i in o.Best.Sheets[0].Items) sheet.Items.Add(i);
+                sheet.Items.Add(o.Best.Sheets[0].Items[0]);
+                sheet.MaxX = o.Best.Sheets[0].MaxX;
+                sheet.MaxY = o.Best.Sheets[0].MaxY;
+                broken.Sheets.Add(sheet);
+                for (int s = 1; s < o.Best.Sheets.Count; s++) broken.Sheets.Add(o.Best.Sheets[s]);
+                broken.Unplaced.AddRange(o.Best.Unplaced);
+                o.Best = broken;
+                return o;
+            }
+        }
+
+        private static void C38_InvalidBalancedFallsBackToV1()
+        {
+            SimpleNestingEngine broken = new SimpleNestingEngine(
+                new BasicRotationCandidateProvider(), s => new PolygonCollisionModel(s), new BrokenBestOptimizer(), new NestingValidator());
+
+            NestingRequest fastReq = PinRequest(1);
+            NestingResult fastBroken = broken.Nest(fastReq, CancellationToken.None, null);
+            True(!fastBroken.Validation.IsValid, "muc Nhanh: bo cuc hong phai bi validator bat");
+
+            NestingRequest balReq = Balanced(PinRequest(1));
+            NestingResult res = broken.Nest(balReq, CancellationToken.None, null);
+            AssertValid(res);
+            bool warned = false;
+            foreach (string w in res.Warnings) if (w.IndexOf("Can bang", StringComparison.Ordinal) >= 0) warned = true;
+            True(warned, "phai canh bao da dung lai ket qua muc Nhanh");
+            Equal(V1PinnedHashes[1], SignatureHash(res), "ket qua lui ve phai DUNG la nghiem V1");
+            Equal(res.Statistics.PlacedQuantity + res.Statistics.UnplacedQuantity, res.Statistics.RequestedQuantity, "so luong khop");
+        }
+
+        private static void C39_SearchEffortSettingRoundTrip()
+        {
+            NestingSettings s = new NestingSettings { SearchEffort = SearchEffort.Balanced };
+            Equal(SearchEffort.Balanced, s.Clone().SearchEffort, "Clone giu muc tim kiem");
+
+            NestingRequest r = Balanced(Request(1000, 500));
+            r.Groups.Add(Rect("A", 100, 50, 2));
+            string text = NestingFixture.Write(r, "search");
+            True(text.IndexOf("search=balanced", StringComparison.Ordinal) >= 0, "Write ghi search=balanced");
+            Equal(SearchEffort.Balanced, NestingFixture.Parse(text).Request.Settings.SearchEffort, "Parse doc lai balanced");
+            Equal(text, NestingFixture.Write(NestingFixture.Parse(text).Request, "search"), "write(parse(write(x))) == write(x)");
+
+            Equal(SearchEffort.Fast, NestingFixture.Parse("SETTINGS gap=5\nSHEET name=S length=100 width=100\n").Request.Settings.SearchEffort,
+                "fixture cu khong co search= -> fast");
+            Equal(SearchEffort.Fast, NestingFixture.Parse("SETTINGS search=FAST\n").Request.Settings.SearchEffort, "search=FAST");
+
+            bool threw = false;
+            try
+            {
+                NestingFixture.Parse("SETTINGS search=optimal\n");
+            }
+            catch (FormatException)
+            {
+                threw = true;
+            }
+
+            True(threw, "search= la phai bao loi, khong lang le chay muc khac");
+        }
+
+        /// <summary>Tien do muc Can bang: tong tinh ca ngan sach doi cho, van cham 100%.</summary>
+        private static void C40_BalancedProgressReachesHundred()
+        {
+            NestingRequest r = Balanced(LocalSearchRequest());
+            r.Groups.Add(Rect("M2", 180, 120, 3, "1.5MM"));      // vat lieu thu hai
+            List<NestingProgress> seen = new List<NestingProgress>();
+            object gate = new object();
+            NestingResult res = new SimpleNestingEngine().Nest(r, CancellationToken.None, p => { lock (gate) { seen.Add(p); } });
+            AssertValid(res);
+
+            int expected = 2 * MultiOrderOptimizer.RunCount(r.Settings);
+            Equal(expected, 2 * (MultiOrderOptimizer.RunCount(new NestingSettings { ExtraSeededOrderings = r.Settings.ExtraSeededOrderings }) + OrderLocalSearch.Budget),
+                "RunCount cong them ngan sach doi cho");
+            int high = 0;
+            foreach (NestingProgress p in seen)
+            {
+                Equal(expected, p.Total, "tong phai giong nhau o moi lan bao");
+                True(p.Done >= 0 && p.Done <= p.Total, "khong duoc vuot tong: " + p.Done + "/" + p.Total);
+                high = Math.Max(high, p.Done);
+            }
+
+            Equal(expected, high, "tien do phai cham 100% khi xong");
+        }
+
+        /// <summary>Bam Dung giua buoc doi cho: dung ngay sau lo dang chay, giu ket qua tot nhat, van hop le.</summary>
+        private static void C41_BalancedCancelKeepsBest()
+        {
+            NestingResult fast = Nest(LocalSearchRequest());
+            using (CancellationTokenSource cts = new CancellationTokenSource())
+            {
+                NestingRequest r = Balanced(LocalSearchRequest());
+                r.Settings.MaxParallelism = 1;
+                NestingResult res = new SimpleNestingEngine().Nest(r, cts.Token, p =>
+                {
+                    if (p.Message.IndexOf("doi cho", StringComparison.Ordinal) >= 0) cts.Cancel();
+                });
+
+                AssertValid(res);
+                True(res.Cancelled, "phai bao da dung");
+                Equal(OrderLocalSearch.Batch, res.Statistics.Materials[0].LocalSearchDecodes, "dung ngay sau lo dau tien");
+                Equal(0, res.Statistics.UnplacedQuantity, "khong mat chi tiet nao");
+                True(CompareResults(res, fast) <= 0, "khong te hon muc Nhanh");
+            }
+        }
+
+        /// <summary>
+        /// Tat "Tim du": het gio thi khong bat dau lo doi cho moi (va phai bao). Bat "Tim du":
+        /// dong ho khong duoc anh huong - chay du ngan sach du han muc gio cuc nho.
+        /// </summary>
+        private static void C42_BalancedClockOnlyWhenNotDeterministic()
+        {
+            Func<bool, MaterialStatistics> run = deterministic =>
+            {
+                NestingRequest r = Balanced(LocalSearchRequest());
+                r.Settings.TimeBudgetSeconds = 0.000001;
+                r.Settings.DeterministicSearch = deterministic;
+                r.Settings.MaxParallelism = 1;
+                NestingResult res = Nest(r);
+                AssertValid(res);
+                return res.Statistics.Materials[0];
+            };
+
+            MaterialStatistics clock = run(false);
+            Equal(0, clock.LocalSearchDecodes, "het gio -> khong chay lo doi cho nao");
+            True(clock.TimeBudgetHit, "het gio phai bao");
+
+            MaterialStatistics full = run(true);
+            True(full.LocalSearchDecodes > 0, "che do tat dinh: van chay doi cho");
+            True(!full.TimeBudgetHit, "che do tat dinh: khong bao het gio");
+            Equal(Signature(Nest(Balanced(LocalSearchRequest()))), SignatureOf(true), "tat dinh: han muc gio khong doi ket qua");
+        }
+
+        private static string SignatureOf(bool deterministic)
+        {
+            NestingRequest r = Balanced(LocalSearchRequest());
+            r.Settings.TimeBudgetSeconds = 0.000001;
+            r.Settings.DeterministicSearch = deterministic;
+            return Signature(Nest(r));
         }
     }
 }

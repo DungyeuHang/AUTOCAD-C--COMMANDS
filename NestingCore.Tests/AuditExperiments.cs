@@ -282,7 +282,12 @@ namespace NestingCore.Tests
                 }
             }
 
-            double bestLen = NestUnits.ToMm(LexicographicSolutionEvaluator.TotalUsedLength(bestLayout));
+            // CUNG DON VI voi standardLen. standardLen la tong SheetResult.UsedLengthMm = MaxX + le
+            // mep cuoi to (SimpleNestingEngine.AppendMaterialResult), con TotalUsedLength chi la
+            // tong MaxX, KHONG cong le. Truoc day so thang hai dai luong nay nen bao "V1 430 mm,
+            // vet can 425 mm" - chenh 5 mm dung bang le mep, KHONG phai do V1 xep te hon. Doi ve
+            // cung mot dai luong thi V1 da bang nghiem tot nhat tren moi hoan vi.
+            double bestLen = UsedLengthMm(bestLayout, trapReq);
 
             Console.WriteLine(string.Format(Inv, "  Trap Fixture (Interlocking U-hooks + Blocker):"));
             Console.WriteLine(string.Format(Inv, "    Current V1 Engine (5 base + 3 jitter): Used Length = {0:F1} mm", standardLen));
@@ -293,7 +298,7 @@ namespace NestingCore.Tests
             Stopwatch swSwap = Stopwatch.StartNew();
             DecodedLayout swapResult = RunPairwiseSwapLocalSearch(job, instances, decoder, evaluator);
             swSwap.Stop();
-            double swapLen = NestUnits.ToMm(LexicographicSolutionEvaluator.TotalUsedLength(swapResult));
+            double swapLen = UsedLengthMm(swapResult, trapReq);
             Console.WriteLine(string.Format(Inv, "    Pairwise Swap Local Search Prototype:  Used Length = {0:F1} mm (Time: {1:F1} ms)", swapLen, swSwap.Elapsed.TotalMilliseconds));
         }
 
@@ -750,6 +755,22 @@ namespace NestingCore.Tests
             PolyShape poly = PolyShape.Create(outer, null);
             r.Groups.Add(new PartGroup("TRAP60", new PartShape(poly), 4, "1.2MM"));
             return r;
+        }
+
+        /// <summary>
+        /// Chieu dai da dung theo DUNG cong thuc cua SheetResult.UsedLengthMm (MaxX + le mep, toi
+        /// da bang chieu dai to), de so duoc voi ket qua cua engine.
+        /// </summary>
+        private static double UsedLengthMm(DecodedLayout layout, NestingRequest req)
+        {
+            double sum = 0;
+            foreach (DecodedSheet s in layout.Sheets)
+            {
+                if (s.Items.Count == 0) continue;
+                sum += Math.Min(req.DefaultSheet.LengthMm, NestUnits.ToMm(s.MaxX) + req.Settings.EdgeMarginMm);
+            }
+
+            return sum;
         }
 
         private static NestingRequest CreateOrderTrapRequest()

@@ -20,7 +20,8 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
     /// </summary>
     public sealed class LexicographicSolutionEvaluator : ISolutionEvaluator
     {
-        private const long LengthTolerance = 1000;
+        /// <summary>1 mm. Bo giai ma dung chung con so nay de cat som (xem CandidatePointDecoder).</summary>
+        internal const long LengthTolerance = 1000;
 
         public int Compare(DecodedLayout a, DecodedLayout b)
         {

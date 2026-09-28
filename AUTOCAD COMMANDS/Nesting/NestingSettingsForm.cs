@@ -37,6 +37,7 @@ namespace AUTOCAD_COMMANDS.Nesting
         private CheckBox _chkBlocks;
         private CheckBox _chkLabels;
         private CheckBox _chkDeterministic;
+        private ComboBox _cboSearch;
         private CheckBox _chkOpen;
         private CheckBox _chkFixture;
         private Label _ruleNote;
@@ -75,6 +76,19 @@ namespace AUTOCAD_COMMANDS.Nesting
             "  - May nhanh / cham co the chay duoc so luot khac nhau.\r\n" +
             "  - Vi vay ket qua co the khac nhau giua cac may hoac giua cac lan chay.";
 
+        /// <summary>Help cho o "Muc tim kiem".</summary>
+        internal const string SearchEffortHelpText =
+            "MUC TIM KIEM\r\n" +
+            "\r\n" +
+            "Nhanh (mac dinh): xep y het nhu truoc.\r\n" +
+            "\r\n" +
+            "Can bang:\r\n" +
+            "  - Sau khi co ket qua tot nhat, chay them mot so luot DOI THU TU chi tiet.\r\n" +
+            "  - Chi nhan cach xep moi khi no tot hon, nen khong te hon muc Nhanh.\r\n" +
+            "  - Co the ngan hon mot chut, nhung KHONG dam bao luon tot hon.\r\n" +
+            "  - Tren ban ve lon co the lau gap 3-4 lan.\r\n" +
+            "  - Bam \"Dung\" se giu ket qua tot nhat da co.";
+
         public GhoPhoiSettings Settings { get { return _settings; } }
 
         public List<SheetSpec> Catalog { get { return _catalog; } }
@@ -92,13 +106,13 @@ namespace AUTOCAD_COMMANDS.Nesting
             MinimizeBox = false;
             ShowInTaskbar = false;
             Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
-            ClientSize = new Size(820, 640);
+            ClientSize = new Size(820, 670);
             MinimumSize = new Size(700, 600);
 
             TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(8) };
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 30));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 30));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 175));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 205));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
 
@@ -147,7 +161,7 @@ namespace AUTOCAD_COMMANDS.Nesting
 
             // ---- nesting parameters ----
             GroupBox gPar = new GroupBox { Text = "Thong so ghep", Dock = DockStyle.Fill };
-            TableLayoutPanel par = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 6 };
+            TableLayoutPanel par = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 7 };
             for (int i = 0; i < 4; i++) par.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
 
             _numGap = Num(0, 100, 2);
@@ -179,11 +193,21 @@ namespace AUTOCAD_COMMANDS.Nesting
             par.Controls.Add(_chkDeterministic, 0, 5);
             par.SetColumnSpan(_chkDeterministic, 4);
 
+            // Thu tu muc trong danh sach = gia tri SearchEffort (0 = Nhanh, 1 = Can bang).
+            _cboSearch = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+            _cboSearch.Items.AddRange(new object[] { "Nhanh (nhu truoc)", "Can bang (thu them cach xep, cham hon)" });
+            Label searchLabel = new Label { Text = "Muc tim kiem:", AutoSize = true, Anchor = AnchorStyles.Left };
+            par.Controls.Add(searchLabel, 0, 6);
+            par.Controls.Add(_cboSearch, 1, 6);
+            par.SetColumnSpan(_cboSearch, 2);
+
             // Giai thich ro: khi BAT thi "Thoi gian toi da" KHONG con la gioi han cung.
             ToolTip help = new ToolTip { AutoPopDelay = 30000, InitialDelay = 300, ReshowDelay = 100, ShowAlways = true };
             Disposed += (s, e) => help.Dispose();
             help.SetToolTip(_chkDeterministic, DeterministicHelpText);
             help.SetToolTip(_numBudget, DeterministicHelpText);
+            help.SetToolTip(_cboSearch, SearchEffortHelpText);
+            help.SetToolTip(searchLabel, SearchEffortHelpText);
 
             _ruleNote = new Label { Dock = DockStyle.Bottom, Height = 34, ForeColor = Color.FromArgb(0, 102, 204) };
             _numGap.ValueChanged += (s, e) => UpdateRuleNote();
@@ -281,6 +305,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             _chkBlocks.Checked = _settings.OutputAsBlocks;
             _chkLabels.Checked = _settings.LabelParts;
             _chkDeterministic.Checked = _settings.DeterministicSearch;
+            _cboSearch.SelectedIndex = _settings.SearchEffort == SearchEffort.Balanced ? 1 : 0;
             _chkOpen.Checked = _settings.OpenOutputDrawing;
             _chkFixture.Checked = _settings.SaveFixture;
 
@@ -523,6 +548,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             _settings.OutputAsBlocks = _chkBlocks.Checked;
             _settings.LabelParts = _chkLabels.Checked;
             _settings.DeterministicSearch = _chkDeterministic.Checked;
+            _settings.SearchEffort = _cboSearch.SelectedIndex == 1 ? SearchEffort.Balanced : SearchEffort.Fast;
             _settings.OpenOutputDrawing = _chkOpen.Checked;
             _settings.SaveFixture = _chkFixture.Checked;
             foreach (KeyValuePair<string, SheetSpec> kv in chosen)

@@ -11,8 +11,9 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
     /// AutoCAD-free nesting test cases (GHOPHOI can export one; the test runner replays them).
     ///
     ///   # comment
-    ///   SETTINGS  gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=30 extra=3
-    ///             (legacy tol=X = default part tolerance for PART lines without tol=)
+    ///   SETTINGS  gap=5 margin=5 mirror=0 rotations=0,90,180,270 inhole=0 seed=1 budget=30 extra=3 [search=fast|balanced]
+    ///             (legacy tol=X = default part tolerance for PART lines without tol=;
+    ///              search = muc tim kiem, thieu = fast)
     ///   SHEET     name=1500x3000 length=3000 width=1500 [material=1.2MM]
     ///   PART      id=P1 qty=12 material=1.2MM [tol=0.05] [name=...] [order=DON-A]
     ///             (tol = arc chord tolerance, mm; order = ten don hang, bo trong = khong theo don)
@@ -54,9 +55,10 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             NestingSettings s = request.Settings;
             List<string> rot = new List<string>();
             foreach (double r in s.AllowedRotations) rot.Add(r.ToString("0.###", ci));
-            sb.AppendLine(string.Format(ci, "SETTINGS gap={0:0.###} margin={1:0.###} mirror={2} rotations={3} inhole={4} seed={5} budget={6:0.###} extra={7}",
+            sb.AppendLine(string.Format(ci, "SETTINGS gap={0:0.###} margin={1:0.###} mirror={2} rotations={3} inhole={4} seed={5} budget={6:0.###} extra={7} search={8}",
                 s.GapMm, s.EdgeMarginMm, s.AllowMirror ? 1 : 0, string.Join(",", rot.ToArray()),
-                s.AllowPartInsideHole ? 1 : 0, s.Seed, s.TimeBudgetSeconds, s.ExtraSeededOrderings));
+                s.AllowPartInsideHole ? 1 : 0, s.Seed, s.TimeBudgetSeconds, s.ExtraSeededOrderings,
+                s.SearchEffort == SearchEffort.Balanced ? "balanced" : "fast"));
 
             if (request.DefaultSheet != null) sb.AppendLine(SheetLine(request.DefaultSheet, null));
             foreach (KeyValuePair<string, SheetSpec> kv in request.SheetByMaterial)
@@ -118,6 +120,14 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                             s.Seed = (int)Num(kv, "seed", s.Seed);
                             s.TimeBudgetSeconds = Num(kv, "budget", s.TimeBudgetSeconds);
                             s.ExtraSeededOrderings = (int)Num(kv, "extra", s.ExtraSeededOrderings);
+                            string search;
+                            if (kv.TryGetValue("search", out search))
+                            {
+                                if (string.Equals(search, "balanced", StringComparison.OrdinalIgnoreCase)) s.SearchEffort = SearchEffort.Balanced;
+                                else if (string.Equals(search, "fast", StringComparison.OrdinalIgnoreCase)) s.SearchEffort = SearchEffort.Fast;
+                                else throw new FormatException("search= chi nhan fast|balanced, gap '" + search + "' o dong " + lineNo);
+                            }
+
                             string rot;
                             if (kv.TryGetValue("rotations", out rot))
                             {

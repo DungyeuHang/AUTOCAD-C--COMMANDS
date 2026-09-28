@@ -122,11 +122,36 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
         public DecodedLayout Decode(IList<PartInstance> order, MaterialJob job, PlacementPolicy policy, CancellationToken cancellation)
         {
+            return Decode(order, job, policy, cancellation, null);
+        }
+
+        /// <summary>
+        /// Nhu <see cref="Decode(IList{PartInstance}, MaterialJob, PlacementPolicy, CancellationToken)"/>,
+        /// nhung DUNG SOM khi da chac chan ket qua khong the tot hon <paramref name="bound"/> theo
+        /// <see cref="LexicographicSolutionEvaluator"/>. Khi do tra ve bo cuc do dang voi
+        /// <see cref="DecodedLayout.Pruned"/> = true - ben goi phai bo no di.
+        ///
+        /// Vi sao chinh xac: trong luc giai ma, so chi tiet chua dat (U), so to (S) va tong MaxX
+        /// (L) CHI TANG. Nen neu U &gt; U_bound, hoac U bang ma S &gt; S_bound, hoac U, S bang
+        /// ma L da vuot L_bound + dung sai 1 mm, thi bo cuc cuoi chac chan thua bound o khoa
+        /// 1/2/3. Khong cat khi U hoac S con NHO hon: bo cuc cuoi van co the tot hon.
+        ///
+        /// <paramref name="bound"/> = null: y het ban khong cat.
+        /// </summary>
+        public DecodedLayout Decode(IList<PartInstance> order, MaterialJob job, PlacementPolicy policy, CancellationToken cancellation, DecodedLayout bound)
+        {
             DecodedLayout layout = new DecodedLayout();
             ICollisionModel collision = job.Collision;
+            long boundLength = bound != null ? LexicographicSolutionEvaluator.TotalUsedLength(bound) : 0;
 
             foreach (PartInstance instance in order)
             {
+                if (bound != null && CannotBeatBound(layout, bound, boundLength))
+                {
+                    layout.Pruned = true;
+                    return layout;
+                }
+
                 if (cancellation.IsCancellationRequested)
                 {
                     layout.Cancelled = true;
@@ -172,6 +197,17 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             }
 
             return layout;
+        }
+
+        private static bool CannotBeatBound(DecodedLayout layout, DecodedLayout bound, long boundLength)
+        {
+            int u = layout.Unplaced.Count, uBound = bound.Unplaced.Count;
+            if (u != uBound) return u > uBound;
+
+            int s = layout.Sheets.Count, sBound = bound.Sheets.Count;
+            if (s != sBound) return s > sBound;
+
+            return LexicographicSolutionEvaluator.TotalUsedLength(layout) > boundLength + LexicographicSolutionEvaluator.LengthTolerance;
         }
 
         private static void AddItem(DecodedSheet sheet, PlacedItem item)

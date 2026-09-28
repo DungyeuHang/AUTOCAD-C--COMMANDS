@@ -12,6 +12,10 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
     /// and keeps the best layout according to the evaluator. Optional extra orderings are
     /// seeded jitters of the combined heuristic - fully reproducible for the same seed.
     /// This is multi-start, not a genetic algorithm / simulated annealing.
+    ///
+    /// Muc <see cref="SearchEffort.Balanced"/>: sau khi chon xong ket qua tot nhat, chay them
+    /// <see cref="OrderLocalSearch"/> (doi cho tung chi tiet) tu thu tu + chinh sach cua luot
+    /// thang. Muc <see cref="SearchEffort.Fast"/> dung y het V1.
     /// </summary>
     public sealed class MultiOrderOptimizer : IOptimizer
     {
@@ -22,7 +26,14 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         {
             _decoder = decoder;
             _evaluator = evaluator;
+            LocalSearchPruning = true;
         }
+
+        /// <summary>
+        /// Cho buoc doi cho dung som nhung luot chac chan khong tot hon. KHONG doi ket qua -
+        /// chi de phep thu / benchmark so sanh co cat va khong cat.
+        /// </summary>
+        public bool LocalSearchPruning { get; set; }
 
         private sealed class Ordering
         {
@@ -49,7 +60,8 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         {
             int extra = settings != null ? Math.Max(0, settings.ExtraSeededOrderings) : 0;
             int grouped = orderAware ? OrderOrderingCount : 0;
-            return (BaseOrderingCount + extra + grouped) * PlacementPolicyCount;
+            int localSearch = settings != null && settings.SearchEffort == SearchEffort.Balanced ? OrderLocalSearch.Budget : 0;
+            return (BaseOrderingCount + extra + grouped) * PlacementPolicyCount + localSearch;
         }
 
         /// <summary>So thu tu xep co dinh trong <see cref="BuildOrderings"/> (chua tinh nhieu).</summary>
@@ -78,6 +90,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             // state, so runs execute in parallel. The winner is chosen afterwards in run-index
             // order with a strict "better than" - identical to the sequential result.
             DecodedLayout[] layouts = new DecodedLayout[total];
+            List<PartInstance>[] orders = new List<PartInstance>[total];
             int started = 0, completed = 0, skippedByBudget = 0, skippedByCancel = 0;
             int degree = job.Settings.MaxParallelism > 0 ? job.Settings.MaxParallelism : Environment.ProcessorCount;
             ParallelOptions options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Math.Min(degree, total)) };
@@ -123,6 +136,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 DecodedLayout layout = _decoder.Decode(order, job, policy, cancellation);
                 layout.OrderingName = ordering.Name + " / " + policy;
                 layouts[i] = layout;
+                orders[i] = order;
 
                 // Bao sau khi CHAY XONG, khong phai luc bat dau: cac luot chay song song nen
                 // neu bao luc bat dau thi thanh tien trinh nhay vot len gan het ngay tu dau
@@ -137,6 +151,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             });
 
             DecodedLayout partial = null;
+            int bestIdx = -1;
             for (int i = 0; i < total; i++)
             {
                 DecodedLayout layout = layouts[i];
@@ -152,11 +167,35 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 if (outcome.Best == null || _evaluator.Compare(layout, outcome.Best) < 0)
                 {
                     outcome.Best = layout;
+                    bestIdx = i;
                 }
             }
 
             if (outcome.Best == null) outcome.Best = partial;
             if (skippedByCancel > 0) outcome.Cancelled = true;
+            outcome.BaseBest = outcome.Best;
+
+            if (job.Settings.SearchEffort == SearchEffort.Balanced && bestIdx >= 0 && !outcome.Cancelled)
+            {
+                PlacementPolicy policy = policies[bestIdx % policies.Length];
+                string name = outcome.Best.OrderingName;
+                OrderLocalSearch search = new OrderLocalSearch(_decoder, _evaluator, LocalSearchPruning);
+                OrderLocalSearch.Result ls = search.Run(job, orders[bestIdx], policy, outcome.Best, name, watch, cancellation,
+                    used =>
+                    {
+                        if (progress == null) return;
+                        progress(new NestingProgress(string.Format(CultureInfo.InvariantCulture,
+                            "{0}: doi cho chi tiet {1}/{2} ({3})", job.Material, used, OrderLocalSearch.Budget, name),
+                            total + used, total + OrderLocalSearch.Budget));
+                    });
+
+                outcome.Best = ls.Best;
+                outcome.LocalSearchDecodes = ls.Decodes;
+                outcome.LocalSearchImprovements = ls.Improvements;
+                outcome.LocalSearchPruned = ls.Pruned;
+                if (ls.TimeBudgetHit) outcome.TimeBudgetHit = true;
+                if (ls.Cancelled) outcome.Cancelled = true;
+            }
 
             // Phep kiem thoi gian o tren chi chan duoc mot lan chay CHUA BAT DAU. Mot lan da
             // bat dau thi khong co gi dung no lai giua chung - bo giai ma chi dung khi nguoi

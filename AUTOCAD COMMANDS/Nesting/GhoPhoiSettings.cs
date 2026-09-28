@@ -45,6 +45,12 @@ namespace AUTOCAD_COMMANDS.Nesting
         /// </summary>
         public bool DeterministicSearch { get; set; } = true;
 
+        /// <summary>
+        /// Muc tim kiem. Nhanh (mac dinh) = y het truoc. Can bang = chay them mot so luot doi
+        /// cho chi tiet sau khi co ket qua tot nhat - cham hon, khong dam bao luon tot hon.
+        /// </summary>
+        public SearchEffort SearchEffort { get; set; } = SearchEffort.Fast;
+
         public int Seed { get; set; } = 1;
 
         public int ExtraSeededOrderings { get; set; } = 3;
@@ -141,6 +147,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                 AllowPartInsideHole = AllowPartInsideHole,
                 TimeBudgetSeconds = TimeBudgetSeconds,
                 DeterministicSearch = DeterministicSearch,
+                SearchEffort = SearchEffort,
                 Seed = Seed,
                 ExtraSeededOrderings = ExtraSeededOrderings
             };

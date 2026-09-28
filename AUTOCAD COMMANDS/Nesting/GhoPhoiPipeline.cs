@@ -132,6 +132,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             sb.AppendLine(string.Format(ci, " Khe cat / le mep  : {0:0.##} / {1:0.##} mm   (lat guong: {2})",
                 request.Settings.GapMm, request.Settings.EdgeMarginMm, request.Settings.AllowMirror ? "CO" : "KHONG"));
             sb.AppendLine(" Chi tiet trong lo kin: " + (request.Settings.AllowPartInsideHole ? "CHO PHEP" : "KHONG (hoc lom ho van duoc phep)"));
+            sb.AppendLine(" Muc tim kiem      : " + (request.Settings.SearchEffort == SearchEffort.Balanced ? "Can bang" : "Nhanh"));
             sb.AppendLine(string.Format(ci, " Thoi gian         : {0:0.0} s{1}", st.ElapsedSeconds, result.Cancelled ? "   (NGUOI DUNG DA DUNG SOM)" : string.Empty));
 
             foreach (MaterialStatistics m in st.Materials)
@@ -146,6 +147,11 @@ namespace AUTOCAD_COMMANDS.Nesting
                 // gian thuc te (phu thuoc may). Hai cai bang nhau tuc la da tim du.
                 sb.AppendLine(string.Format(ci, "   Da thu {0}/{1} thu tu xep trong {2:0.0}s, tot nhat: {3}",
                     m.OrderingsTried, m.OrderingsPlanned, m.ElapsedSeconds, m.BestOrdering ?? "-"));
+                if (request.Settings.SearchEffort == SearchEffort.Balanced)
+                {
+                    sb.AppendLine(string.Format(ci, "   Muc Can bang: {0} luot doi cho chi tiet, {1} lan tot hon",
+                        m.LocalSearchDecodes, m.LocalSearchImprovements));
+                }
 
                 // Het gio thi mot so thu tu xep KHONG duoc chay, nen ket qua chua chac la cai
                 // tot nhat may co the tim ra. Phai noi ro hau qua, chu ghi moi chu "het thoi

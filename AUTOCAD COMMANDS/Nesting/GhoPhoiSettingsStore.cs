@@ -95,6 +95,11 @@ namespace AUTOCAD_COMMANDS.Nesting
                     break;
                 case "TimeBudgetSeconds": if (TryD(val, out d) && d > 0) s.TimeBudgetSeconds = d; break;
                 case "DeterministicSearch": if (bool.TryParse(val, out b)) s.DeterministicSearch = b; break;
+                case "SearchEffort":
+                    // Chi nhan dung ten muc; gia tri la thi giu mac dinh (Nhanh).
+                    if (string.Equals(val, SearchEffort.Balanced.ToString(), StringComparison.OrdinalIgnoreCase)) s.SearchEffort = SearchEffort.Balanced;
+                    else if (string.Equals(val, SearchEffort.Fast.ToString(), StringComparison.OrdinalIgnoreCase)) s.SearchEffort = SearchEffort.Fast;
+                    break;
                 case "Seed": if (int.TryParse(val, NumberStyles.Integer, ci, out n)) s.Seed = n; break;
                 case "ExtraSeededOrderings": if (int.TryParse(val, NumberStyles.Integer, ci, out n) && n >= 0) s.ExtraSeededOrderings = n; break;
                 case "ArcToleranceMm": if (TryD(val, out d) && d > 0) s.ArcToleranceMm = d; break;
@@ -141,6 +146,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                     "RotationMode\t" + s.RotationMode,
                     "TimeBudgetSeconds\t" + s.TimeBudgetSeconds.ToString("R", ci),
                     "DeterministicSearch\t" + s.DeterministicSearch,
+                    "SearchEffort\t" + s.SearchEffort,
                     "Seed\t" + s.Seed.ToString(ci),
                     "ExtraSeededOrderings\t" + s.ExtraSeededOrderings.ToString(ci),
                     "ArcToleranceMm\t" + s.ArcToleranceMm.ToString("R", ci),

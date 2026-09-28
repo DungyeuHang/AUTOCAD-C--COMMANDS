@@ -79,12 +79,17 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             int totalRuns = Math.Max(1, byMaterial.Count * runsPerMaterial);
             int materialIndex = 0;
 
+            // Giu lai de dung lai ket qua tu nghiem V1 neu buoc doi cho cho ra ket qua khong
+            // qua validator (xem cuoi ham).
+            List<MaterialRun> runs = new List<MaterialRun>();
+
             foreach (KeyValuePair<string, List<PartGroup>> entry in byMaterial)
             {
                 string material = entry.Key;
                 SheetSpec sheet = request.ResolveSheet(material);
                 MaterialStatistics ms = new MaterialStatistics { Material = material };
                 result.Statistics.Materials.Add(ms);
+                int unplacedBefore = result.Unplaced.Count;
 
                 if (sheet == null)
                 {
@@ -99,6 +104,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                     }
 
                     ms.Unplaced = ms.Requested;
+                    runs.Add(new MaterialRun { Stats = ms, Unplaced = result.Unplaced.GetRange(unplacedBefore, result.Unplaced.Count - unplacedBefore) });
                     continue;
                 }
 
@@ -149,13 +155,90 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 ms.OrderingsPlanned = outcome.RunsPlanned;
                 ms.ElapsedSeconds = outcome.ElapsedSeconds;
                 ms.TimeBudgetHit = outcome.TimeBudgetHit;
+                ms.LocalSearchDecodes = outcome.LocalSearchDecodes;
+                ms.LocalSearchImprovements = outcome.LocalSearchImprovements;
+                ms.LocalSearchPruned = outcome.LocalSearchPruned;
                 if (outcome.Cancelled) result.Cancelled = true;
 
                 DecodedLayout best = outcome.Best ?? new DecodedLayout();
                 ms.BestOrdering = best.OrderingName;
                 AppendMaterialResult(result, ms, job, best, settings);
+                runs.Add(new MaterialRun { Stats = ms, Job = job, BaseBest = outcome.BaseBest ?? best });
             }
 
+            SumStatistics(result);
+            result.Validation = _validator.Validate(request, result);
+
+            // CONG AN TOAN: buoc doi cho chi goi lai bo giai ma voi thu tu khac, nen ket qua
+            // cua no hop le nhu moi luot xep khac. Nhung neu vi ly do nao do ket qua cuoi KHONG
+            // qua validator, thi khong duoc de nguoi dung mat ket qua: dung lai tu nghiem V1
+            // (luot thang ban dau), kiem lai, va noi ro.
+            if (!result.Validation.IsValid && settings.SearchEffort == SearchEffort.Balanced)
+            {
+                NestingResult fallback = RebuildFromBase(result, runs, settings);
+                fallback.Validation = _validator.Validate(request, fallback);
+                fallback.Warnings.Add("Ket qua muc Can bang KHONG qua validator - da dung lai ket qua muc Nhanh (V1).");
+                result = fallback;
+            }
+
+            result.Statistics.ElapsedSeconds = watch.Elapsed.TotalSeconds;
+            return result;
+        }
+
+        /// <summary>Mot vat lieu da chay xong: du de dung lai ket qua tu nghiem V1.</summary>
+        private sealed class MaterialRun
+        {
+            public MaterialStatistics Stats;
+
+            /// <summary>null = vat lieu khong co kho phoi (chi co chi tiet chua xep).</summary>
+            public MaterialJob Job;
+
+            public DecodedLayout BaseBest;
+
+            public List<UnplacedPart> Unplaced;
+        }
+
+        private static NestingResult RebuildFromBase(NestingResult current, List<MaterialRun> runs, NestingSettings settings)
+        {
+            NestingResult fb = new NestingResult { Cancelled = current.Cancelled };
+            fb.Warnings.AddRange(current.Warnings);
+            fb.Statistics.PartGroupCount = current.Statistics.PartGroupCount;
+
+            foreach (MaterialRun run in runs)
+            {
+                MaterialStatistics old = run.Stats;
+                MaterialStatistics ms = new MaterialStatistics
+                {
+                    Material = old.Material,
+                    SheetName = old.SheetName,
+                    Requested = old.Requested,
+                    OrderingsTried = old.OrderingsTried,
+                    OrderingsPlanned = old.OrderingsPlanned,
+                    ElapsedSeconds = old.ElapsedSeconds,
+                    TimeBudgetHit = old.TimeBudgetHit,
+                    LocalSearchDecodes = old.LocalSearchDecodes,
+                    LocalSearchImprovements = 0,
+                    LocalSearchPruned = old.LocalSearchPruned
+                };
+                fb.Statistics.Materials.Add(ms);
+
+                if (run.Job == null)
+                {
+                    fb.Unplaced.AddRange(run.Unplaced);
+                    ms.Unplaced = old.Unplaced;
+                    continue;
+                }
+
+                ms.BestOrdering = run.BaseBest.OrderingName;
+                AppendMaterialResult(fb, ms, run.Job, run.BaseBest, settings);
+            }
+
+            SumStatistics(fb);
+            return fb;
+        }
+
+        private static void SumStatistics(NestingResult result)
+        {
             foreach (MaterialStatistics ms in result.Statistics.Materials)
             {
                 result.Statistics.RequestedQuantity += ms.Requested;
@@ -163,10 +246,6 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 result.Statistics.UnplacedQuantity += ms.Unplaced;
                 result.Statistics.SheetCount += ms.SheetCount;
             }
-
-            result.Validation = _validator.Validate(request, result);
-            result.Statistics.ElapsedSeconds = watch.Elapsed.TotalSeconds;
-            return result;
         }
 
         /// <summary>
