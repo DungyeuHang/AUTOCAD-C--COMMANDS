@@ -13,6 +13,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             Shape = shape;
             Bounds = shape.Bounds;
             PolygonEdges.Collect(shape, out EdgeA, out EdgeB);
+            RingBounds = RingPointTests.RingBoundsOf(shape);
 
             double[] ignore;
             ContactSampling.Sample(
@@ -45,6 +46,9 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
         internal readonly IntPoint[] EdgeA;
         internal readonly IntPoint[] EdgeB;
+
+        /// <summary>Hop bao cua tung vong: [0] = vong ngoai, [1..] = cac lo. Bat bien.</summary>
+        internal readonly LongRect[] RingBounds;
     }
 
     /// <summary>A placed polygon in sheet coordinates with a uniform-grid edge index.</summary>
@@ -67,6 +71,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             PolygonEdges.Collect(shape, out EdgeA, out EdgeB);
             _stamp = new int[EdgeA.Length];
             ToleranceUnits = toleranceUnits;
+            RingBounds = RingPointTests.RingBoundsOf(shape);
 
             if (EdgeA.Length <= GridThreshold) return;
 
@@ -111,6 +116,9 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
         internal readonly IntPoint[] EdgeA;
         internal readonly IntPoint[] EdgeB;
+
+        /// <summary>Hop bao cua tung vong: [0] = vong ngoai, [1..] = cac lo. Bat bien (an toan giua cac luong).</summary>
+        internal readonly LongRect[] RingBounds;
 
         private void CellRange(long minX, long minY, long maxX, long maxY, out int c0, out int r0, out int c1, out int r1)
         {
@@ -183,6 +191,80 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         }
     }
 
+    /// <summary>
+    /// Diem-trong-da-giac cho phep kiem va cham - CHO RA DUNG CUNG KET QUA voi
+    /// <see cref="GeometryMath.PointInRing"/> / <see cref="GeometryMath.PointInMaterial"/>, chi
+    /// nhanh hon. GeometryMath (va validator dung no) giu nguyen.
+    ///
+    /// Da do tren ban ve that: ~50% thoi gian ghep nam o phep "dinh 0 nam trong vat lieu" cua
+    /// Collides - vi ban cu tinh Cross tren MOI canh de kiem "nam tren bien", di qua IList, va
+    /// duyet MOI lo (556 lo tren 47 chi tiet).
+    ///
+    /// Vi sao ket qua y het:
+    ///   - Diem nam NGOAI hop bao dong cua vong: khong the nam tren bien (moi diem bien deu
+    ///     trong hop bao dong), va so canh cat duong ngang qua diem luon chan (vong kin) hoac
+    ///     bang 0 -> ban cu cung tra -1.
+    ///   - "Nam tren canh" = Cross == 0 VA nam trong hop bao cua canh; doi thu tu hai dieu
+    ///     kien (khong co tac dung phu) khong doi ket qua, chi bo duoc phep nhan khi diem o xa.
+    ///   - Phep dem giao cat giu NGUYEN so hoc long cua ban cu.
+    /// </summary>
+    internal static class RingPointTests
+    {
+        public static LongRect[] RingBoundsOf(PolyShape shape)
+        {
+            LongRect[] r = new LongRect[1 + shape.Holes.Length];
+            r[0] = LongRect.FromPoints(shape.Outer);
+            for (int k = 0; k < shape.Holes.Length; k++) r[k + 1] = LongRect.FromPoints(shape.Holes[k]);
+            return r;
+        }
+
+        /// <summary>1 trong, 0 tren bien, -1 ngoai - nhu <see cref="GeometryMath.PointInRing"/>.</summary>
+        public static int PointInRing(IntPoint p, IntPoint[] ring, LongRect bounds)
+        {
+            if (p.X < bounds.MinX || p.X > bounds.MaxX || p.Y < bounds.MinY || p.Y > bounds.MaxY) return -1;
+
+            int n = ring.Length;
+            bool inside = false;
+            for (int i = 0, j = n - 1; i < n; j = i++)
+            {
+                IntPoint a = ring[j], b = ring[i];
+                if (Math.Min(a.X, b.X) <= p.X && p.X <= Math.Max(a.X, b.X) &&
+                    Math.Min(a.Y, b.Y) <= p.Y && p.Y <= Math.Max(a.Y, b.Y) &&
+                    GeometryMath.Cross(a, b, p) == 0)
+                {
+                    return 0;
+                }
+
+                if ((b.Y > p.Y) != (a.Y > p.Y))
+                {
+                    long lhs = (p.X - a.X) * (b.Y - a.Y);
+                    long rhs = (p.Y - a.Y) * (b.X - a.X);
+                    bool left = (b.Y - a.Y) > 0 ? lhs < rhs : lhs > rhs;
+                    if (left) inside = !inside;
+                }
+            }
+
+            return inside ? 1 : -1;
+        }
+
+        /// <summary>
+        /// Nhu <see cref="GeometryMath.PointInMaterial"/>; <paramref name="outer"/> tra ve luon
+        /// ket qua cua vong ngoai (luon duoc tinh) de khoi tinh lai khi kiem lo kin.
+        /// </summary>
+        public static bool PointInMaterial(IntPoint p, PolyShape shape, LongRect[] ringBounds, out int outer)
+        {
+            outer = PointInRing(p, shape.Outer, ringBounds[0]);
+            if (outer <= 0) return false;
+            IntPoint[][] holes = shape.Holes;
+            for (int k = 0; k < holes.Length; k++)
+            {
+                if (PointInRing(p, holes[k], ringBounds[k + 1]) >= 0) return false;
+            }
+
+            return true;
+        }
+    }
+
     internal static class PolygonEdges
     {
         public static void Collect(PolyShape shape, out IntPoint[] a, out IntPoint[] b)
@@ -224,6 +306,12 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
         public ClearanceRules Rules { get; private set; }
 
+        /// <summary>
+        /// CHI de phep thu / benchmark A-B: true = dung phep diem-trong-da-giac cu
+        /// (<see cref="GeometryMath"/>). Hai cach cho ra CUNG ket qua; mac dinh false (nhanh).
+        /// </summary>
+        internal bool LegacyPointTests { get; set; }
+
         public PreparedShape Prepare(PartGroup group, OrientationTransform orientation)
         {
             return new PreparedShape(group, orientation, group.Shape.Polygon.Transform(orientation, 0, 0));
@@ -248,18 +336,35 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             // Containment (cheap, catches deep overlaps before the edge loop).
             IntPoint m0 = moving.Shape.Outer[0];
             IntPoint m0World = new IntPoint(m0.X + tx, m0.Y + ty);
-            if (GeometryMath.PointInMaterial(m0World, placed.Shape)) return true;
-
             IntPoint p0 = placed.Shape.Outer[0];
             IntPoint p0Local = new IntPoint(p0.X - tx, p0.Y - ty);
-            if (GeometryMath.PointInMaterial(p0Local, moving.Shape)) return true;
 
-            // Inside the outer ring but not in material = inside a closed hole. Either the
-            // whole part is in that hole (part-in-part) or it crosses the hole boundary.
-            if (!Rules.AllowPartInsideHole)
+            if (LegacyPointTests)
             {
-                if (placed.Shape.Holes.Length > 0 && GeometryMath.PointInRing(m0World, placed.Shape.Outer) >= 0) return true;
-                if (moving.Shape.Holes.Length > 0 && GeometryMath.PointInRing(p0Local, moving.Shape.Outer) >= 0) return true;
+                if (GeometryMath.PointInMaterial(m0World, placed.Shape)) return true;
+                if (GeometryMath.PointInMaterial(p0Local, moving.Shape)) return true;
+
+                // Inside the outer ring but not in material = inside a closed hole. Either the
+                // whole part is in that hole (part-in-part) or it crosses the hole boundary.
+                if (!Rules.AllowPartInsideHole)
+                {
+                    if (placed.Shape.Holes.Length > 0 && GeometryMath.PointInRing(m0World, placed.Shape.Outer) >= 0) return true;
+                    if (moving.Shape.Holes.Length > 0 && GeometryMath.PointInRing(p0Local, moving.Shape.Outer) >= 0) return true;
+                }
+            }
+            else
+            {
+                // Cung cac phep kiem tren, cung thu tu, cung ket qua - xem RingPointTests. Ket qua
+                // vong ngoai lay lai tu phep kiem vat lieu thay vi tinh lai.
+                int m0Outer, p0Outer;
+                if (RingPointTests.PointInMaterial(m0World, placed.Shape, placed.RingBounds, out m0Outer)) return true;
+                if (RingPointTests.PointInMaterial(p0Local, moving.Shape, moving.RingBounds, out p0Outer)) return true;
+
+                if (!Rules.AllowPartInsideHole)
+                {
+                    if (placed.Shape.Holes.Length > 0 && m0Outer >= 0) return true;
+                    if (moving.Shape.Holes.Length > 0 && p0Outer >= 0) return true;
+                }
             }
 
             double limit2 = (double)clearance * clearance;

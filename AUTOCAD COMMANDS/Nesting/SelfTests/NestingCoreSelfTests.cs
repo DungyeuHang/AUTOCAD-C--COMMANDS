@@ -70,6 +70,9 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "C40. Can bang: tien do cham 100%", C40_BalancedProgressReachesHundred);
             NestingTestHarness.Run(report, "C41. Can bang: bam Dung giu ket qua tot nhat", C41_BalancedCancelKeepsBest);
             NestingTestHarness.Run(report, "C42. Can bang: dong ho chi co tac dung khi tat Tim du", C42_BalancedClockOnlyWhenNotDeterministic);
+            NestingTestHarness.Run(report, "C43. Kernel diem-trong-da-giac moi == GeometryMath (diem hiem + ngau nhien)", C43_PointKernelEquivalence);
+            NestingTestHarness.Run(report, "C44. Collides moi == Collides cu (vi tri ngau nhien, co/khong lo kin)", C44_CollidesLegacyEquivalence);
+            NestingTestHarness.Run(report, "C45. Ca bo ghep: kernel moi == cu (bo cuc + so lan goi Collides)", C45_EngineLegacyKernelEquivalence);
         }
 
         // ==================================================================================
@@ -1524,6 +1527,274 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             r.Settings.TimeBudgetSeconds = 0.000001;
             r.Settings.DeterministicSearch = deterministic;
             return Signature(Nest(r));
+        }
+
+        // ==================================================================================
+        // PHASE 1: diem-trong-da-giac nhanh trong PolygonCollisionModel == ban cu (GeometryMath)
+        // ==================================================================================
+
+        /// <summary>
+        /// Bo hinh dung de so hai kernel: canh ngang/doc/xien, hinh lom, nhieu lo, lo sat nhau,
+        /// lo long trong lo, hinh cung xap xi (64 canh) co lo tron - o ca 8 huong xoay/lat.
+        /// </summary>
+        private static List<PolyShape> KernelShapes()
+        {
+            List<PartGroup> groups = new List<PartGroup>
+            {
+                Rect("R", 120, 70, 1),
+                Poly("TRI", 1, TriA),
+                Poly("L", 1, LShape),
+                Poly("U", 1, UHookShape),
+                Poly("P", 1, Chiral),
+                Poly("F", 1, Frame, FrameHole),
+                Poly("MH", 1, new double[] { 0, 0, 400, 0, 400, 200, 0, 200 },
+                    new double[] { 20, 20, 120, 20, 120, 180, 20, 180 },
+                    new double[] { 120, 60, 200, 60, 200, 140, 120, 140 },
+                    new double[] { 260, 50, 330, 30, 360, 120, 280, 160 },
+                    new double[] { 40, 40, 80, 40, 80, 80, 40, 80 })     // lo LONG trong lo dau (ca kernel cung phai xu ly)
+            };
+
+            List<IntPoint> disc = new List<IntPoint>(), bore = new List<IntPoint>(), bore2 = new List<IntPoint>();
+            for (int i = 0; i < 64; i++)
+            {
+                double t = 2 * Math.PI * i / 64;
+                disc.Add(IntPoint.FromMm(100 + 100 * Math.Cos(t), 100 + 100 * Math.Sin(t)));
+                bore.Add(IntPoint.FromMm(60 + 25 * Math.Cos(t), 100 + 25 * Math.Sin(t)));
+                bore2.Add(IntPoint.FromMm(140 + 25 * Math.Cos(t), 100 + 25 * Math.Sin(t)));
+            }
+
+            groups.Add(new PartGroup("D", new PartShape(PolyShape.Create(disc, new[] { bore, bore2 }), 0.05), 1, "1.2MM"));
+
+            List<PolyShape> shapes = new List<PolyShape>();
+            foreach (PartGroup g in groups)
+            {
+                foreach (bool mirror in new[] { false, true })
+                {
+                    foreach (double rot in new[] { 0.0, 90.0, 180.0, 270.0 })
+                    {
+                        shapes.Add(g.Shape.Polygon.Transform(new OrientationTransform(rot, mirror), 1234, -5678));
+                    }
+                }
+            }
+
+            return shapes;
+        }
+
+        /// <summary>Diem hiem: moi dinh, moi diem nguyen tren canh, trung diem, lan can +-1, bien hop bao.</summary>
+        private static List<IntPoint> CriticalPoints(PolyShape s)
+        {
+            List<IntPoint> pts = new List<IntPoint>();
+            List<IntPoint[]> rings = new List<IntPoint[]> { s.Outer };
+            rings.AddRange(s.Holes);
+            foreach (IntPoint[] ring in rings)
+            {
+                LongRect rb = LongRect.FromPoints(ring);
+                foreach (long x in new[] { rb.MinX - 1, rb.MinX, rb.MinX + 1, (rb.MinX + rb.MaxX) / 2, rb.MaxX - 1, rb.MaxX, rb.MaxX + 1 })
+                {
+                    foreach (long y in new[] { rb.MinY - 1, rb.MinY, rb.MinY + 1, (rb.MinY + rb.MaxY) / 2, rb.MaxY - 1, rb.MaxY, rb.MaxY + 1 })
+                    {
+                        pts.Add(new IntPoint(x, y));
+                    }
+                }
+
+                for (int i = 0; i < ring.Length; i++)
+                {
+                    IntPoint a = ring[i], b = ring[(i + 1) % ring.Length];
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        for (int dy = -1; dy <= 1; dy++) pts.Add(new IntPoint(a.X + dx, a.Y + dy));
+                    }
+
+                    // Diem NGUYEN nam dung tren canh (buoc = vector canh / gcd), ca canh xien.
+                    long ex = b.X - a.X, ey = b.Y - a.Y;
+                    long g = Gcd(Math.Abs(ex), Math.Abs(ey));
+                    if (g > 0)
+                    {
+                        long sx = ex / g, sy = ey / g;
+                        foreach (long k in new[] { 1L, g / 3, g / 2, g - 1 })
+                        {
+                            if (k <= 0 || k >= g) continue;
+                            IntPoint on = new IntPoint(a.X + sx * k, a.Y + sy * k);
+                            pts.Add(on);
+                            pts.Add(new IntPoint(on.X + 1, on.Y));
+                            pts.Add(new IntPoint(on.X, on.Y - 1));
+                        }
+                    }
+
+                    pts.Add(new IntPoint((a.X + b.X) / 2, (a.Y + b.Y) / 2));
+                }
+            }
+
+            return pts;
+        }
+
+        private static long Gcd(long a, long b)
+        {
+            while (b != 0)
+            {
+                long t = a % b;
+                a = b;
+                b = t;
+            }
+
+            return a;
+        }
+
+        /// <summary>
+        /// BAT BUOC: kernel moi cho DUNG cung ket qua voi GeometryMath tren moi diem hiem va
+        /// hang chuc nghin diem ngau nhien (seed co dinh) - ca 1 / 0 / -1 cua tung vong, ket qua
+        /// vat lieu, va ket qua vong ngoai tra kem.
+        /// </summary>
+        private static void C43_PointKernelEquivalence()
+        {
+            Random rnd = new Random(20260928);
+            int compared = 0, onBoundary = 0, inside = 0;
+            foreach (PolyShape s in KernelShapes())
+            {
+                LongRect[] rb = RingPointTests.RingBoundsOf(s);
+                List<IntPoint> pts = CriticalPoints(s);
+                LongRect b = s.Bounds;
+                long mx = b.Width / 10 + 2, my = b.Height / 10 + 2;
+                for (int k = 0; k < 5000; k++)
+                {
+                    pts.Add(new IntPoint(
+                        b.MinX - mx + (long)(rnd.NextDouble() * (b.Width + 2 * mx)),
+                        b.MinY - my + (long)(rnd.NextDouble() * (b.Height + 2 * my))));
+                }
+
+                foreach (IntPoint p in pts)
+                {
+                    int oldOuter = GeometryMath.PointInRing(p, s.Outer);
+                    Equal(oldOuter, RingPointTests.PointInRing(p, s.Outer, rb[0]), "vong ngoai tai " + p.X + "," + p.Y);
+                    for (int h = 0; h < s.Holes.Length; h++)
+                    {
+                        Equal(GeometryMath.PointInRing(p, s.Holes[h]), RingPointTests.PointInRing(p, s.Holes[h], rb[h + 1]), "lo " + h + " tai " + p.X + "," + p.Y);
+                    }
+
+                    int outer;
+                    bool fast = RingPointTests.PointInMaterial(p, s, rb, out outer);
+                    Equal(GeometryMath.PointInMaterial(p, s), fast, "vat lieu tai " + p.X + "," + p.Y);
+                    Equal(oldOuter, outer, "vong ngoai tra kem tai " + p.X + "," + p.Y);
+                    compared++;
+                    if (oldOuter == 0) onBoundary++;
+                    if (fast) inside++;
+                }
+            }
+
+            True(compared > 300000, "phai so du nhieu diem: " + compared);
+            True(onBoundary > 1000, "phai co nhieu diem NAM TREN BIEN: " + onBoundary);
+            True(inside > 10000, "phai co nhieu diem trong vat lieu: " + inside);
+        }
+
+        /// <summary>
+        /// Collides ban moi == ban cu tren hang chuc nghin cap vi tri ngau nhien (seed co dinh),
+        /// ca khi cam va cho phep dat vao lo kin, ca chi tiet co dung sai cung.
+        /// </summary>
+        private static void C44_CollidesLegacyEquivalence()
+        {
+            List<PartGroup> groups = new List<PartGroup>
+            {
+                Rect("R", 120, 70, 1), Rect("S", 30, 30, 1), Poly("L", 1, LShape), Poly("U", 1, UHookShape),
+                Poly("F", 1, Frame, FrameHole), PolyTol("T", 1, 0.05, TriLarge)
+            };
+
+            Random rnd = new Random(7);
+            int hits = 0, total = 0;
+            foreach (bool inHole in new[] { false, true })
+            {
+                NestingSettings st = new NestingSettings { AllowPartInsideHole = inHole, AllowMirror = true };
+                PolygonCollisionModel fresh = new PolygonCollisionModel(st);
+                PolygonCollisionModel legacy = new PolygonCollisionModel(st) { LegacyPointTests = true };
+                foreach (PartGroup ga in groups)
+                {
+                    foreach (PartGroup gb in groups)
+                    {
+                        for (int k = 0; k < 400; k++)
+                        {
+                            OrientationTransform oa = new OrientationTransform(90.0 * rnd.Next(4), rnd.Next(2) == 1);
+                            OrientationTransform ob = new OrientationTransform(90.0 * rnd.Next(4), rnd.Next(2) == 1);
+                            PreparedShape moving = fresh.Prepare(ga, oa);
+                            PlacedShape placed = fresh.Place(fresh.Prepare(gb, ob), 500000, 500000);
+                            long tx = 500000 + (long)((rnd.NextDouble() - 0.5) * 2 * 400000);
+                            long ty = 500000 + (long)((rnd.NextDouble() - 0.5) * 2 * 400000);
+                            bool a = fresh.Collides(moving, tx, ty, placed);
+                            bool b = legacy.Collides(moving, tx, ty, placed);
+                            Equal(b, a, ga.Id + "/" + gb.Id + " inhole=" + inHole + " tai " + tx + "," + ty);
+                            if (a) hits++;
+                            total++;
+                        }
+                    }
+                }
+            }
+
+            True(hits > total / 10 && hits < total * 9 / 10, "phai co ca va cham lan khong va cham: " + hits + "/" + total);
+        }
+
+        private sealed class CountingModel : ICollisionModel
+        {
+            private readonly PolygonCollisionModel _inner;
+            public long Count;
+            public CountingModel(PolygonCollisionModel inner) { _inner = inner; }
+            public ClearanceRules Rules { get { return _inner.Rules; } }
+            public PreparedShape Prepare(PartGroup g, OrientationTransform o) { return _inner.Prepare(g, o); }
+            public bool FitsInsideSheet(PreparedShape s, long tx, long ty, SheetSpec sheet) { return _inner.FitsInsideSheet(s, tx, ty, sheet); }
+            public bool Collides(PreparedShape m, long tx, long ty, PlacedShape p) { Interlocked.Increment(ref Count); return _inner.Collides(m, tx, ty, p); }
+            public PlacedShape Place(PreparedShape s, long tx, long ty) { return _inner.Place(s, tx, ty); }
+        }
+
+        private static NestingResult NestWithKernel(NestingRequest r, bool legacy, out long collides)
+        {
+            CountingModel counter = null;
+            SimpleNestingEngine engine = new SimpleNestingEngine(
+                new BasicRotationCandidateProvider(),
+                s => counter = new CountingModel(new PolygonCollisionModel(s) { LegacyPointTests = legacy }),
+                new MultiOrderOptimizer(new CandidatePointDecoder(), new LexicographicSolutionEvaluator()),
+                new NestingValidator());
+            NestingResult res = engine.Nest(r, CancellationToken.None, null);
+            collides = counter.Count;
+            return res;
+        }
+
+        /// <summary>
+        /// Ca bo ghep: kernel cu va moi phai ra cung bo cuc VA cung so lan goi Collides (cung
+        /// so lan goi = moi quyet dinh doc duong deu giong nhau), o ca Nhanh va Can bang, ca co
+        /// lo kin (cam / cho phep dat vao lo).
+        /// </summary>
+        private static void C45_EngineLegacyKernelEquivalence()
+        {
+            List<Func<NestingRequest>> set = new List<Func<NestingRequest>>
+            {
+                () => PinRequest(0),
+                () => PinRequest(1),
+                () => Balanced(LocalSearchRequest()),
+                () =>
+                {
+                    NestingRequest r = Request(1000, 700);
+                    r.Groups.Add(Poly("F", 3, Frame, FrameHole));
+                    r.Groups.Add(Rect("S", 80, 60, 6));
+                    r.Groups.Add(Poly("L", 2, LShape));
+                    return r;
+                },
+                () =>
+                {
+                    NestingRequest r = Request(1000, 700);
+                    r.Settings.AllowPartInsideHole = true;
+                    r.Groups.Add(Poly("F", 3, Frame, FrameHole));
+                    r.Groups.Add(Rect("S", 80, 60, 6));
+                    return Balanced(r);
+                }
+            };
+
+            for (int k = 0; k < set.Count; k++)
+            {
+                long cNew, cOld;
+                NestingResult fresh = NestWithKernel(set[k](), false, out cNew);
+                NestingResult legacy = NestWithKernel(set[k](), true, out cOld);
+                AssertValid(fresh);
+                Equal(Signature(legacy), Signature(fresh), "yeu cau " + k + ": cung bo cuc");
+                Equal(cOld, cNew, "yeu cau " + k + ": cung so lan goi Collides");
+                True(cNew > 0, "phai co goi Collides");
+            }
         }
     }
 }
