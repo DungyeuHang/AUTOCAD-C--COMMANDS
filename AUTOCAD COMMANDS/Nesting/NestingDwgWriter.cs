@@ -62,6 +62,19 @@ namespace AUTOCAD_COMMANDS.Nesting
             Dictionary<string, OutputPart> byGroup = new Dictionary<string, OutputPart>(StringComparer.Ordinal);
             foreach (OutputPart p in parts) byGroup[p.Group.Id] = p;
 
+            // Moi chi tiet DA XEP phai co hinh nguon de ve. Truoc day placement thieu dinh nghia
+            // bi BO QUA IM LANG (continue) - ban ve ra thieu chi tiet trong khi validator bao DAT.
+            // Kiem truoc khi tao bat cu thu gi: loi thi khong co file nao.
+            foreach (Placement pl in result.Placements)
+            {
+                OutputPart op;
+                if (!byGroup.TryGetValue(pl.PartGroupId, out op) || op.SourceIds.Count == 0)
+                {
+                    throw new InvalidOperationException("Chi tiet " + pl.PartGroupId + " (" + pl.InstanceId +
+                        ") da xep nhung khong co hinh nguon de ve - KHONG tao ban ve thieu chi tiet.");
+                }
+            }
+
             using (Database target = new Database(true, true))
             {
                 target.Insunits = source.Insunits;
@@ -250,21 +263,32 @@ namespace AUTOCAD_COMMANDS.Nesting
 
                     ObjectId blockId = db.Insert(UniqueName(db, "GHOPHOI_KETQUA"), layout, false);
 
-                    using (Transaction tr = db.TransactionManager.StartTransaction())
+                    try
                     {
-                        BlockTableRecord ms = (BlockTableRecord)tr.GetObject(
-                            SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+                        using (Transaction tr = db.TransactionManager.StartTransaction())
+                        {
+                            BlockTableRecord ms = (BlockTableRecord)tr.GetObject(
+                                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
 
-                        BlockReference br = new BlockReference(at, blockId);
-                        ms.AppendEntity(br);
-                        tr.AddNewlyCreatedDBObject(br, true);
+                            BlockReference br = new BlockReference(at, blockId);
+                            ms.AppendEntity(br);
+                            tr.AddNewlyCreatedDBObject(br, true);
 
-                        // Pha khoi ngay: de nguyen block thi may CNC doc ca khoi va cat tat ca
-                        // moi thu ben trong, ke ca chu khong dinh cat.
-                        br.ExplodeToOwnerSpace();
-                        br.Erase();
+                            // Pha khoi ngay: de nguyen block thi may CNC doc ca khoi va cat tat ca
+                            // moi thu ben trong, ke ca chu khong dinh cat.
+                            br.ExplodeToOwnerSpace();
+                            br.Erase();
 
-                        tr.Commit();
+                            tr.Commit();
+                        }
+                    }
+                    catch
+                    {
+                        // db.Insert da them dinh nghia block vao ban ve TRUOC transaction: loi o day
+                        // thi transaction huy phan chen, con dinh nghia phai tu don de ban ve that su
+                        // "giu nguyen" nhu thong bao loi noi.
+                        PurgeBlock(db, blockId);
+                        throw;
                     }
 
                     // Dinh nghia block chi la phuong tien de chen - bo di cho ban ve sach.

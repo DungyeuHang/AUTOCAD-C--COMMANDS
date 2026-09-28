@@ -51,6 +51,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             Stopwatch watch = Stopwatch.StartNew();
             NestingResult result = new NestingResult();
             NestingSettings settings = request.Settings ?? new NestingSettings();
+            CheckInputs(request, settings);
             ICollisionModel collision = _collisionFactory(settings);
             CultureInfo ci = CultureInfo.InvariantCulture;
 
@@ -245,6 +246,50 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 result.Statistics.PlacedQuantity += ms.Placed;
                 result.Statistics.UnplacedQuantity += ms.Unplaced;
                 result.Statistics.SheetCount += ms.SheetCount;
+            }
+        }
+
+        /// <summary>Tran hop ly cho khe cat / le mep (mm).</summary>
+        internal const double MaxClearanceMm = 10000.0;
+
+        /// <summary>Tran hop ly cho mot canh kho phoi (mm) - 1 km.</summary>
+        internal const double MaxSheetMm = 1000000.0;
+
+        /// <summary>
+        /// Tu choi ro rang cac cai dat / kho phoi VO NGHIA truoc khi ghep. Truoc day NaN / vo cuc
+        /// / so khong lo lot qua: Gap = Infinity cho ra khe thuc 0.001 mm ma validator van DAT;
+        /// kho NaN nem AggregateException kho hieu; kho 1e13 mm chay khong dung. Gia tri hop le
+        /// thi khong co gi thay doi.
+        /// </summary>
+        private static void CheckInputs(NestingRequest request, NestingSettings settings)
+        {
+            CheckLength("Khe cat (GapMm)", settings.GapMm, MaxClearanceMm, true);
+            CheckLength("Le mep (EdgeMarginMm)", settings.EdgeMarginMm, MaxClearanceMm, true);
+            if (double.IsNaN(settings.TimeBudgetSeconds)) throw new ArgumentException("Thoi gian toi da la NaN.");
+            foreach (PartGroup g in request.Groups)
+            {
+                // SL am truoc day chi bi validator bat (QuantityMismatch) sau khi da ghep xong. Nhan
+                // dang khong bao gio sinh ra SL < 1 (ToPartGroups nem loi); SL 0 = khong co ban sao.
+                if (g.Quantity < 0) throw new ArgumentException("Chi tiet " + g.Id + " co so luong am (" + g.Quantity.ToString(CultureInfo.InvariantCulture) + ").");
+            }
+
+            List<SheetSpec> sheets = new List<SheetSpec>();
+            if (request.DefaultSheet != null) sheets.Add(request.DefaultSheet);
+            foreach (SheetSpec s in request.SheetByMaterial.Values) if (s != null) sheets.Add(s);
+            foreach (SheetSpec s in sheets)
+            {
+                CheckLength("Chieu dai kho " + s.Name, s.LengthMm, MaxSheetMm, false);
+                CheckLength("Chieu rong kho " + s.Name, s.WidthMm, MaxSheetMm, false);
+            }
+        }
+
+        private static void CheckLength(string what, double mm, double max, bool zeroAllowed)
+        {
+            // Am van duoc (khe / le am = 0, nhu truoc day); chi chan NaN, vo cuc, qua lon, va kho <= 0.
+            if (double.IsNaN(mm) || double.IsInfinity(mm) || mm > max || (!zeroAllowed && mm <= 0))
+            {
+                throw new ArgumentException(string.Format(CultureInfo.InvariantCulture,
+                    "{0} = {1} khong hop le (phai la so huu han{2}, toi da {3:0} mm).", what, mm, zeroAllowed ? string.Empty : " > 0", max));
             }
         }
 

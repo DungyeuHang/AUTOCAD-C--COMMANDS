@@ -194,7 +194,18 @@ namespace AUTOCAD_COMMANDS.Nesting
 
                 settings = form.Settings;
                 GhoPhoiSettingsStore.Save(settings);
-                if (form.CatalogChanged) GhoPhoiSettingsStore.SaveCatalog(form.Catalog);
+                if (form.CatalogChanged)
+                {
+                    // Luu danh muc la viec phu: file bi khoa / chi doc thi van ghep tiep, chi bao.
+                    try
+                    {
+                        GhoPhoiSettingsStore.SaveCatalog(form.Catalog);
+                    }
+                    catch (Exception ex)
+                    {
+                        ed.WriteMessage("\nGHOPHOI: (!) Khong luu duoc danh muc kho phoi - van ghep voi danh muc vua chon.\n  " + ex.Message);
+                    }
+                }
                 foreach (KeyValuePair<string, SheetSpec> kv in form.SheetByMaterial) request.SheetByMaterial[kv.Key] = kv.Value;
             }
 

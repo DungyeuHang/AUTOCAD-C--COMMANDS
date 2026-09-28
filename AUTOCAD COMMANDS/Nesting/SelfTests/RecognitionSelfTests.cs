@@ -44,6 +44,12 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "R29. Chu khac ngoai moi chi tiet -> khong gan", R29_EngravingOutsideNotAttached);
             NestingTestHarness.Run(report, "R30. Chu khac o chi tiet long nhau -> chi tiet TRONG CUNG", R30_EngravingInnermostWins);
             NestingTestHarness.Run(report, "R31. Nhieu chu khac / nhieu chi tiet -> khong lan nhau", R31_EngravingManyPartsSeparate);
+            NestingTestHarness.Run(report, "R34. SL: 0010 / 2 cai / 3 (bo) / 99999", R34_QuantityVariants);
+            NestingTestHarness.Run(report, "R35. SL / vat lieu lap lai GIONG nhau -> khong mo ho", R35_DuplicateMetadataNotAmbiguous);
+            NestingTestHarness.Run(report, "R36. Hai vat lieu khac nhau -> AMBIGUOUS, chua xac nhan thi bi chan", R36_ConflictingMaterials);
+            NestingTestHarness.Run(report, "R37. 'SL: 2 SL: 3' trong 1 chu -> AMBIGUOUS", R37_TwoQuantitiesOneText);
+            NestingTestHarness.Run(report, "R38. Nguong mo ho: chenh 0.4 mm -> AMBIGUOUS, 0.6 mm -> chi tiet gan hon", R38_AmbiguityBoundary);
+            NestingTestHarness.Run(report, "R39. SL rieng ben trong + SL chi tiet ben canh gan vien -> bao, khong im lang", R39_NeighbourQuantityFlagged);
         }
 
         private static void R20_SlInsideMaterialOutside()
@@ -561,6 +567,88 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             Equal("1.2MM", p.Material, "default material");
             Equal(PartStatus.Warning, p.Status, "defaults are visible as warning");
             True(p.NotesText.Contains("mac dinh"), "note explains default");
+        }
+
+        private static RecognizedPart At(RecognitionResult r, double minX)
+        {
+            RecognizedPart p = Valid(r).Find(x => Math.Abs(x.Outer.MinX - minX) < 1e-6);
+            if (p == null) throw new NestingAssertException("khong tim thay chi tiet tai x = " + minX);
+            return p;
+        }
+
+        private static void R34_QuantityVariants()
+        {
+            string[] texts = { "SL: 0010", "SL: 2 cai", "SL: 3 (bo)", "SL: 99999" };
+            int[] want = { 10, 2, 3, 99999 };
+            for (int i = 0; i < texts.Length; i++)
+            {
+                RecognizedPart p = Valid(Recognize(new List<CurveChain> { Box(0, 0, 100, 100) }, Text(texts[i], 50, 50), Text("1.2MM", 50, 20)))[0];
+                Equal(want[i], p.Quantity, "'" + texts[i] + "'");
+                Equal(PartStatus.Ok, p.Status, "'" + texts[i] + "' ro rang -> OK");
+            }
+        }
+
+        private static void R35_DuplicateMetadataNotAmbiguous()
+        {
+            RecognizedPart p = Valid(Recognize(new List<CurveChain> { Box(0, 0, 200, 100) },
+                Text("SL: 2", 20, 80), Text("SL: 2", 20, 20), Text("1.2MM", 150, 80), Text("1,2 mm", 150, 20)))[0];
+            Equal(2, p.Quantity, "SL lap lai giong nhau");
+            Equal("1.2MM", p.Material, "1.2MM == 1,2 mm");
+            Equal(PartStatus.Ok, p.Status, "trung GIONG nhau khong phai mo ho");
+        }
+
+        private static void R36_ConflictingMaterials()
+        {
+            RecognitionResult r = Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text("SL: 2", 20, 50), Text("1.2MM", 100, 70), Text("1.5MM", 100, 30));
+            RecognizedPart p = Valid(r)[0];
+            Equal(PartStatus.Ambiguous, p.Status, "hai vat lieu khac nhau");
+
+            bool threw = false;
+            try
+            {
+                PartRecognizer.ToPartGroups(r.Parts, 0.05);
+            }
+            catch (InvalidOperationException)
+            {
+                threw = true;
+            }
+
+            True(threw, "chua xac nhan -> khong duoc dua vao ghep");
+            p.Confirmed = true;
+            Equal(1, PartRecognizer.ToPartGroups(r.Parts, 0.05).Count, "xac nhan roi thi di tiep");
+        }
+
+        private static void R37_TwoQuantitiesOneText()
+        {
+            RecognizedPart p = Valid(Recognize(new List<CurveChain> { Box(0, 0, 100, 100) }, Text("SL: 2 SL: 3", 50, 50)))[0];
+            Equal(PartStatus.Ambiguous, p.Status, "hai SL trong mot chu");
+        }
+
+        /// <summary>
+        /// Nguong mo ho = max(0.5 mm, 1% khoang cach). Hai chi tiet cach nhau 60 mm, text o giua:
+        /// chenh 0.4 mm -> mo ho (ca hai bi bao, khong gan); chenh 0.6 mm -> chi tiet gan hon.
+        /// </summary>
+        private static void R38_AmbiguityBoundary()
+        {
+            List<CurveChain> c = new List<CurveChain> { Box(0, 0, 200, 100), Box(260, 0, 200, 100) };
+            RecognitionResult near = Recognize(c, Text("SL: 7", 229.8, 50));       // 29.8 / 30.2
+            Equal(PartStatus.Ambiguous, At(near, 0).Status, "chenh 0.4 mm: A mo ho");
+            Equal(PartStatus.Ambiguous, At(near, 260).Status, "chenh 0.4 mm: B mo ho");
+            Equal(1, At(near, 0).Quantity, "mo ho: khong gan im lang");
+
+            RecognitionResult clear = Recognize(c, Text("SL: 7", 229.7, 50));      // 29.7 / 30.3
+            Equal(7, At(clear, 0).Quantity, "chenh 0.6 mm: A gan hon nhan SL");
+            Equal(1, At(clear, 260).Quantity, "B khong nhan");
+            True(At(clear, 0).Status != PartStatus.Ambiguous, "khong mo ho");
+        }
+
+        private static void R39_NeighbourQuantityFlagged()
+        {
+            // A co SL 3 ben trong; SL 7 nam ngoai, gan vien A hon vien B -> A nhan HAI SL khac nhau -> mo ho.
+            List<CurveChain> c = new List<CurveChain> { Box(0, 0, 200, 100), Box(300, 0, 200, 100) };
+            RecognitionResult r = Recognize(c, Text("SL: 3", 100, 50), Text("SL: 7", 220, 50));
+            Equal(PartStatus.Ambiguous, At(r, 0).Status, "A: hai SL khac nhau -> phai bao");
+            True(At(r, 300).Status != PartStatus.Ok, "B: khong co SL -> it nhat WARNING, khong im lang");
         }
 
         private static void R13_ConflictingQuantities()

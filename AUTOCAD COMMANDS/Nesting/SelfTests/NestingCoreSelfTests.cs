@@ -73,6 +73,9 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "C43. Kernel diem-trong-da-giac moi == GeometryMath (diem hiem + ngau nhien)", C43_PointKernelEquivalence);
             NestingTestHarness.Run(report, "C44. Collides moi == Collides cu (vi tri ngau nhien, co/khong lo kin)", C44_CollidesLegacyEquivalence);
             NestingTestHarness.Run(report, "C45. Ca bo ghep: kernel moi == cu (bo cuc + so lan goi Collides)", C45_EngineLegacyKernelEquivalence);
+            NestingTestHarness.Run(report, "C46. NaN / vo cuc / qua lon (khe, le, kho) -> tu choi ro rang", C46_NonsenseInputsRejected);
+            NestingTestHarness.Run(report, "C47. Fuzz co seed (200 bai): validator + kiem doc lap + du SL + tai lap", C47_FuzzProperties);
+            NestingTestHarness.Run(report, "C48. Dau vao benh ly: khong crash, khong treo, khong bao DAT sai", C48_PathologicalInputs);
         }
 
         // ==================================================================================
@@ -1795,6 +1798,409 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
                 Equal(cOld, cNew, "yeu cau " + k + ": cung so lan goi Collides");
                 True(cNew > 0, "phai co goi Collides");
             }
+        }
+
+        // ==================================================================================
+        // HARDENING: dau vao vo nghia, fuzz co seed, dau vao benh ly
+        // ==================================================================================
+
+        private static void ExpectArgument(Action a, string what)
+        {
+            try
+            {
+                a();
+            }
+            catch (ArgumentException)
+            {
+                return;
+            }
+
+            throw new NestingAssertException(what + ": phai bi TU CHOI (ArgumentException)");
+        }
+
+        /// <summary>
+        /// HOI QUY: Gap = Infinity / NaN / 1e20 truoc day thanh khe 0.001 mm ma validator van DAT
+        /// (NestUnits.ToUnits ep NaN / vo cuc ra long.MinValue). Gio phai bi tu choi ro rang;
+        /// gia tri hop le (ke ca 0 va am -> 0 nhu truoc) van chay binh thuong.
+        /// </summary>
+        private static void C46_NonsenseInputsRejected()
+        {
+            foreach (double bad in new[] { double.NaN, double.PositiveInfinity, double.NegativeInfinity, 1e20, -5e15 })
+            {
+                double v = bad;
+                ExpectArgument(() => NestUnits.ToUnits(v), "ToUnits(" + v + ")");
+            }
+
+            Equal(1000000000L, NestUnits.ToUnits(1e6), "ToUnits 1 km van dung");
+            Equal(-5000L, NestUnits.ToUnits(-5), "ToUnits am van dung");
+
+            Func<NestingRequest> ok = () =>
+            {
+                NestingRequest r = Request(1000, 500);
+                r.Groups.Add(Rect("A", 100, 50, 3));
+                return r;
+            };
+
+            foreach (double bad in new[] { double.NaN, double.PositiveInfinity, 1e20, 10000.001 })
+            {
+                double v = bad;
+                ExpectArgument(() => { NestingRequest r = ok(); r.Settings.GapMm = v; Nest(r); }, "Gap = " + v);
+                ExpectArgument(() => { NestingRequest r = ok(); r.Settings.EdgeMarginMm = v; Nest(r); }, "EdgeMargin = " + v);
+            }
+
+            ExpectArgument(() => { NestingRequest r = ok(); r.Settings.TimeBudgetSeconds = double.NaN; Nest(r); }, "TimeBudget = NaN");
+
+            foreach (double bad in new[] { double.NaN, double.PositiveInfinity, 0.0, -100.0, 1e13 })
+            {
+                double v = bad;
+                ExpectArgument(() => { NestingRequest r = ok(); r.DefaultSheet = new SheetSpec("X", v, 500); Nest(r); }, "chieu dai kho = " + v);
+                ExpectArgument(() => { NestingRequest r = ok(); r.SheetByMaterial["1.2MM"] = new SheetSpec("Y", 1000, v); Nest(r); }, "chieu rong kho vat lieu = " + v);
+            }
+
+            // Hop le o bien: khe 0, khe am (= 0, nhu truoc day), le 0.
+            foreach (double gap in new[] { 0.0, -3.0 })
+            {
+                NestingRequest r = ok();
+                r.Settings.GapMm = gap;
+                r.Settings.EdgeMarginMm = 0;
+                NestingResult res = Nest(r);
+                AssertValid(res);
+                Equal(3, res.Statistics.PlacedQuantity, "khe " + gap + ": van xep du");
+            }
+        }
+
+        /// <summary>Sinh mot hinh ngau nhien (mm, toa do cuc bo), co the co lo.</summary>
+        private static PartGroup FuzzShape(Random rnd, string id, int qty, string material)
+        {
+            int kind = rnd.Next(9);
+            double w = 20 + rnd.NextDouble() * 280, h = 20 + rnd.NextDouble() * 180;
+            List<double> outer = new List<double>();
+            List<double[]> holes = new List<double[]>();
+            double tol = 0;
+            switch (kind)
+            {
+                case 0:
+                    outer.AddRange(new[] { 0, 0, w, 0, w, h, 0, h });
+                    break;
+                case 1:
+                    outer.AddRange(new[] { 0, 0, w, 0, rnd.NextDouble() * w, h });
+                    break;
+                case 2:
+                    {
+                        double t = Math.Max(8, Math.Min(w, h) * (0.2 + rnd.NextDouble() * 0.4));
+                        outer.AddRange(new[] { 0, 0, w, 0, w, t, t, t, t, h, 0, h });
+                        break;
+                    }
+
+                case 3:
+                    {
+                        double t = Math.Max(6, w * (0.15 + rnd.NextDouble() * 0.2)), d = h * (0.3 + rnd.NextDouble() * 0.5);
+                        outer.AddRange(new[] { 0, 0, w, 0, w, h, w - t, h, w - t, h - d, t, h - d, t, h, 0, h });
+                        break;
+                    }
+
+                case 4:
+                case 5:
+                    {
+                        // Da giac loi (kind 4) hoac hinh sao LOM (kind 5), n dinh; kind 5 co dung sai cung.
+                        int n = 5 + rnd.Next(20);
+                        double r0 = Math.Min(w, h) / 2;
+                        for (int i = 0; i < n; i++)
+                        {
+                            double a = 2 * Math.PI * i / n;
+                            double r = kind == 5 && i % 2 == 1 ? r0 * (0.45 + rnd.NextDouble() * 0.3) : r0;
+                            outer.Add(r0 + r * Math.Cos(a));
+                            outer.Add(r0 + r * Math.Sin(a));
+                        }
+
+                        tol = kind == 5 ? 0.05 : 0;
+                        break;
+                    }
+
+                case 6:
+                    {
+                        // Tam co NHIEU lo, co cap lo sat nhau (cach 0.5 mm).
+                        outer.AddRange(new[] { 0, 0, w + 60, 0, w + 60, h + 40, 0, h + 40 });
+                        double hw = Math.Max(4, (w - 10) / 3);
+                        holes.Add(new[] { 10, 10, 10 + hw, 10, 10 + hw, 30, 10, 30 });
+                        holes.Add(new[] { 10.5 + hw, 10, 10.5 + 2 * hw, 10, 10.5 + 2 * hw, 30, 10.5 + hw, 30 });
+                        if (h > 40) holes.Add(new[] { 20, 40, 40, 40, 30, h + 20 });
+                        break;
+                    }
+
+                case 7:
+                    {
+                        // Dia 48 canh (xap xi cung) co lo tron: dung sai cung 0.05 mm.
+                        double r0 = Math.Min(w, h) / 2 + 10;
+                        double[] hole = new double[48 * 2];
+                        for (int i = 0; i < 48; i++)
+                        {
+                            double a = 2 * Math.PI * i / 48;
+                            outer.Add(r0 + r0 * Math.Cos(a));
+                            outer.Add(r0 + r0 * Math.Sin(a));
+                            hole[2 * i] = r0 + r0 * 0.4 * Math.Cos(a);
+                            hole[2 * i + 1] = r0 + r0 * 0.4 * Math.Sin(a);
+                        }
+
+                        holes.Add(hole);
+                        tol = 0.05;
+                        break;
+                    }
+
+                default:
+                    // Khung co 1 lo lon (cho phep / cam dat vao lo tuy cai dat).
+                    outer.AddRange(new[] { 0, 0, w + 80, 0, w + 80, h + 80, 0, h + 80 });
+                    holes.Add(new[] { 20, 20, w + 60, 20, w + 60, h + 60, 20, h + 60 });
+                    break;
+            }
+
+            PartGroup g = PolyTol(id, qty, tol, outer.ToArray(), holes.ToArray());
+            return new PartGroup(g.Id, g.Shape, qty, material) { Name = g.Id };
+        }
+
+        /// <summary>
+        /// Kiem DOC LAP voi validator (tu viet lai, KHONG dung validator va KHONG dung ClearanceRules
+        /// cua loi - tu tinh khe / le tu cai dat, de mot loi trong ClearanceRules khong the lam ca
+        /// hai ben cung sai theo): moi placement nam
+        /// trong kho cach mep &gt;= EdgeMargin + dung sai; moi cap cung to khong chong, khong nam
+        /// trong lo kin khi cam, khe &gt;= Gap + dung sai hai ben (so nguyen, chinh xac).
+        /// </summary>
+        private static string IndependentCheck(NestingRequest r, NestingResult res)
+        {
+            long gapU = (long)Math.Round(Math.Max(0.0, r.Settings.GapMm) * 1000.0, MidpointRounding.AwayFromZero);
+            long marginU = (long)Math.Round(Math.Max(0.0, r.Settings.EdgeMarginMm) * 1000.0, MidpointRounding.AwayFromZero);
+            Dictionary<string, PartGroup> groups = new Dictionary<string, PartGroup>();
+            foreach (PartGroup g in r.Groups) groups[g.Id] = g;
+            foreach (SheetResult s in res.Sheets)
+            {
+                List<PolyShape> world = new List<PolyShape>();
+                List<PartShape> shapes = new List<PartShape>();
+                foreach (Placement p in s.Placements)
+                {
+                    PartGroup g = groups[p.PartGroupId];
+                    if (!r.Settings.AllowMirror && p.Mirror) return p.InstanceId + ": lat guong khi khong cho phep";
+                    if (!r.Settings.AllowedRotations.Contains(p.RotationDeg)) return p.InstanceId + ": goc xoay khong cho phep";
+                    if (!string.Equals(SimpleNestingEngine.NormalizeMaterial(g.Material), s.Material, StringComparison.Ordinal)) return p.InstanceId + ": sai vat lieu to";
+                    PolyShape w = g.Shape.Polygon.Transform(p.Orientation, p.TranslationX, p.TranslationY);
+                    long inset = marginU + (long)Math.Ceiling(g.Shape.ToleranceMm * 1000.0 - 1e-9);
+                    if (w.Bounds.MinX < inset || w.Bounds.MinY < inset || w.Bounds.MaxX > s.Sheet.LengthUnits - inset || w.Bounds.MaxY > s.Sheet.WidthUnits - inset)
+                    {
+                        return p.InstanceId + ": vi pham le mep / ra ngoai to";
+                    }
+
+                    world.Add(w);
+                    shapes.Add(g.Shape);
+                }
+
+                for (int i = 0; i < world.Count; i++)
+                {
+                    for (int j = i + 1; j < world.Count; j++)
+                    {
+                        PolyShape a = world[i], b = world[j];
+                        long c = Math.Max(1L, gapU + (long)Math.Ceiling(shapes[i].ToleranceMm * 1000.0 - 1e-9) + (long)Math.Ceiling(shapes[j].ToleranceMm * 1000.0 - 1e-9));
+                        if (!a.Bounds.Overlaps(b.Bounds, c)) continue;
+                        if (GeometryMath.PointInMaterial(a.Outer[0], b) || GeometryMath.PointInMaterial(b.Outer[0], a)) return s.Placements[i].InstanceId + " CHONG " + s.Placements[j].InstanceId;
+                        if (!r.Settings.AllowPartInsideHole &&
+                            ((b.Holes.Length > 0 && GeometryMath.PointInRing(a.Outer[0], b.Outer) >= 0) ||
+                             (a.Holes.Length > 0 && GeometryMath.PointInRing(b.Outer[0], a.Outer) >= 0)))
+                        {
+                            return s.Placements[i].InstanceId + " nam trong lo kin cua " + s.Placements[j].InstanceId;
+                        }
+
+                        double limit2 = (double)c * c;
+                        foreach (IntPoint[] ra in RingsOf(a))
+                        {
+                            foreach (IntPoint[] rb in RingsOf(b))
+                            {
+                                for (int x = 0; x < ra.Length; x++)
+                                {
+                                    for (int y = 0; y < rb.Length; y++)
+                                    {
+                                        if (GeometryMath.SegmentDistanceSquared(ra[x], ra[(x + 1) % ra.Length], rb[y], rb[(y + 1) % rb.Length]) < limit2)
+                                        {
+                                            return s.Placements[i].InstanceId + " / " + s.Placements[j].InstanceId + ": khe nho hon Gap + dung sai";
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static IEnumerable<IntPoint[]> RingsOf(PolyShape s)
+        {
+            yield return s.Outer;
+            foreach (IntPoint[] h in s.Holes) yield return h;
+        }
+
+        /// <summary>
+        /// FUZZ co seed: 200 bai ngau nhien (hinh chu nhat / tam giac / L / U / loi / sao lom /
+        /// nhieu lo sat nhau / dia co lo / khung co lo; xoay, lat, lo kin cho phep hay khong, khe
+        /// va le ngau nhien, 1-2 vat lieu). Moi bai: validator DAT, kiem doc lap DAT, du so luong,
+        /// chay lai cung ket qua. Hong thi in seed + bai + fixture day du de tai tao.
+        /// </summary>
+        private static void C47_FuzzProperties()
+        {
+            const int seed = 20260928;
+            Random rnd = new Random(seed);
+            int totalPlaced = 0, totalUnplaced = 0, withHoles = 0, multiSheet = 0;
+            for (int k = 0; k < 200; k++)
+            {
+                NestingRequest r = Request(600 + rnd.Next(1400), 300 + rnd.Next(900), Math.Round(rnd.NextDouble() * 10, 2), Math.Round(rnd.NextDouble() * 10, 2));
+                r.Settings.ExtraSeededOrderings = rnd.Next(2);
+                r.Settings.Seed = rnd.Next(1000);
+                r.Settings.AllowMirror = rnd.Next(2) == 1;
+                r.Settings.AllowPartInsideHole = rnd.Next(3) == 0;
+                int rot = rnd.Next(3);
+                r.Settings.AllowedRotations = rot == 0 ? new List<double> { 0, 90, 180, 270 } : rot == 1 ? new List<double> { 0, 180 } : new List<double> { 0 };
+                if (rnd.Next(4) == 0) r.SheetByMaterial["1.5MM"] = new SheetSpec("M15", 500 + rnd.Next(800), 300 + rnd.Next(500));
+                int groups = 1 + rnd.Next(5);
+                for (int g = 0; g < groups; g++)
+                {
+                    string mat = r.SheetByMaterial.Count > 0 && rnd.Next(2) == 0 ? "1.5MM" : "1.2MM";
+                    r.Groups.Add(FuzzShape(rnd, "G" + g.ToString(CultureInfo.InvariantCulture), 1 + rnd.Next(5), mat));
+                }
+
+                // Thinh thoang mot chi tiet DAI hon kho: phai "chua xep", khong duoc lam hong phan con lai.
+                if (rnd.Next(8) == 0) r.Groups.Add(Rect("BIG", r.DefaultSheet.LengthMm + 50, 40, 1 + rnd.Next(2)));
+
+                string repro = "seed=" + seed + " bai=" + k + "\n" + NestingFixture.Write(r, "fuzz");
+                try
+                {
+                    NestingResult res = Nest(r);
+                    True(res.Validation.IsValid, "validator: " + (res.Validation.IsValid ? "" : res.Validation.Issues[0].ToString()));
+                    string bad = IndependentCheck(r, res);
+                    True(bad == null, "kiem doc lap: " + bad);
+
+                    int requested = 0;
+                    foreach (PartGroup g in r.Groups) requested += g.Quantity;
+                    Equal(requested, res.Statistics.PlacedQuantity + res.Statistics.UnplacedQuantity, "du so luong");
+                    int placements = 0;
+                    foreach (SheetResult s in res.Sheets) placements += s.Placements.Count;
+                    Equal(res.Statistics.PlacedQuantity, placements, "so placement == so da xep");
+                    Equal(res.Statistics.UnplacedQuantity, res.Unplaced.Count, "so chua xep == danh sach chua xep");
+                    Equal(Signature(res), Signature(Nest(NestingFixture.Parse(NestingFixture.Write(r, "fuzz")).Request)), "chay lai (qua fixture) cung ket qua");
+                    totalPlaced += res.Statistics.PlacedQuantity;
+                    totalUnplaced += res.Statistics.UnplacedQuantity;
+                    if (res.Sheets.Count > 1) multiSheet++;
+                    foreach (PartGroup g in r.Groups)
+                    {
+                        if (g.Shape.Polygon.Holes.Length > 0)
+                        {
+                            withHoles++;
+                            break;
+                        }
+                    }
+                }
+                catch (NestingAssertException ex)
+                {
+                    throw new NestingAssertException(ex.Message + "\nTAI TAO:\n" + repro);
+                }
+            }
+
+            // Bo sinh phai that su tao ra bai kho, khong phai 200 bai rong.
+            True(totalPlaced > 500, "fuzz phai xep duoc nhieu chi tiet: " + totalPlaced);
+            True(totalUnplaced > 0, "fuzz phai co ca truong hop khong xep het");
+            True(withHoles > 30 && multiSheet > 10, "fuzz phai co bai co lo (" + withHoles + ") va nhieu to (" + multiSheet + ")");
+        }
+
+        /// <summary>Chay mot bai benh ly voi han gio: khong duoc treo, khong duoc nem loi ngoai du kien.</summary>
+        private static NestingResult NestWithin(NestingRequest r, int seconds, string what)
+        {
+            NestingResult res = null;
+            Exception error = null;
+            System.Threading.Tasks.Task t = System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    res = Nest(r);
+                }
+                catch (Exception ex)
+                {
+                    error = ex;
+                }
+            });
+
+            True(t.Wait(TimeSpan.FromSeconds(seconds)), what + ": TREO (> " + seconds + " s)");
+            if (error != null) throw new NestingAssertException(what + ": nem loi " + error.GetType().Name + ": " + error.Message);
+            True(res.Validation.IsValid, what + ": validator " + (res.Validation.IsValid ? "" : res.Validation.Issues[0].ToString()));
+            int requested = 0;
+            foreach (PartGroup g in r.Groups) requested += Math.Max(0, g.Quantity);
+            Equal(requested, res.Statistics.PlacedQuantity + res.Statistics.UnplacedQuantity, what + ": du so luong");
+            return res;
+        }
+
+        /// <summary>
+        /// Dau vao BENH LY: khong crash, khong treo, khong bao DAT cho bo cuc sai. Hinh hong thi
+        /// phai "chua xep" kem ly do, khong duoc sua ho.
+        /// </summary>
+        private static void C48_PathologicalInputs()
+        {
+            Func<NestingRequest> sheet = () => Request(1000, 500);
+
+            NestingRequest empty = sheet();
+            NestingResult none = NestWithin(empty, 30, "khong co chi tiet");
+            Equal(0, none.Sheets.Count, "khong co chi tiet -> khong to nao");
+
+            NestingRequest zero = sheet();
+            zero.Groups.Add(Poly("ZERO", 2, new double[] { 0, 0, 100, 0, 200, 0 }));        // dien tich 0
+            zero.Groups.Add(Poly("LINE", 1, new double[] { 0, 0, 100, 100 }));            // < 3 dinh
+            NestingResult z = NestWithin(zero, 30, "dien tich 0 / < 3 dinh");
+            Equal(3, z.Statistics.UnplacedQuantity, "hinh hong -> CHUA XEP");
+            foreach (UnplacedPart u in z.Unplaced) True(!string.IsNullOrEmpty(u.Reason), "co ly do");
+            Equal(0, z.Sheets.Count, "chi co hinh hong -> khong mo to nao");
+
+            NestingRequest odd = sheet();
+            odd.Groups.Add(Poly("DUP", 2, new double[] { 0, 0, 100, 0, 100, 0, 100, 50, 0, 50, 0, 50 }));             // dinh lap
+            odd.Groups.Add(Poly("COL", 2, new double[] { 0, 0, 50, 0, 100, 0, 100, 50, 50, 50, 0, 50 }));             // canh thang hang
+            odd.Groups.Add(Poly("EPS", 2, new double[] { 0, 0, 100, 0, 100, 0.001, 100, 60, 0, 60 }));                 // canh 0.001 mm
+            odd.Groups.Add(Poly("THIN", 2, new double[] { 0, 0, 400, 0, 400, 0.05, 0, 0.05 }));                        // day 0.05 mm
+            NestingResult o = NestWithin(odd, 60, "dinh lap / thang hang / canh sieu ngan / sieu mong");
+            Equal(8, o.Statistics.PlacedQuantity, "cac hinh hop le ky quac van xep duoc");
+
+            NestingRequest holes = sheet();
+            holes.Groups.Add(Poly("TINYHOLE", 2, new double[] { 0, 0, 120, 0, 120, 80, 0, 80 }, new double[] { 60, 40, 60.01, 40, 60.01, 40.01 }));
+            holes.Groups.Add(Poly("NEAREDGE", 2, new double[] { 0, 0, 120, 0, 120, 80, 0, 80 }, new double[] { 0.001, 10, 50, 10, 50, 70, 0.001, 70 }));
+            holes.Groups.Add(Poly("TOUCH", 1, new double[] { 0, 0, 120, 0, 120, 80, 0, 80 }, new double[] { 0, 10, 50, 10, 50, 70, 0, 70 }));
+            holes.Groups.Add(Rect("S", 20, 20, 3));
+            NestWithin(holes, 60, "lo sieu nho / lo sat bien / lo cham bien");
+
+            NestingRequest far = sheet();
+            far.Groups.Add(Poly("FAR", 2, new double[] { 900000, -900000, 900100, -900000, 900100, -899950, 900000, -899950 }));
+            far.Groups.Add(Poly("NEG", 2, new double[] { -500, -300, -380, -300, -380, -220, -500, -220 }));
+            NestingResult f = NestWithin(far, 60, "toa do rat xa / am");
+            Equal(4, f.Statistics.PlacedQuantity, "toa do xa / am van xep duoc (hinh tinh theo he rieng)");
+
+            NestingRequest huge = sheet();
+            huge.Groups.Add(Rect("HUGE", 5000, 3000, 2));
+            huge.Groups.Add(Rect("OK", 100, 100, 2));
+            NestingResult hg = NestWithin(huge, 30, "chi tiet lon hon kho");
+            Equal(2, hg.Statistics.UnplacedQuantity, "chi tiet lon hon kho -> CHUA XEP");
+            Equal(2, hg.Statistics.PlacedQuantity, "chi tiet khac van xep");
+
+            NestingRequest mat = sheet();
+            mat.SheetByMaterial["2MM"] = new SheetSpec("M2", 1000, 500);
+            mat.Groups.Add(new PartGroup("BAD2", new PartShape(PolyShape.Create(new List<IntPoint>(), null)), 2, "2MM"));
+            mat.Groups.Add(Rect("GOOD", 100, 50, 2));
+            NestingResult m = NestWithin(mat, 30, "vat lieu chi co hinh hong");
+            Equal(2, m.Statistics.UnplacedQuantity, "vat lieu hong -> chua xep");
+            Equal(2, m.Statistics.PlacedQuantity, "vat lieu khac van xep");
+
+            NestingRequest qty0 = sheet();
+            qty0.Groups.Add(Rect("Q0", 100, 50, 0));
+            NestingResult q = NestWithin(qty0, 30, "so luong 0");
+            Equal(0, q.Statistics.PlacedQuantity + q.Statistics.UnplacedQuantity, "SL 0 -> khong co ban sao nao");
+            ExpectArgument(() => { NestingRequest r = sheet(); r.Groups.Add(Rect("QN", 100, 50, -3)); Nest(r); }, "SL am");
+
+            NestingRequest many = sheet();
+            many.Settings.ExtraSeededOrderings = 0;
+            many.Groups.Add(Rect("SMALL", 10, 10, 600));
+            NestingResult mn = NestWithin(many, 240, "so luong lon (600)");
+            Equal(600, mn.Statistics.PlacedQuantity + mn.Statistics.UnplacedQuantity, "600 ban sao du");
         }
     }
 }

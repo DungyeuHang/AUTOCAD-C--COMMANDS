@@ -20,8 +20,23 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
         public static long ToUnits(double mm)
         {
-            return (long)Math.Round(mm * PerMm, MidpointRounding.AwayFromZero);
+            // Ep kieu (long) cua NaN / vo cuc / so qua lon KHONG bao loi ma ra long.MinValue -
+            // da do: Gap = Infinity thanh khe 0.001 mm va validator van DAT (vi validator cung
+            // doi don vi y nhu vay). Phai tu choi ro rang.
+            // Nem loi o ham RIENG: giu ham nay nho de JIT van inline (no nam tren duong nong -
+            // FitsInsideSheet goi hang chuc trieu lan); de throw o day da do cham 5% tren ban ve that.
+            double units = mm * PerMm;
+            if (!(units <= MaxAbsUnits && units >= -MaxAbsUnits)) ThrowInvalidLength(mm);
+            return (long)Math.Round(units, MidpointRounding.AwayFromZero);
         }
+
+        private static void ThrowInvalidLength(double mm)
+        {
+            throw new ArgumentOutOfRangeException("mm", mm, "Gia tri do dai khong hop le (NaN, vo cuc hoac qua lon).");
+        }
+
+        /// <summary>Tran an toan cua phep doi don vi (xa duoi long.MaxValue ~ 9.2e18).</summary>
+        private const double MaxAbsUnits = 4e18;
 
         public static double ToMm(long units)
         {

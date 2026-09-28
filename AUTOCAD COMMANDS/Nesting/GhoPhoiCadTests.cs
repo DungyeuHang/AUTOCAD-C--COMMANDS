@@ -30,6 +30,10 @@ namespace AUTOCAD_COMMANDS.Nesting
             NestingTestHarness.Run(report, "B11. Chu khac theo DUNG phep bien hinh cua chi tiet o ca 8 huong", B11_EngravingTransform);
             NestingTestHarness.Run(report, "B12. Chi tiet CHUA XEP van mang theo hinh khac", B12_EngravingOnUnplacedPart);
             NestingTestHarness.Run(report, "B13. Ve thang vao ban ve dang mo, da pha khoi, giu layer", B13_DrawIntoCurrentDrawing);
+            NestingTestHarness.Run(report, "B14. Round-trip DWG that: doc lai hinh -> khe/le/chong/lo/hinh tung chi tiet (+6 dot bien)", B14_RoundTripNewDrawing);
+            NestingTestHarness.Run(report, "B15. Round-trip ve thang vao ban ve (mac dinh), goc am le", B15_RoundTripDrawIntoCurrent);
+            NestingTestHarness.Run(report, "B16. Chi tiet da xep ma thieu hinh nguon -> tu choi, KHONG co file / khong dung ban ve", B16_WriterRefusesMissingSource);
+            NestingTestHarness.Run(report, "B17. File cai dat: NaN / vo cuc / enum la bi bo qua, gia tri dung van doc", B17_SettingsRejectNonsense);
             GhoPhoiOrderCadTests.Run(report);
             NestingTestHarness.Summary(report);
             return report;
@@ -1418,6 +1422,675 @@ namespace AUTOCAD_COMMANDS.Nesting
                 }
 
                 tr.Abort();
+            }
+        }
+
+        // ==================================================================================
+        // B14/B15: ROUND-TRIP THAT - ghi DWG, doc lai bang CHINH duong nhan dang, do lai hinh hoc
+        // ==================================================================================
+
+        /// <summary>
+        /// Dung sai lam tron khi doc lai: toa do DWG (double, mm) -> don vi 0.001 mm. Moi phep so
+        /// sanh duoi day dung DUNG hai nguon sai so co ly do: dung sai cung cua tung chi tiet
+        /// (<see cref="GhoPhoiSettings.ArcToleranceMm"/>, chi cho vong ngoai co cung - dung nhu loi
+        /// dung) va sai so lam tron nay. Khong co "slack" nao khac.
+        /// </summary>
+        private const double RoundTripEpsMm = 0.002;
+
+        /// <summary>Mot chi tiet doc lai tu DWG: da giac trong toa do the gioi (don vi 0.001 mm).</summary>
+        private sealed class OutputShape
+        {
+            public PolyShape Shape;
+            public double TolMm;
+            public int SheetIndex = -1;
+        }
+
+        /// <summary>
+        /// Ban ve nguon cho round-trip: tam bo tron co 2 lo tron (cung + lo), chu L bang LINE +
+        /// ARC, chu U lom (thang), hinh chiral co canh cung (bat lat guong se lat that), mot
+        /// chi tiet vat lieu 1.5MM (to thu hai, hang thu hai).
+        /// </summary>
+        private static void BuildRoundTripSource(Database db)
+        {
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                Append(db, tr, RoundedRect(0, 0, 300, 200, 20));
+                Append(db, tr, new Circle(new Point3d(80, 100, 0), Vector3d.ZAxis, 30));
+                Append(db, tr, new Circle(new Point3d(200, 100, 0), Vector3d.ZAxis, 20));
+                Txt(db, tr, "SL: 2", 120, 150);
+
+                Append(db, tr, new Line(new Point3d(1000, 0, 0), new Point3d(1400, 0, 0)));
+                Append(db, tr, new Line(new Point3d(1400, 0, 0), new Point3d(1400, 100, 0)));
+                Append(db, tr, new Line(new Point3d(1400, 100, 0), new Point3d(1120, 100, 0)));
+                Append(db, tr, new Arc(new Point3d(1120, 120, 0), 20, Math.PI, Math.PI * 1.5));
+                Append(db, tr, new Line(new Point3d(1100, 120, 0), new Point3d(1100, 300, 0)));
+                Append(db, tr, new Line(new Point3d(1100, 300, 0), new Point3d(1000, 300, 0)));
+                Append(db, tr, new Line(new Point3d(1000, 300, 0), new Point3d(1000, 0, 0)));
+                Txt(db, tr, "SL: 3", 1020, 20);
+
+                Polyline u = new Polyline();
+                double[] uxy = { 2000, 0, 2250, 0, 2250, 140, 2180, 140, 2180, 50, 2070, 50, 2070, 140, 2000, 140 };
+                for (int i = 0; i < uxy.Length; i += 2) u.AddVertexAt(i / 2, new Point2d(uxy[i], uxy[i + 1]), 0, 0, 0);
+                u.Closed = true;
+                Append(db, tr, u);
+                Txt(db, tr, "SL: 2", 2010, 10);
+
+                Polyline c = new Polyline();
+                double[] cxy = { 3000, 500, 3300, 500, 3300, 560, 3100, 560, 3100, 700, 3000, 700 };
+                for (int i = 0; i < cxy.Length; i += 2) c.AddVertexAt(i / 2, new Point2d(cxy[i], cxy[i + 1]), i == 2 ? 0.5 : 0.0, 0, 0);
+                c.Closed = true;
+                Append(db, tr, c);
+                Txt(db, tr, "SL: 3", 3010, 510);
+
+                Append(db, tr, RoundedRect(4000, 0, 260, 180, 15));
+                Txt(db, tr, "SL: 2", 4030, 60);
+                Append(db, tr, new MText { Location = new Point3d(4030, 150, 0), TextHeight = 10, Contents = "1.5MM" });
+                tr.Commit();
+            }
+        }
+
+        /// <summary>Snapshot cua ban ve nguon: moi entity + hop bao, de chung minh no khong doi.</summary>
+        private static string SourceSnapshot(Database db, ICollection<ObjectId> only)
+        {
+            List<string> rows = new List<string>();
+            using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+            {
+                foreach (ObjectId id in ModelSpaceIds(db, tr))
+                {
+                    if (only != null && !only.Contains(id)) continue;
+                    Entity e = (Entity)tr.GetObject(id, OpenMode.ForRead);
+                    Extents3d x = e.GeometricExtents;
+                    rows.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0}|{1}|{2:R},{3:R},{4:R},{5:R}",
+                        e.GetType().Name, e.Layer, x.MinPoint.X, x.MinPoint.Y, x.MaxPoint.X, x.MaxPoint.Y));
+                }
+            }
+
+            rows.Sort(StringComparer.Ordinal);
+            return string.Join("\n", rows.ToArray());
+        }
+
+        /// <summary>
+        /// Doc hinh hoc tu cac entity <paramref name="ids"/> cua ban ve DAU RA bang CHINH duong nhan
+        /// dang san xuat (bo qua layer GHOPHOI_*), cung cac khung to tren layer GHOPHOI_TO.
+        /// </summary>
+        private static void ReadBack(Database db, List<ObjectId> ids, GhoPhoiSettings s, out List<OutputShape> shapes, out List<Extents3d> frames)
+        {
+            shapes = new List<OutputShape>();
+            frames = new List<Extents3d>();
+            using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+            {
+                List<ObjectId> geometry = new List<ObjectId>();
+                foreach (ObjectId id in ids)
+                {
+                    Entity e = (Entity)tr.GetObject(id, OpenMode.ForRead);
+                    if (string.Equals(e.Layer, NestingDwgWriter.SheetLayer, StringComparison.OrdinalIgnoreCase) && e is Polyline)
+                    {
+                        frames.Add(e.GeometricExtents);
+                        continue;
+                    }
+
+                    if (e.Layer.StartsWith("GHOPHOI_", StringComparison.OrdinalIgnoreCase)) continue;
+                    geometry.Add(id);
+                }
+
+                NestReadResult read = NestingSelectionReader.Read(tr, geometry, s);
+                RecognitionResult rec = new PartRecognizer(s.ToRecognitionSettings()).Recognize(read.Chains, read.Texts);
+                foreach (RecognizedPart p in rec.Parts)
+                {
+                    if (p.Outer == null) continue;
+                    List<IList<IntPoint>> holes = new List<IList<IntPoint>>();
+                    foreach (RecognizedLoop h in p.Holes) holes.Add(ToUnits(h.Points));
+                    shapes.Add(new OutputShape
+                    {
+                        Shape = PolyShape.Create(ToUnits(p.Outer.Points), holes),
+                        TolMm = p.Outer.Approximated ? s.ArcToleranceMm : 0.0
+                    });
+                }
+            }
+
+            frames.Sort((a, b) =>
+            {
+                int c = b.MaxPoint.Y.CompareTo(a.MaxPoint.Y);        // hang tren truoc (vat lieu dau)
+                return c != 0 ? c : a.MinPoint.X.CompareTo(b.MinPoint.X);
+            });
+        }
+
+        private static List<IntPoint> ToUnits(List<Pt> pts)
+        {
+            List<IntPoint> r = new List<IntPoint>(pts.Count);
+            foreach (Pt p in pts) r.Add(IntPoint.FromMm(p.X, p.Y));
+            return r;
+        }
+
+        private static double MinDistanceMm(PolyShape a, PolyShape b)
+        {
+            double best = double.MaxValue;
+            List<IntPoint[]> ra = new List<IntPoint[]> { a.Outer }, rb = new List<IntPoint[]> { b.Outer };
+            ra.AddRange(a.Holes);
+            rb.AddRange(b.Holes);
+            foreach (IntPoint[] x in ra)
+            {
+                foreach (IntPoint[] y in rb)
+                {
+                    for (int i = 0; i < x.Length; i++)
+                    {
+                        for (int j = 0; j < y.Length; j++)
+                        {
+                            double d = GeometryMath.SegmentDistanceSquared(x[i], x[(i + 1) % x.Length], y[j], y[(j + 1) % y.Length]);
+                            if (d < best) best = d;
+                        }
+                    }
+                }
+            }
+
+            return Math.Sqrt(best) / NestUnits.PerMm;
+        }
+
+        /// <summary>Khoang cach lon nhat tu moi dinh cua <paramref name="a"/> toi bien cua <paramref name="b"/> (mm).</summary>
+        private static double VertexToBoundaryMm(PolyShape a, PolyShape b)
+        {
+            List<IntPoint[]> ra = new List<IntPoint[]> { a.Outer }, rb = new List<IntPoint[]> { b.Outer };
+            ra.AddRange(a.Holes);
+            rb.AddRange(b.Holes);
+            double worst = 0;
+            foreach (IntPoint[] x in ra)
+            {
+                foreach (IntPoint v in x)
+                {
+                    double best = double.MaxValue;
+                    foreach (IntPoint[] y in rb)
+                    {
+                        for (int j = 0; j < y.Length; j++)
+                        {
+                            IntPoint c = y[j], d = y[(j + 1) % y.Length];
+                            double t = GeometryMath.PointSegmentDistanceSquared(v.X, v.Y, c.X, c.Y, d.X, d.Y);
+                            if (t < best) best = t;
+                        }
+                    }
+
+                    worst = Math.Max(worst, Math.Sqrt(best) / NestUnits.PerMm);
+                }
+            }
+
+            return worst;
+        }
+
+        /// <summary>
+        /// Kiem DOC LAP tren hinh hoc doc tu DWG, so voi ket qua loi <paramref name="expected"/>:
+        ///   1. moi placement co DUNG mot chi tiet doc lai trung hinh (moi dinh cua ben nay cach
+        ///      bien ben kia &lt;= dung sai cung + eps, hai chieu) - bat ca sai xoay / lat / tinh tien;
+        ///   2. cung so lo;
+        ///   3. nam trong DUNG khung to cua no, cach mep &gt;= EdgeMargin (+ dung sai cung) - eps;
+        ///   4. moi cap tren cung to: khong chong, khong nam trong lo (khi cam), khe &gt;= Gap +
+        ///      dung sai hai ben - eps;
+        ///   5. khong co chi tiet la trong khung to; so khung = so to.
+        /// Tra ve danh sach loi (rong = dat).
+        /// </summary>
+        private static List<string> CheckRoundTrip(
+            NestingRequest req, NestingResult expected, List<OutputShape> shapes, List<Extents3d> frames)
+        {
+            List<string> issues = new List<string>();
+            NestingSettings ns = req.Settings;
+            Dictionary<string, PartGroup> groups = new Dictionary<string, PartGroup>(StringComparer.Ordinal);
+            foreach (PartGroup g in req.Groups) groups[g.Id] = g;
+
+            if (frames.Count != expected.Sheets.Count) issues.Add("so khung to " + frames.Count + " != so to " + expected.Sheets.Count);
+            int n = Math.Min(frames.Count, expected.Sheets.Count);
+
+            HashSet<OutputShape> used = new HashSet<OutputShape>();
+            for (int si = 0; si < n; si++)
+            {
+                SheetResult sheet = expected.Sheets[si];
+                Extents3d fe = frames[si];
+                if (Math.Abs(fe.MaxPoint.X - fe.MinPoint.X - sheet.Sheet.LengthMm) > RoundTripEpsMm ||
+                    Math.Abs(fe.MaxPoint.Y - fe.MinPoint.Y - sheet.Sheet.WidthMm) > RoundTripEpsMm)
+                {
+                    issues.Add("to " + si + ": khung sai kich thuoc");
+                }
+
+                long cx = NestUnits.ToUnits(fe.MinPoint.X), cy = NestUnits.ToUnits(fe.MinPoint.Y);
+                foreach (Placement pl in sheet.Placements)
+                {
+                    PartGroup g = groups[pl.PartGroupId];
+                    PolyShape want = g.Shape.Polygon.Transform(pl.Orientation, pl.TranslationX + cx, pl.TranslationY + cy);
+                    PolyShape wantOuter = PolyShape.Create(want.Outer, null);
+                    double tol = g.Shape.ToleranceMm + RoundTripEpsMm;
+                    OutputShape hit = null;
+                    foreach (OutputShape o in shapes)
+                    {
+                        if (used.Contains(o)) continue;
+                        if (!o.Shape.Bounds.Overlaps(want.Bounds, NestUnits.ToUnits(tol))) continue;
+                        PolyShape outer = PolyShape.Create(o.Shape.Outer, null);
+                        if (VertexToBoundaryMm(wantOuter, outer) <= tol && VertexToBoundaryMm(outer, wantOuter) <= tol)
+                        {
+                            hit = o;
+                            break;
+                        }
+                    }
+
+                    if (hit == null)
+                    {
+                        issues.Add(pl.InstanceId + ": KHONG co hinh trung khop trong DWG (xoay/lat/tinh tien/hinh sai?)");
+                        continue;
+                    }
+
+                    used.Add(hit);
+                    hit.SheetIndex = si;
+                    if (hit.Shape.Holes.Length != g.Shape.Polygon.Holes.Length)
+                    {
+                        issues.Add(pl.InstanceId + ": so lo " + hit.Shape.Holes.Length + " != " + g.Shape.Polygon.Holes.Length);
+                    }
+                    else if (VertexToBoundaryMm(want, hit.Shape) > tol || VertexToBoundaryMm(hit.Shape, want) > tol)
+                    {
+                        issues.Add(pl.InstanceId + ": lo SAI vi tri / hinh dang");
+                    }
+                }
+
+                // Lề mép: khung la hinh chu nhat loi nen khoang cach bien chi tiet -> mep = min qua cac dinh.
+                foreach (OutputShape o in shapes)
+                {
+                    LongRect b = o.Shape.Bounds;
+                    bool inFrame = NestUnits.ToMm(b.MinX) >= fe.MinPoint.X - 1 && NestUnits.ToMm(b.MaxX) <= fe.MaxPoint.X + 1 &&
+                                   NestUnits.ToMm(b.MinY) >= fe.MinPoint.Y - 1 && NestUnits.ToMm(b.MaxY) <= fe.MaxPoint.Y + 1;
+                    if (!inFrame) continue;
+                    if (o.SheetIndex != si) issues.Add("to " + si + ": co chi tiet LA trong khung (khong khop placement nao)");
+
+                    double edge = double.MaxValue;
+                    foreach (IntPoint v in o.Shape.Outer)
+                    {
+                        double x = NestUnits.ToMm(v.X), y = NestUnits.ToMm(v.Y);
+                        edge = Math.Min(edge, Math.Min(Math.Min(x - fe.MinPoint.X, fe.MaxPoint.X - x), Math.Min(y - fe.MinPoint.Y, fe.MaxPoint.Y - y)));
+                    }
+
+                    if (edge < ns.EdgeMarginMm + o.TolMm - RoundTripEpsMm)
+                    {
+                        issues.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "to {0}: cach mep {1:0.###} mm < {2:0.###}", si, edge, ns.EdgeMarginMm));
+                    }
+                }
+            }
+
+            List<OutputShape> placed = shapes.FindAll(o => o.SheetIndex >= 0);
+            for (int i = 0; i < placed.Count; i++)
+            {
+                for (int j = i + 1; j < placed.Count; j++)
+                {
+                    OutputShape a = placed[i], b = placed[j];
+                    if (a.SheetIndex != b.SheetIndex) continue;
+                    if (GeometryMath.PointInMaterial(a.Shape.Outer[0], b.Shape) || GeometryMath.PointInMaterial(b.Shape.Outer[0], a.Shape))
+                    {
+                        issues.Add("to " + a.SheetIndex + ": hai chi tiet CHONG len nhau");
+                        continue;
+                    }
+
+                    if (!ns.AllowPartInsideHole &&
+                        ((b.Shape.Holes.Length > 0 && GeometryMath.PointInRing(a.Shape.Outer[0], b.Shape.Outer) > 0) ||
+                         (a.Shape.Holes.Length > 0 && GeometryMath.PointInRing(b.Shape.Outer[0], a.Shape.Outer) > 0)))
+                    {
+                        issues.Add("to " + a.SheetIndex + ": chi tiet nam trong LO KIN cua chi tiet khac");
+                        continue;
+                    }
+
+                    double d = MinDistanceMm(a.Shape, b.Shape);
+                    double need = ns.GapMm + a.TolMm + b.TolMm - RoundTripEpsMm;
+                    if (d < need)
+                    {
+                        issues.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "to {0}: khe {1:0.###} mm < {2:0.###}", a.SheetIndex, d, ns.GapMm));
+                    }
+                }
+            }
+
+            return issues;
+        }
+
+        /// <summary>
+        /// HOI QUY: placement thieu dinh nghia hinh truoc day bi BO QUA IM LANG -> ban ve ra thieu
+        /// chi tiet trong khi validator bao DAT. Gio phai nem loi TRUOC khi tao bat cu thu gi.
+        /// </summary>
+        private static void B16_WriterRefusesMissingSource()
+        {
+            using (Database db = new Database(true, true))
+            {
+                RoundTripCase c = PrepareRoundTrip(db);
+                string placedGroup = c.Result.Sheets[0].Placements[0].PartGroupId;
+
+                List<List<OutputPart>> broken = new List<List<OutputPart>>
+                {
+                    c.Outputs.FindAll(o => o.Group.Id != placedGroup),                          // thieu han
+                    c.Outputs.ConvertAll(o => o.Group.Id == placedGroup
+                        ? new OutputPart { Group = o.Group, Origin = o.Origin }                 // co nhung rong
+                        : o)
+                };
+
+                foreach (List<OutputPart> outputs in broken)
+                {
+                    string path = Path.Combine(Path.GetTempPath(), "ghophoi_b16_" + Guid.NewGuid().ToString("N") + ".dwg");
+                    bool threw = false;
+                    try
+                    {
+                        NestingDwgWriter.Write(db, path, c.Request, c.Result, outputs, Settings(), "b16");
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        threw = true;
+                    }
+                    finally
+                    {
+                        bool exists = File.Exists(path);
+                        TryDelete(path);
+                        True(!exists, "khong duoc co file DWG thieu chi tiet");
+                    }
+
+                    True(threw, "ghi ban ve thieu hinh nguon phai nem loi");
+
+                    int before;
+                    using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction()) before = ModelSpaceIds(db, tr).Count;
+                    threw = false;
+                    try
+                    {
+                        NestingDwgWriter.DrawIntoCurrent(db, Point3d.Origin, c.Request, c.Result, outputs, Settings(), "b16");
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        threw = true;
+                    }
+
+                    True(threw, "ve thang thieu hinh nguon phai nem loi");
+                    Equal(c.SourceBefore, SourceSnapshot(db, null), "ban ve dang mo KHONG doi");
+                    using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+                    {
+                        Equal(before, ModelSpaceIds(db, tr).Count, "khong them entity nao");
+                        BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                        True(!bt.Has("GHOPHOI_KETQUA"), "khong de lai dinh nghia block");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// HOI QUY: "Infinity" trong file cai dat lot qua kiem "&gt;= 0" va lam bang cai dat nem
+        /// loi moi lan mo (roi con bi ghi lai); RotationMode "5" cung vay. Gia tri la phai bi bo
+        /// qua (giu mac dinh), gia tri dung van doc duoc.
+        /// </summary>
+        private static void B17_SettingsRejectNonsense()
+        {
+            GhoPhoiSettings d = new GhoPhoiSettings();
+            string[] doubles = { "GapMm", "EdgeMarginMm", "TimeBudgetSeconds", "ArcToleranceMm", "JoinToleranceMm", "MaxTextDistanceMm", "SheetSpacingMm" };
+            foreach (string bad in new[] { "Infinity", "-Infinity", "NaN", "1e400", "abc", "" })
+            {
+                GhoPhoiSettings s = new GhoPhoiSettings();
+                foreach (string key in doubles) GhoPhoiSettingsStore.Apply(s, key, bad);
+                Equal(d.GapMm, s.GapMm, "GapMm '" + bad + "'");
+                Equal(d.EdgeMarginMm, s.EdgeMarginMm, "EdgeMarginMm '" + bad + "'");
+                Equal(d.TimeBudgetSeconds, s.TimeBudgetSeconds, "TimeBudgetSeconds '" + bad + "'");
+                Equal(d.ArcToleranceMm, s.ArcToleranceMm, "ArcToleranceMm '" + bad + "'");
+                Equal(d.JoinToleranceMm, s.JoinToleranceMm, "JoinToleranceMm '" + bad + "'");
+                Equal(d.MaxTextDistanceMm, s.MaxTextDistanceMm, "MaxTextDistanceMm '" + bad + "'");
+                Equal(d.SheetSpacingMm, s.SheetSpacingMm, "SheetSpacingMm '" + bad + "'");
+            }
+
+            foreach (string bad in new[] { "5", "-1", "3", "Bogus" })
+            {
+                GhoPhoiSettings s = new GhoPhoiSettings { RotationMode = GhoPhoiRotationMode.HalfTurns };
+                GhoPhoiSettingsStore.Apply(s, "RotationMode", bad);
+                Equal(GhoPhoiRotationMode.HalfTurns, s.RotationMode, "RotationMode '" + bad + "' phai bi bo qua");
+            }
+
+            GhoPhoiSettings good = new GhoPhoiSettings();
+            GhoPhoiSettingsStore.Apply(good, "GapMm", "6.5");
+            GhoPhoiSettingsStore.Apply(good, "EdgeMarginMm", "0");
+            GhoPhoiSettingsStore.Apply(good, "RotationMode", "None");
+            GhoPhoiSettingsStore.Apply(good, "SearchEffort", "Balanced");
+            GhoPhoiSettingsStore.Apply(good, "AllowPartInsideHole", "True");
+            Equal(6.5, good.GapMm, "gia tri dung van doc");
+            Equal(0.0, good.EdgeMarginMm, "le 0 hop le");
+            Equal(GhoPhoiRotationMode.None, good.RotationMode, "enum dung van doc");
+            Equal(SearchEffort.Balanced, good.SearchEffort, "muc tim kiem");
+            True(good.AllowPartInsideHole, "cho phep lo kin");
+
+            double v;
+            True(!GhoPhoiSettingsStore.TryD("Infinity", out v) && !GhoPhoiSettingsStore.TryD("NaN", out v), "TryD tu choi vo cuc / NaN (ca danh muc kho phoi)");
+            True(GhoPhoiSettingsStore.TryD(" 1250 ", out v) && v == 1250, "TryD so thuong");
+        }
+
+        private static void ExpectIssue(List<string> issues, string fragment, string what)
+        {
+            True(issues.Exists(s => s.IndexOf(fragment, StringComparison.Ordinal) >= 0),
+                what + " phai bi bat voi loi '" + fragment + "', thuc te: " + (issues.Count == 0 ? "(khong loi nao)" : string.Join(" | ", issues.ToArray())));
+        }
+
+        private static NestingResult CopyResult(NestingResult r)
+        {
+            NestingResult c = new NestingResult();
+            foreach (SheetResult s in r.Sheets)
+            {
+                SheetResult cs = new SheetResult(s.Index, s.Material, s.Sheet)
+                {
+                    NumberInMaterial = s.NumberInMaterial,
+                    UsedLengthMm = s.UsedLengthMm,
+                    RemnantLengthMm = s.RemnantLengthMm,
+                    PartAreaMm2 = s.PartAreaMm2,
+                    Utilization = s.Utilization,
+                    SheetUtilization = s.SheetUtilization,
+                    WasteAreaMm2 = s.WasteAreaMm2,
+                    RemnantAreaMm2 = s.RemnantAreaMm2
+                };
+                foreach (Placement p in s.Placements)
+                {
+                    cs.Placements.Add(new Placement
+                    {
+                        InstanceId = p.InstanceId,
+                        PartGroupId = p.PartGroupId,
+                        SheetIndex = p.SheetIndex,
+                        RotationDeg = p.RotationDeg,
+                        Mirror = p.Mirror,
+                        OrderName = p.OrderName,
+                        TranslationX = p.TranslationX,
+                        TranslationY = p.TranslationY
+                    });
+                }
+
+                c.Sheets.Add(cs);
+            }
+
+            c.Unplaced.AddRange(r.Unplaced);
+            c.Validation = r.Validation;
+            return c;
+        }
+
+        private sealed class RoundTripCase
+        {
+            public Database Db;
+            public NestReadResult Read;
+            public NestingRequest Request;
+            public NestingResult Result;
+            public List<OutputPart> Outputs;
+            public string SourceBefore;
+        }
+
+        private static RoundTripCase PrepareRoundTrip(Database db)
+        {
+            BuildRoundTripSource(db);
+            RoundTripCase c = new RoundTripCase { Db = db };
+            RecognitionResult rec;
+            using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+            {
+                rec = ReadAndRecognize(db, tr, Settings(), out c.Read);
+            }
+
+            Equal(5, rec.Parts.FindAll(p => p.IsNestable).Count, "5 chi tiet nhan dang");
+            c.Request = new NestingRequest { DefaultSheet = new SheetSpec("T", 1500, 600) };
+            c.Request.SheetByMaterial["1.5MM"] = new SheetSpec("T15", 900, 500);
+            c.Request.Settings.AllowMirror = true;
+            c.Request.Groups.AddRange(PartRecognizer.ToPartGroups(rec.Parts, Settings().ArcToleranceMm));
+            c.Result = new SimpleNestingEngine().Nest(c.Request, CancellationToken.None, null);
+            True(c.Result.Validation.IsValid, "validator loi");
+            Equal(12, c.Result.Statistics.PlacedQuantity, "xep du 2 + 3 + 2 + 3 + 2");
+            True(c.Result.Sheets.Count >= 2, "hai vat lieu -> it nhat 2 to");
+            bool anyRotated = false, anyHoles = false;
+            foreach (Placement p in c.Result.Placements) if (p.RotationDeg != 0) anyRotated = true;
+
+            foreach (PartGroup g in c.Request.Groups) if (g.Shape.Polygon.Holes.Length > 0) anyHoles = true;
+            True(anyRotated, "phep thu can it nhat mot chi tiet XOAY");
+            True(anyHoles, "phep thu can chi tiet co LO");
+
+            c.Outputs = GhoPhoiPipeline.BuildOutputParts(c.Request.Groups, c.Read);
+            c.SourceBefore = SourceSnapshot(db, null);
+            return c;
+        }
+
+        /// <summary>Ghi ra FILE DWG moi (ca dang block va dang pha khoi), doc lai tu file, kiem doc lap.</summary>
+        private static List<string> RoundTripNewDrawing(RoundTripCase c, NestingResult toWrite, List<OutputPart> outputs, bool asBlocks)
+        {
+            return RoundTripNewDrawing(c, toWrite, outputs, asBlocks, c.Request);
+        }
+
+        /// <param name="checkAgainst">Yeu cau dung de KIEM (mac dinh = yeu cau da ghep).</param>
+        private static List<string> RoundTripNewDrawing(RoundTripCase c, NestingResult toWrite, List<OutputPart> outputs, bool asBlocks, NestingRequest checkAgainst)
+        {
+            string path = Path.Combine(Path.GetTempPath(), "ghophoi_rt_" + Guid.NewGuid().ToString("N") + ".dwg");
+            try
+            {
+                GhoPhoiSettings s = Settings();
+                s.LabelParts = false;
+                s.OutputAsBlocks = asBlocks;
+                NestingDwgWriter.Write(c.Db, path, c.Request, toWrite, outputs, s, "roundtrip");
+                Equal(c.SourceBefore, SourceSnapshot(c.Db, null), "ban ve nguon KHONG doi");
+
+                using (Database check = new Database(false, true))
+                {
+                    check.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare, true, string.Empty);
+                    List<ObjectId> ids;
+                    using (Transaction tr = check.TransactionManager.StartOpenCloseTransaction()) ids = ModelSpaceIds(check, tr);
+                    List<OutputShape> shapes;
+                    List<Extents3d> frames;
+                    ReadBack(check, ids, s, out shapes, out frames);
+                    return CheckRoundTrip(checkAgainst, c.Result, shapes, frames);
+                }
+            }
+            finally
+            {
+                TryDelete(path);
+            }
+        }
+
+        /// <summary>
+        /// B14. Round-trip THAT tren file DWG: ghi -> doc file -> nhan dang lai -> do lai tu hinh
+        /// hoc DWG: hinh tung chi tiet (ca xoay / lat), so lo, lề mép, khe, chong, lo kin.
+        /// Ca dang block lan dang pha khoi. Kem 4 dot bien co chu dich (phai bi bat).
+        /// </summary>
+        private static void B14_RoundTripNewDrawing()
+        {
+            using (Database db = new Database(true, true))
+            {
+                RoundTripCase c = PrepareRoundTrip(db);
+
+                foreach (bool asBlocks in new[] { true, false })
+                {
+                    List<string> issues = RoundTripNewDrawing(c, c.Result, c.Outputs, asBlocks);
+                    True(issues.Count == 0, (asBlocks ? "block" : "pha khoi") + ": " + string.Join(" | ", issues.ToArray()));
+                }
+
+                // ---- dot bien: bo kiem phai BAT duoc ----
+                Placement first = c.Result.Sheets[0].Placements[0];
+                Placement second = c.Result.Sheets[0].Placements[1];
+
+                NestingResult overlap = CopyResult(c.Result);
+                overlap.Sheets[0].Placements[1].TranslationX = first.TranslationX;
+                overlap.Sheets[0].Placements[1].TranslationY = first.TranslationY;
+                overlap.Sheets[0].Placements[1].RotationDeg = first.RotationDeg;
+                overlap.Sheets[0].Placements[1].Mirror = first.Mirror;
+                // Hai duong bao TRUNG KHIT nhau: bo nhan dang khong tach duoc thanh hai chi tiet nen
+                // ca hai "bien mat" khoi ket qua doc lai - van la phat hien dung, chi khac cau bao.
+                List<string> overlapIssues = RoundTripNewDrawing(c, overlap, c.Outputs, false);
+                True(overlapIssues.Exists(s => s.Contains("CHONG") || s.Contains("KHONG co hinh trung khop")),
+                    "dot bien CHONG HINH phai bi bat, thuc te: " + string.Join(" | ", overlapIssues.ToArray()));
+
+                // Khe: tren CHINH DWG dung, doi Gap len 6 mm (thuc te chi ~5 mm) -> phep do khe phai bao.
+                NestingRequest stricter = new NestingRequest { DefaultSheet = c.Request.DefaultSheet, Settings = c.Request.Settings.Clone() };
+                foreach (KeyValuePair<string, SheetSpec> kv in c.Request.SheetByMaterial) stricter.SheetByMaterial[kv.Key] = kv.Value;
+                stricter.Groups.AddRange(c.Request.Groups);
+                stricter.Settings.GapMm = c.Request.Settings.GapMm + 1.0;
+                ExpectIssue(RoundTripNewDrawing(c, c.Result, c.Outputs, false, stricter), "khe", "phep do KHE (Gap + 1 mm)");
+
+                NestingResult rotated = CopyResult(c.Result);
+                rotated.Sheets[0].Placements[0].RotationDeg = (first.RotationDeg + 90) % 360;
+                ExpectIssue(RoundTripNewDrawing(c, rotated, c.Outputs, true), "KHONG co hinh trung khop", "dot bien SAI GOC XOAY");
+
+                NestingResult edge = CopyResult(c.Result);
+                PartGroup g0 = c.Request.Groups.Find(g => g.Id == first.PartGroupId);
+                LongRect b0 = g0.Shape.Polygon.Transform(first.Orientation, 0, 0).Bounds;
+                edge.Sheets[0].Placements[0].TranslationX = NestUnits.ToUnits(1.0) - b0.MinX;   // cach mep 1 mm < 5 mm
+                ExpectIssue(RoundTripNewDrawing(c, edge, c.Outputs, false), "cach mep", "dot bien LE MEP");
+
+                // Bo lo: bo cac CIRCLE khoi nguon sao chep cua tam co lo.
+                List<OutputPart> noHole = new List<OutputPart>();
+                foreach (OutputPart op in c.Outputs)
+                {
+                    OutputPart copy = new OutputPart { Group = op.Group, Origin = op.Origin };
+                    using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+                    {
+                        foreach (ObjectId id in op.SourceIds)
+                        {
+                            if (!(tr.GetObject(id, OpenMode.ForRead) is Circle)) copy.SourceIds.Add(id);
+                        }
+                    }
+
+                    noHole.Add(copy);
+                }
+
+                ExpectIssue(RoundTripNewDrawing(c, c.Result, noHole, true), "so lo", "dot bien MAT LO");
+
+                // Lat guong sai tren chi tiet chiral (300 + cung phong ~15 x 200, khong lo): CUNG hop
+                // bao, KHAC hinh - bo kiem bang hop bao (B5 / B7) khong bat duoc loi nay.
+                PartGroup chiralGroup = c.Request.Groups.Find(g =>
+                    g.Shape.Polygon.Holes.Length == 0 && g.Shape.ToleranceMm > 0 &&
+                    g.Shape.WidthMm > 300 && g.Shape.WidthMm < 330 && Math.Abs(g.Shape.HeightMm - 200) < 1);
+                True(chiralGroup != null, "phai tim thay chi tiet chiral");
+                int chiralSheet = c.Result.Sheets.FindIndex(sh => sh.Placements.Exists(p => p.PartGroupId == chiralGroup.Id));
+                True(chiralSheet >= 0, "chi tiet chiral phai duoc xep");
+
+                NestingResult mirrored = CopyResult(c.Result);
+                Placement m = mirrored.Sheets[chiralSheet].Placements.Find(p => p.PartGroupId == chiralGroup.Id);
+                LongRect before = chiralGroup.Shape.Polygon.Transform(m.Orientation, m.TranslationX, m.TranslationY).Bounds;
+                m.Mirror = !m.Mirror;
+                LongRect after = chiralGroup.Shape.Polygon.Transform(m.Orientation, 0, 0).Bounds;
+                m.TranslationX = before.MinX - after.MinX;       // giu nguyen goc hop bao
+                m.TranslationY = before.MinY - after.MinY;
+                LongRect moved = chiralGroup.Shape.Polygon.Transform(m.Orientation, m.TranslationX, m.TranslationY).Bounds;
+                True(moved.MinX == before.MinX && moved.MaxX == before.MaxX && moved.MinY == before.MinY && moved.MaxY == before.MaxY,
+                    "dot bien lat guong phai giu NGUYEN hop bao");
+                ExpectIssue(RoundTripNewDrawing(c, mirrored, c.Outputs, true), "KHONG co hinh trung khop", "dot bien LAT GUONG SAI (cung hop bao)");
+            }
+        }
+
+        /// <summary>
+        /// B15. Round-trip cua cach xuat MAC DINH: ve thang vao ban ve dang mo (pha khoi). Chi
+        /// doc cac entity MOI; ban ve goc phai nguyen tung entity.
+        /// </summary>
+        private static void B15_RoundTripDrawIntoCurrent()
+        {
+            using (Database db = new Database(true, true))
+            {
+                RoundTripCase c = PrepareRoundTrip(db);
+                HashSet<ObjectId> before;
+                using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction()) before = new HashSet<ObjectId>(ModelSpaceIds(db, tr));
+
+                GhoPhoiSettings s = Settings();
+                s.LabelParts = false;
+                s.OutputAsBlocks = false;
+                Point3d at = new Point3d(-12345.5, 67890.25, 0);      // goc am / lon, khong nguyen
+                NestingDwgWriter.DrawIntoCurrent(db, at, c.Request, c.Result, c.Outputs, s, "roundtrip");
+
+                Equal(c.SourceBefore, SourceSnapshot(db, before), "entity goc KHONG doi");
+                List<ObjectId> added;
+                using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction()) added = ModelSpaceIds(db, tr).FindAll(id => !before.Contains(id));
+                True(added.Count > 0, "co entity moi");
+
+                List<OutputShape> shapes;
+                List<Extents3d> frames;
+                ReadBack(db, added, s, out shapes, out frames);
+                List<string> issues = CheckRoundTrip(c.Request, c.Result, shapes, frames);
+                True(issues.Count == 0, string.Join(" | ", issues.ToArray()));
             }
         }
     }

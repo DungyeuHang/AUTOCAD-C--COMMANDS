@@ -77,7 +77,8 @@ namespace AUTOCAD_COMMANDS.Nesting
             }
         }
 
-        private static void Apply(GhoPhoiSettings s, string key, string val)
+        /// <remarks>internal de phep thu kiem duoc tung khoa ma khong dung vao file cai dat that.</remarks>
+        internal static void Apply(GhoPhoiSettings s, string key, string val)
         {
             CultureInfo ci = CultureInfo.InvariantCulture;
             double d;
@@ -90,8 +91,9 @@ namespace AUTOCAD_COMMANDS.Nesting
                 case "AllowMirror": if (bool.TryParse(val, out b)) s.AllowMirror = b; break;
                 case "AllowPartInsideHole": if (bool.TryParse(val, out b)) s.AllowPartInsideHole = b; break;
                 case "RotationMode":
+                    // Enum.TryParse nhan ca SO la ("5") - dua vao bang cai dat se nem loi o SelectedIndex.
                     GhoPhoiRotationMode mode;
-                    if (Enum.TryParse(val, out mode)) s.RotationMode = mode;
+                    if (Enum.TryParse(val, out mode) && Enum.IsDefined(typeof(GhoPhoiRotationMode), mode)) s.RotationMode = mode;
                     break;
                 case "TimeBudgetSeconds": if (TryD(val, out d) && d > 0) s.TimeBudgetSeconds = d; break;
                 case "DeterministicSearch": if (bool.TryParse(val, out b)) s.DeterministicSearch = b; break;
@@ -204,7 +206,8 @@ namespace AUTOCAD_COMMANDS.Nesting
 
                         string[] parts = raw.Split('\t');
                         double w, l;
-                        if (parts.Length < 3 || !TryD(parts[1], out w) || !TryD(parts[2], out l) || w <= 0 || l <= 0)
+                        if (parts.Length < 3 || !TryD(parts[1], out w) || !TryD(parts[2], out l) || w <= 0 || l <= 0 ||
+                            w > SimpleNestingEngine.MaxSheetMm || l > SimpleNestingEngine.MaxSheetMm)
                         {
                             error = string.Format(CultureInfo.InvariantCulture,
                                 "Dong {0} trong {1} khong hop le (can: Ten<TAB>Rong<TAB>Dai<TAB>VatLieu).", lineNo, CatalogPath);
@@ -248,9 +251,14 @@ namespace AUTOCAD_COMMANDS.Nesting
             yield return "# Ten<TAB>Rong (mm)<TAB>Dai (mm)<TAB>Vat lieu tuong thich (cach nhau dau phay, bo trong = tat ca)";
         }
 
-        private static bool TryD(string s, out double d)
+        /// <summary>
+        /// Chi nhan so HUU HAN. NumberStyles.Float nhan ca "Infinity" / "NaN": vo cuc lot qua cac
+        /// phep kiem "&gt;= 0" va lam bang cai dat nem loi moi lan mo (roi con bi ghi lai vao file).
+        /// </summary>
+        internal static bool TryD(string s, out double d)
         {
-            return double.TryParse((s ?? string.Empty).Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out d);
+            return double.TryParse((s ?? string.Empty).Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out d)
+                && !double.IsNaN(d) && !double.IsInfinity(d);
         }
 
         private static List<string> SplitList(string val)

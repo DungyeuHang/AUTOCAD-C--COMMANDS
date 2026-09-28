@@ -273,9 +273,18 @@ namespace AUTOCAD_COMMANDS.Nesting
 
         private static decimal Clamp(double v, NumericUpDown n)
         {
+            return Clamp(v, n.Minimum, n.Maximum);
+        }
+
+        /// <summary>Khong bao gio nem loi: (decimal) cua NaN / vo cuc / so &gt; 7.9e28 se nem OverflowException.</summary>
+        private static decimal Clamp(double v, decimal min, decimal max)
+        {
+            if (double.IsNaN(v)) return min;
+            if (v <= (double)min) return min;
+            if (v >= (double)max) return max;
             decimal d = (decimal)v;
-            if (d < n.Minimum) return n.Minimum;
-            if (d > n.Maximum) return n.Maximum;
+            if (d < min) return min;
+            if (d > max) return max;
             return d;
         }
 
@@ -346,9 +355,10 @@ namespace AUTOCAD_COMMANDS.Nesting
                 if (string.IsNullOrWhiteSpace(name) ||
                     !double.TryParse((ws ?? string.Empty).Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out w) ||
                     !double.TryParse((ls ?? string.Empty).Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out l) ||
-                    w <= 0 || l <= 0)
+                    !(w > 0) || !(l > 0) || double.IsInfinity(w) || double.IsInfinity(l) ||
+                    w > SimpleNestingEngine.MaxSheetMm || l > SimpleNestingEngine.MaxSheetMm)
                 {
-                    error = "Dong kho phoi '" + name + "' khong hop le (can ten, rong > 0, dai > 0).";
+                    error = "Dong kho phoi '" + name + "' khong hop le (can ten, rong > 0, dai > 0, toi da 1000000 mm).";
                     continue;
                 }
 
