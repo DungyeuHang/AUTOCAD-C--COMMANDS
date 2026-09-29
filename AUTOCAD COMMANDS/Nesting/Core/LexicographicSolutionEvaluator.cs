@@ -8,7 +8,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
     ///   1. fewer unplaced parts,
     ///   2. fewer sheets,
     ///   3. smaller total used sheet length (the unused tail of a sheet is a remnant, not waste),
-    ///   3b. NHIEU vat lieu hon nam trong LO KIN cua chi tiet khac (manh cat roi trong lo la
+    ///   3b. NHIEU vat lieu hon nam trong LO KIN cua chi tiet khac, roi DUNG IT LO hon (manh cat roi trong lo la
     ///      vun, kho tan dung; lap no truoc de phan to lien con lai to nhat),
     ///   4. tighter packing: smaller total used bounding area (used length x used height),
     ///   5. it don hang bi tron chung tren mot to,
@@ -45,6 +45,11 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             // bang 0 va khoa nay khong doi gi.
             double holeA = AreaInsideHoles(a), holeB = AreaInsideHoles(b);
             if (Math.Abs(holeA - holeB) > (double)LengthTolerance * LengthTolerance) return holeB.CompareTo(holeA);
+
+            // Cung luong vat lieu trong lo: DON vao IT lo hon thi thang - cac lo con lai trong
+            // nguyen, lan sau tan dung duoc; rai moi lo mot manh thi lo nao cung do dang.
+            c = HolesUsed(a).CompareTo(HolesUsed(b));
+            if (c != 0) return c;
 
             double areaA = TotalUsedArea(a), areaB = TotalUsedArea(b);
             if (Math.Abs(areaA - areaB) > (double)LengthTolerance * LengthTolerance) return areaA.CompareTo(areaB);
@@ -174,6 +179,36 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             }
 
             return sum;
+        }
+
+        /// <summary>So lo kin (cua moi chi tiet tren moi to) co it nhat mot chi tiet nam trong.</summary>
+        public static int HolesUsed(DecodedLayout layout)
+        {
+            int used = 0;
+            foreach (DecodedSheet s in layout.Sheets)
+            {
+                foreach (PlacedItem holder in s.Items)
+                {
+                    LongRect[] holes = holder.HoleBounds;
+                    if (holes == null) continue;
+
+                    foreach (LongRect h in holes)
+                    {
+                        foreach (PlacedItem i in s.Items)
+                        {
+                            if (ReferenceEquals(i, holder)) continue;
+                            LongRect b = i.Placed.Bounds;
+                            if (b.MinX >= h.MinX && b.MinY >= h.MinY && b.MaxX <= h.MaxX && b.MaxY <= h.MaxY)
+                            {
+                                used++;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return used;
         }
 
         private static double TotalUsedArea(DecodedLayout layout)

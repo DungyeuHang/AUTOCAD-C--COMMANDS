@@ -222,8 +222,14 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
         private struct Score
         {
-            /// <summary>-1 = nam TRON trong lo kin cua chi tiet da xep (khong ton them vat lieu), 0 = binh thuong.</summary>
+            /// <summary>
+            /// Lo kin: -2 = trong lo DA CO chi tiet (don cho gon), -1 = trong lo con TRONG,
+            /// 0 = ngoai moi lo.
+            /// </summary>
             public long K0;
+
+            /// <summary>Khi mo lo MOI: lo cang TO cang uu tien (am dien tich). Con lai = 0.</summary>
+            public long KH;
             public long K1;
             public long K2;
             public long K3;
@@ -231,6 +237,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             public bool BetterThan(Score o)
             {
                 if (K0 != o.K0) return K0 < o.K0;
+                if (KH != o.KH) return KH < o.KH;
                 if (K1 != o.K1) return K1 < o.K1;
                 if (K2 != o.K2) return K2 < o.K2;
                 return K3 < o.K3;
@@ -256,6 +263,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             }
 
             score.K0 = 0;
+            score.KH = 0;
             return score;
         }
 
@@ -265,22 +273,37 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         /// trong phan to da dung roi. Chi co tac dung khi cho phep ghep vao lo kin
         /// (<paramref name="zones"/> = null khi khong cho phep).
         /// </summary>
-        private static Score ScoreAt(PreparedShape s, long tx, long ty, PlacementPolicy policy, List<LongRect> zones)
+        private static Score ScoreAt(PreparedShape s, long tx, long ty, PlacementPolicy policy, List<HoleZone> zones)
         {
             Score score = MakeScore(s, tx, ty, policy);
-            if (ZoneOf(s, tx, ty, zones) >= 0) score.K0 = -1;
+            int z = ZoneOf(s, tx, ty, zones);
+            if (z >= 0)
+            {
+                // Don cho GON: lap lo dang dung do truoc; phai mo lo moi thi mo lo TO nhat, de
+                // cac lo con lai TRONG NGUYEN - tan dung duoc ve sau.
+                if (zones[z].Occupied)
+                {
+                    score.K0 = -2;
+                }
+                else
+                {
+                    score.K0 = -1;
+                    score.KH = -(long)(zones[z].Area / ScoreQuantum / ScoreQuantum);
+                }
+            }
+
             return score;
         }
 
         /// <summary>Chi so lo (hop bao) chua tron chi tiet o vi tri nay, hoac -1.</summary>
-        private static int ZoneOf(PreparedShape s, long tx, long ty, List<LongRect> zones)
+        private static int ZoneOf(PreparedShape s, long tx, long ty, List<HoleZone> zones)
         {
             if (zones == null) return -1;
             long minX = s.Bounds.MinX + tx, minY = s.Bounds.MinY + ty;
             long maxX = s.Bounds.MaxX + tx, maxY = s.Bounds.MaxY + ty;
             for (int i = 0; i < zones.Count; i++)
             {
-                LongRect z = zones[i];
+                LongRect z = zones[i].Box;
                 if (minX >= z.MinX && minY >= z.MinY && maxX <= z.MaxX && maxY <= z.MaxY) return i;
             }
 
@@ -307,11 +330,33 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             for (int i = 0; i < n; i++) clearance[i] = rules.PartClearance(part.ToleranceUnits, sheet.Items[i].Placed.ToleranceUnits);
 
             // Lo kin cua cac chi tiet da xep (hop bao, toa do to) - chi khi duoc phep ghep vao lo.
-            List<LongRect> zones = null;
+            List<HoleZone> zones = null;
             if (rules.AllowPartInsideHole)
             {
-                zones = new List<LongRect>();
-                for (int i = 0; i < n; i++) zones.AddRange(sheet.Items[i].HoleBounds);
+                zones = new List<HoleZone>();
+                for (int i = 0; i < n; i++)
+                {
+                    PlacedItem holder = sheet.Items[i];
+                    for (int k = 0; k < holder.HoleBounds.Length; k++)
+                    {
+                        LongRect box = holder.HoleBounds[k];
+                        bool occupied = false;
+                        for (int j = 0; j < n && !occupied; j++)
+                        {
+                            if (j == i) continue;
+                            LongRect b = sheet.Items[j].Placed.Bounds;
+                            occupied = b.MinX >= box.MinX && b.MinY >= box.MinY && b.MaxX <= box.MaxX && b.MaxY <= box.MaxY;
+                        }
+
+                        zones.Add(new HoleZone
+                        {
+                            Box = box,
+                            Area = Math.Abs(GeometryMath.SignedArea(holder.Placed.Shape.Holes[k])),
+                            Occupied = occupied
+                        });
+                    }
+                }
+
                 if (zones.Count == 0) zones = null;
             }
 
@@ -455,7 +500,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 // toi mep to neu diem dich hop le - tuc la moi chi tiet dat trong lo deu bi
                 // "ep" ra ngoai, chui qua vat lieu cua chi tiet chua no.
                 int zone = ZoneOf(c.Shape, tx, ty, zones);
-                if (zone >= 0) CompactWithin(c.Shape, ref tx, ref ty, zones[zone], sheet.Items, spec, collision);
+                if (zone >= 0) CompactWithin(c.Shape, ref tx, ref ty, zones[zone].Box, sheet.Items, spec, collision);
                 else Compact(c.Shape, ref tx, ref ty, sheet.Items, spec, collision);
                 c.Score = ScoreAt(c.Shape, tx, ty, policy, zones);
 
@@ -500,7 +545,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             long inset,
             long[] clearance,
             PlacementPolicy policy,
-            List<LongRect> zones,
+            List<HoleZone> zones,
             List<Candidate> candidates)
         {
             int n = sheet.Items.Count;
@@ -511,6 +556,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             // nghin va chinh viec cap phat moi la phan ton thoi gian.
             Score limit;
             limit.K0 = long.MaxValue;
+            limit.KH = long.MaxValue;
             limit.K1 = long.MaxValue;
             limit.K2 = long.MaxValue;
             limit.K3 = long.MaxValue;
@@ -664,6 +710,18 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             }
         }
 
+        /// <summary>Mot lo kin cua chi tiet da xep tren to (toa do to).</summary>
+        private sealed class HoleZone
+        {
+            public LongRect Box;
+
+            /// <summary>Dien tich lo (don vi^2) - mo lo moi thi lo to truoc.</summary>
+            public double Area;
+
+            /// <summary>Da co chi tiet nam trong lo nay.</summary>
+            public bool Occupied;
+        }
+
         private sealed class Candidate
         {
             public PreparedShape Shape;
@@ -734,7 +792,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             ICollisionModel collision,
             long[] clearance,
             PlacementPolicy policy,
-            List<LongRect> zones,
+            List<HoleZone> zones,
             List<Candidate> candidates)
         {
             if (zones == null) return;

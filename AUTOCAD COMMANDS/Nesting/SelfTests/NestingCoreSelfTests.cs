@@ -37,6 +37,7 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "H-D. Lo kin + AllowPartInsideHole=true -> dat vao lo", HD_ClosedHoleAllowed);
             NestingTestHarness.Run(report, "H-E. Lo khong du lon -> khong dat vao lo", HE_HoleTooSmall);
             NestingTestHarness.Run(report, "H-F. Lo KHONG vuong (tam giac / quat): van xep duoc manh nho vao", HF_NonRectangularHoleIsUsed);
+            NestingTestHarness.Run(report, "H-G. Trong lo cung xep GON: lap lo dang dung, mo lo TO truoc", HG_HolesFilledCompactly);
             NestingTestHarness.Run(report, "C12. SL 7 -> dung 7 placement, id rieng", C12_QuantityExpansion);
             NestingTestHarness.Run(report, "C12b. SL tach nhieu to: tong = SL", C12b_QuantitySplitAcrossSheets);
             NestingTestHarness.Run(report, "C13. Tach vat lieu - khong ghep chung", C13_MaterialGrouping);
@@ -568,6 +569,45 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingResult off = Nest(r);
             AssertValid(off);
             Equal(0, InsideFrame(r, off), "tat thi khong manh nao vao lo");
+        }
+
+        /// <summary>
+        /// Trong lo cung phai xep GON: lap lo dang dung truoc, mo lo moi thi lo TO truoc, de
+        /// lo con lai TRONG NGUYEN. Lo nho nam ben TRAI (truoc day se duoc chon truoc vi mep
+        /// trai nho hon), lo to o giua du cho ca 4 manh -> phai dung dung MOT lo (lo to).
+        /// </summary>
+        private static void HG_HolesFilledCompactly()
+        {
+            NestingRequest r = Request(1200, 600);
+            r.Settings.AllowPartInsideHole = true;
+            r.Groups.Add(Poly("F", 1, new double[] { 0, 0, 600, 0, 600, 300, 0, 300 },
+                new double[] { 20, 90, 140, 90, 140, 210, 20, 210 },          // lo NHO ben trai (1 manh)
+                new double[] { 170, 20, 430, 20, 430, 280, 170, 280 }));      // lo TO o giua (4 manh)
+            r.Groups.Add(Rect("S", 100, 100, 4));
+
+            NestingResult res = Nest(r);
+            AssertValid(res);
+            Equal(4, InsideFrame(r, res), "ca 4 manh vao lo");
+
+            Placement f = new List<Placement>(res.Placements).Find(p => p.PartGroupId == "F");
+            PolyShape fw = World(r, f);
+            int holesUsed = 0;
+            foreach (IntPoint[] hole in fw.Holes)
+            {
+                LongRect hb = LongRect.FromPoints(hole);
+                foreach (Placement p in res.Placements)
+                {
+                    if (p.PartGroupId != "S") continue;
+                    LongRect b = World(r, p).Bounds;
+                    if (b.MinX >= hb.MinX && b.MinY >= hb.MinY && b.MaxX <= hb.MaxX && b.MaxY <= hb.MaxY)
+                    {
+                        holesUsed++;
+                        break;
+                    }
+                }
+            }
+
+            Equal(1, holesUsed, "don vao MOT lo to, lo nho de trong nguyen");
         }
 
         /// <summary>So manh "S" co hop bao nam tron trong hop bao cua chi tiet "F" (tuc la trong lo cua no).</summary>
