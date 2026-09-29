@@ -26,9 +26,10 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "R12. Thieu SL -> 1, thieu vat lieu -> 1.2MM", R12_Defaults);
             NestingTestHarness.Run(report, "R13. Hai SL khac nhau cho 1 chi tiet -> AMBIGUOUS", R13_ConflictingQuantities);
             NestingTestHarness.Run(report, "R14. Text qua xa -> canh bao chung", R14_TextTooFar);
-            NestingTestHarness.Run(report, "R15. Hinh re nhanh -> INVALID GEOMETRY", R15_BranchingInvalid);
+            NestingTestHarness.Run(report, "R15. Hinh re nhanh -> GOP theo duong bao ngoai cung", R15_BranchingInvalid);
             NestingTestHarness.Run(report, "R16. Duong trung nhau (dien tich 0) -> INVALID", R16_ZeroArea);
             NestingTestHarness.Run(report, "R17. Ban ghi mo ho chua xac nhan bi chan", R17_UnconfirmedAmbiguousBlocked);
+            NestingTestHarness.Run(report, "R17b. Chu giua hai chi tiet: ben da co SL thi gan cho ben chua co", R17b_BetweenTwoPartsResolved);
             NestingTestHarness.Run(report, "R18. 1 block chua 2 chi tiet -> INVALID (khong nhan doi)", R18_SharedSourceInvalid);
             NestingTestHarness.Run(report, "R19. Hinh tren layer danh dau gan vao chi tiet chua no", R19_AttachMarking);
             NestingTestHarness.Run(report, "R20. SL trong + vat lieu ngoai (2 vi tri khac nhau)", R20_SlInsideMaterialOutside);
@@ -37,8 +38,9 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "R23. Do day ngoai khoang 0.3-25 bi loai", R23_ThicknessRange);
             NestingTestHarness.Run(report, "R24. Chi tiet toan doan thang -> dung sai 0; co cung -> dung sai cung", R24_ToleranceFlag);
             NestingTestHarness.Run(report, "R25. Text gan 2 chi tiet khac nhau ro -> gan dung, khong mo ho", R25_ClearlyCloserNotAmbiguous);
-            NestingTestHarness.Run(report, "R26. Hai duong bao cham nhau -> bao kem TOA DO", R26_TouchingContoursReportWhere);
+            NestingTestHarness.Run(report, "R26. Hai duong bao chong nhau -> GOP, ghi chu kem TOA DO", R26_TouchingContoursReportWhere);
             NestingTestHarness.Run(report, "R27. Hai duong bao TRUNG KHIT -> GOP lam 1, khong bao loi", R27_DuplicateContourIsMerged);
+            NestingTestHarness.Run(report, "R26b. Lo cham bien / hai chi tiet chong nhau -> GOP, giu lo con lai", R26b_TouchingMergeKeepsFreeHoles);
             NestingTestHarness.Run(report, "R32. Hinh ho: gan kin thi giu, net thua thi bo", R32_OpenGeometryKeptOnlyIfAlmostClosed);
             NestingTestHarness.Run(report, "R33. Chu CAT trong phoi di theo phoi; chu THONG TIN thi khong", R33_InsideCutTextTravelsWithPart);
             NestingTestHarness.Run(report, "R28. Chu khac trong chi tiet -> gan de XUAT, khong phai marking", R28_EngravingInsideAttaches);
@@ -172,17 +174,17 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             List<CurveChain> c = new List<CurveChain> { Box(0, 0, 100, 100), Box(60, 60, 100, 100) };
             RecognitionResult r = Recognize(c);
 
-            RecognizedPart bad = null;
-            foreach (RecognizedPart part in r.Parts)
-            {
-                if (part.Status == PartStatus.InvalidGeometry) bad = part;
-            }
-
-            True(bad != null, "hai duong bao cat nhau phai bi bao la hinh hoc loi");
+            // Nguoi dung yeu cau: cham / chong nhau thi GOP thanh 1 chi tiet, khong bao loi.
+            Equal(1, r.Parts.Count, "hai hinh chong nhau gop thanh MOT chi tiet");
+            RecognizedPart bad = r.Parts[0];
+            True(bad.IsNestable, "phai ghep duoc: " + bad.NotesText);
+            True(Math.Abs(bad.Outer.Area - (2 * 100 * 100 - 40 * 40)) < 1e-3,
+                "duong bao ghep = hop cua hai hinh, dang co dien tich " + bad.Outer.Area);
+            Equal(2, bad.GeometrySources.Count, "ca hai net deu duoc xuat");
 
             string note = string.Join(" | ", bad.Notes.ToArray());
-            True(note.IndexOf("cat/cham", StringComparison.Ordinal) >= 0,
-                "phai dung ly do cat/cham, nhan duoc: " + note);
+            True(note.IndexOf("cham/chong", StringComparison.Ordinal) >= 0,
+                "phai ghi chu la da gop, nhan duoc: " + note);
             True(note.IndexOf(" - tai (", StringComparison.Ordinal) >= 0,
                 "phai noi CHO cham, nhan duoc: " + note);
 
@@ -196,6 +198,40 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
 
             True(x >= 55 && x <= 105 && y >= 55 && y <= 105,
                 "toa do phai nam o vung hai hinh chong nhau, nhan duoc (" + pair + ")");
+        }
+
+        /// <summary>
+        /// Gop cham / chong nhau: lo CHAM BIEN thi bo khoi hinh ghep (coi la dac), lo KHONG dinh
+        /// gi thi van la lo; chi tiet thu hai chong len thi gop vao, lo cua no nam trong vat
+        /// lieu chi tiet kia thi cung bo.
+        /// </summary>
+        private static void R26b_TouchingMergeKeepsFreeHoles()
+        {
+            // (a) lo cham canh phai cua duong bao ngoai + mot lo tu do
+            RecognitionResult a = Recognize(new List<CurveChain>
+            {
+                Box(0, 0, 200, 100),
+                Box(150, 20, 50, 40),     // cham canh x = 200
+                Box(20, 20, 30, 30)       // lo tu do
+            });
+            Equal(1, a.Parts.Count, "mot chi tiet: " + string.Join(" | ", a.Parts.ConvertAll(p => p.Status + " " + p.NotesText).ToArray()));
+            True(a.Parts[0].IsNestable, "ghep duoc: " + a.Parts[0].NotesText);
+            True(Math.Abs(a.Parts[0].Outer.Area - 200 * 100) < 1e-3, "duong bao van la 200x100");
+            Equal(1, a.Parts[0].Holes.Count, "chi con lo tu do");
+            Equal(3, a.Parts[0].GeometrySources.Count, "ca ba net deu xuat");
+
+            // (b) chi tiet B chong mot goc len A; lo cua B nam tron trong vat lieu A -> bo
+            RecognitionResult b = Recognize(new List<CurveChain>
+            {
+                Box(0, 0, 100, 100),
+                Box(80, 80, 100, 100),
+                Box(85, 85, 10, 10),      // lo cua B, nam trong A
+                Box(140, 140, 20, 20)     // lo cua B, nam ngoai A -> giu
+            });
+            Equal(1, b.Parts.Count, "gop thanh mot: " + string.Join(" | ", b.Parts.ConvertAll(p => p.Status + " " + p.NotesText).ToArray()));
+            True(b.Parts[0].IsNestable, "ghep duoc: " + b.Parts[0].NotesText);
+            Equal(1, b.Parts[0].Holes.Count, "chi giu lo khong nam trong vat lieu A");
+            True(Math.Abs(b.Parts[0].Outer.Area - (2 * 100 * 100 - 20 * 20)) < 1e-3, "duong bao = hop hai hinh");
         }
 
         /// <summary>
@@ -1021,8 +1057,15 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
                 Chain(false, 300, 100, 100, 100)
             };
             RecognitionResult r = Recognize(c);
-            True(r.Parts.Exists(p => p.Status == PartStatus.InvalidGeometry && p.NotesText.Contains("re nhanh")),
-                "branching reported, not guessed");
+
+            // Nguoi dung yeu cau: net gap nhau 1 diem thi GOP het vao MOT chi tiet, ghep theo
+            // duong bao ngoai cung (300 x 100), va van ghi chu cho biet.
+            Equal(1, r.Parts.Count, "mot chi tiet: " + string.Join(" | ", r.Parts.ConvertAll(p => p.Status + " " + p.NotesText).ToArray()));
+            RecognizedPart part = r.Parts[0];
+            True(part.IsNestable, "ghep duoc: " + part.NotesText);
+            True(part.NotesText.Contains("re nhanh"), "van ghi chu la re nhanh: " + part.NotesText);
+            True(Math.Abs(part.Outer.Area - 300 * 100) < 1e-3, "duong bao ngoai cung 300x100, dang co " + part.Outer.Area);
+            Equal(7, part.GeometrySources.Count, "moi net deu xuat ra");
         }
 
         private static void R16_ZeroArea()
@@ -1031,6 +1074,30 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             RecognitionResult r = Recognize(c);
             Equal(1, r.Parts.Count, "one record");
             Equal(PartStatus.InvalidGeometry, r.Parts[0].Status, "zero area invalid");
+        }
+
+        private static void R17b_BetweenTwoPartsResolved()
+        {
+            // (a) A co "SL: 3" ngay trong minh, B khong co gi; "SL: 5" nam giua -> cua B.
+            List<CurveChain> c = new List<CurveChain> { Box(0, 0, 200, 100), Box(250, 0, 200, 100) };
+            RecognitionResult r = Recognize(c, Text("SL: 3", 100, 50), Text("SL: 5", 225, 50));
+            RecognizedPart a = Valid(r).Find(p => p.MinX < 1), b = Valid(r).Find(p => p.MinX > 1);
+            Equal(3, a.Quantity, "A giu SL cua minh");
+            Equal(5, b.Quantity, "chu o giua ve B (B chua co SL)");
+            True(a.Status != PartStatus.Ambiguous && b.Status != PartStatus.Ambiguous,
+                "khong con mo ho: " + a.NotesText + " / " + b.NotesText);
+
+            // (b) ca hai deu co SL rieng; chu thua o giua -> bo qua, khong mo ho.
+            r = Recognize(c, Text("SL: 3", 100, 50), Text("SL: 4", 350, 50), Text("SL: 9", 225, 50));
+            a = Valid(r).Find(p => p.MinX < 1);
+            b = Valid(r).Find(p => p.MinX > 1);
+            Equal(3, a.Quantity, "A giu 3");
+            Equal(4, b.Quantity, "B giu 4");
+            True(a.Status != PartStatus.Ambiguous && b.Status != PartStatus.Ambiguous, "chu thua khong lam mo ho");
+
+            // (c) ca hai deu chua co -> VAN mo ho (gan bua la sai SL).
+            r = Recognize(c, Text("SL: 5", 225, 50));
+            True(Valid(r).TrueForAll(p => p.Status == PartStatus.Ambiguous), "khong biet cua ai thi van phai hoi");
         }
 
         private static void R17_UnconfirmedAmbiguousBlocked()

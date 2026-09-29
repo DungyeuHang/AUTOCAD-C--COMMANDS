@@ -122,8 +122,9 @@ namespace AUTOCAD_COMMANDS.Nesting
                     }
 
                     break;
-                case "OutputAsBlocks": if (bool.TryParse(val, out b)) s.OutputAsBlocks = b; break;
+                case "KeepPartBlocks": if (bool.TryParse(val, out b)) s.OutputAsBlocks = b; break;
                 case "LabelParts": if (bool.TryParse(val, out b)) s.LabelParts = b; break;
+                case "LabelPartNameAndOrder": if (bool.TryParse(val, out b)) s.LabelPartNameAndOrder = b; break;
                 case "SheetSpacingMm": if (TryD(val, out d) && d >= 0) s.SheetSpacingMm = d; break;
                 case "OpenOutputDrawing": if (bool.TryParse(val, out b)) s.OpenOutputDrawing = b; break;
                 case "SaveFixture": if (bool.TryParse(val, out b)) s.SaveFixture = b; break;
@@ -161,8 +162,9 @@ namespace AUTOCAD_COMMANDS.Nesting
                     "EngravingLayers\t" + string.Join(";", s.EngravingLayers.ToArray()),
                     "DefaultSheetName\t" + s.DefaultSheetName,
                     "MaterialSheets\t" + string.Join(";", pairs.ToArray()),
-                    "OutputAsBlocks\t" + s.OutputAsBlocks,
+                    "KeepPartBlocks\t" + s.OutputAsBlocks,
                     "LabelParts\t" + s.LabelParts,
+                    "LabelPartNameAndOrder\t" + s.LabelPartNameAndOrder,
                     "SheetSpacingMm\t" + s.SheetSpacingMm.ToString("R", ci),
                     "OpenOutputDrawing\t" + s.OpenOutputDrawing,
                     "SaveFixture\t" + s.SaveFixture,

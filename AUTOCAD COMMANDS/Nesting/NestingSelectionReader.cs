@@ -23,8 +23,65 @@ namespace AUTOCAD_COMMANDS.Nesting
         public string Order = string.Empty;
     }
 
+    /// <summary>
+    /// Thong tin GHOPHOI gan san tren block chi tiet cua mot ket qua CU (giu block): chon lai
+    /// ket qua do de ghep lai thi SL / vat lieu / don di theo, khong phai quet ban ve goc.
+    /// </summary>
+    internal sealed class PartPreset
+    {
+        public const string XDataApp = "GHOPHOI_PART";
+        private const string Version = "v1";
+
+        /// <summary>Chi so trong <see cref="NestReadResult.Sources"/> cua block mang thong tin.</summary>
+        public int Source;
+        public int Quantity = 1;
+        public string Material = string.Empty;
+        public string Order = string.Empty;
+        public string Name = string.Empty;
+
+        public static ResultBuffer ToXData(PartPreset p)
+        {
+            return new ResultBuffer(
+                new TypedValue((int)DxfCode.ExtendedDataRegAppName, XDataApp),
+                new TypedValue((int)DxfCode.ExtendedDataAsciiString, Version),
+                new TypedValue((int)DxfCode.ExtendedDataInteger32, Math.Max(1, p.Quantity)),
+                new TypedValue((int)DxfCode.ExtendedDataAsciiString, "M=" + Cut(p.Material)),
+                new TypedValue((int)DxfCode.ExtendedDataAsciiString, "O=" + Cut(p.Order)),
+                new TypedValue((int)DxfCode.ExtendedDataAsciiString, "N=" + Cut(p.Name)));
+        }
+
+        /// <summary>Null khi khong co / sai dang - khi do block duoc doc nhu block binh thuong.</summary>
+        public static PartPreset FromXData(ResultBuffer rb)
+        {
+            if (rb == null) return null;
+            TypedValue[] v = rb.AsArray();
+            if (v.Length < 6 || !Equals(v[1].Value, Version) || !(v[2].Value is int)) return null;
+
+            PartPreset p = new PartPreset { Quantity = Math.Max(1, (int)v[2].Value) };
+            p.Material = Field(v[3], "M=");
+            p.Order = Field(v[4], "O=");
+            p.Name = Field(v[5], "N=");
+            return p;
+        }
+
+        private static string Field(TypedValue v, string prefix)
+        {
+            string s = v.Value as string;
+            return s != null && s.StartsWith(prefix, StringComparison.Ordinal) ? s.Substring(prefix.Length) : string.Empty;
+        }
+
+        private static string Cut(string s)
+        {
+            s = s ?? string.Empty;
+            return s.Length > 200 ? s.Substring(0, 200) : s;
+        }
+    }
+
     internal sealed class NestReadResult
     {
+        /// <summary>Block chi tiet cua ket qua GHOPHOI cu mang san SL / vat lieu / don.</summary>
+        public readonly List<PartPreset> Presets = new List<PartPreset>();
+
         public readonly List<NestSource> Sources = new List<NestSource>();
         public readonly List<CurveChain> Chains = new List<CurveChain>();
         public readonly List<TextItem> Texts = new List<TextItem>();
@@ -69,11 +126,20 @@ namespace AUTOCAD_COMMANDS.Nesting
             NestReadResult result = new NestReadResult();
             Dictionary<string, int> ignoredKinds = new Dictionary<string, int>();
             int nonPlanar = 0;
+            int oldResult = 0;
 
             foreach (ObjectId id in ids)
             {
                 Entity ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
                 if (ent == null) continue;
+
+                // Khung to / nhan / chu / vach phan du cua mot ket qua GHOPHOI cu: khong phai
+                // chi tiet. Nho vay quet ca vung ket qua cu (giu block) de ghep lai la duoc.
+                if (ent.Layer.StartsWith("GHOPHOI_", StringComparison.OrdinalIgnoreCase))
+                {
+                    oldResult++;
+                    continue;
+                }
 
                 string order;
                 if (orderByEntity == null || !orderByEntity.TryGetValue(id, out order)) order = string.Empty;
@@ -90,6 +156,12 @@ namespace AUTOCAD_COMMANDS.Nesting
                 result.IgnoredCount += kv.Value;
                 result.Warnings.Add(string.Format(CultureInfo.InvariantCulture,
                     "Bo qua {0} doi tuong {1} (khong phai hinh cat / text).", kv.Value, kv.Key));
+            }
+
+            if (oldResult > 0)
+            {
+                result.Warnings.Add(string.Format(CultureInfo.InvariantCulture,
+                    "Bo qua {0} doi tuong tren layer GHOPHOI_* (khung to / nhan / chu cua ket qua ghep cu).", oldResult));
             }
 
             if (nonPlanar > 0)
@@ -134,6 +206,19 @@ namespace AUTOCAD_COMMANDS.Nesting
                 {
                     Count(ignored, "block long qua sau");
                     return;
+                }
+
+                if (depth == 0)
+                {
+                    using (ResultBuffer xdata = br.GetXDataForApplication(PartPreset.XDataApp))
+                    {
+                        PartPreset preset = PartPreset.FromXData(xdata);
+                        if (preset != null)
+                        {
+                            preset.Source = source;
+                            result.Presets.Add(preset);
+                        }
+                    }
                 }
 
                 using (DBObjectCollection parts = new DBObjectCollection())

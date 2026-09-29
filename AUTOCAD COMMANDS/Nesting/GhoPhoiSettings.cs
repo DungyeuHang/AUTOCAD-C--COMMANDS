@@ -89,7 +89,13 @@ namespace AUTOCAD_COMMANDS.Nesting
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         // ---- output ----
-        public bool OutputAsBlocks { get; set; } = true;
+        /// <summary>
+        /// GIU moi chi tiet la 1 BLOCK trong ket qua. MAC DINH TAT: xep xong la EXPLODE HET
+        /// (ca block long ben trong chi tiet) roi PURGE sach dinh nghia block - ban ve khong con
+        /// hang tram block GHOPHOI_* thua, moi doi tuong giu nguyen layer de xuat di cat.
+        /// Luu duoi khoa "KeepPartBlocks" (khoa cu "OutputAsBlocks" mac dinh BAT bi bo qua).
+        /// </summary>
+        public bool OutputAsBlocks { get; set; } = false;
 
         /// <summary>
         /// Ghi ma P + so thu tu vao GIUA moi chi tiet tren to ("P01", "P02", ...).
@@ -109,6 +115,14 @@ namespace AUTOCAD_COMMANDS.Nesting
         /// nguoi dung, nguyen van, dung co, dung vi tri.
         /// </summary>
         public bool LabelParts { get; set; } = true;
+
+        /// <summary>
+        /// Khi <see cref="LabelParts"/> bat: ghi them TEN PHOI va TEN DON HANG vao nhan, moi
+        /// thu mot dong ngay duoi ma P ("P01" / "P3 D-D-347" / "Don: DH-01"). Van cung mot
+        /// MText, cung layer khong in / khong cat, va van KHONG ve len chi tiet da co chu cat
+        /// cua nguoi dung.
+        /// </summary>
+        public bool LabelPartNameAndOrder { get; set; } = true;
 
         public double SheetSpacingMm { get; set; } = 300.0;
 

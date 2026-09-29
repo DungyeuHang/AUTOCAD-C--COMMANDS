@@ -59,6 +59,9 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         /// </summary>
         private const int XSweepSteps = 64;
 
+        /// <summary>So buoc luoi moi chieu khi rai ung vien ben trong mot lo kin (xem AddHoleCandidates).</summary>
+        private const int HoleGridSteps = 8;
+
         /// <summary>Score quantum for the LeftBottom policy (1 mm) so that tiny compaction noise does not dominate.</summary>
         private const long ScoreQuantum = 1000;
 
@@ -219,12 +222,15 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
         private struct Score
         {
+            /// <summary>-1 = nam TRON trong lo kin cua chi tiet da xep (khong ton them vat lieu), 0 = binh thuong.</summary>
+            public long K0;
             public long K1;
             public long K2;
             public long K3;
 
             public bool BetterThan(Score o)
             {
+                if (K0 != o.K0) return K0 < o.K0;
                 if (K1 != o.K1) return K1 < o.K1;
                 if (K2 != o.K2) return K2 < o.K2;
                 return K3 < o.K3;
@@ -249,7 +255,36 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 score.K3 = maxY;
             }
 
+            score.K0 = 0;
             return score;
+        }
+
+        /// <summary>
+        /// Nhu <see cref="MakeScore"/>, cong them uu tien LO KIN: cho nam tron trong hop bao mot
+        /// lo cua chi tiet da xep (va da qua phep kiem va cham) la vat lieu MIEN PHI - no nam
+        /// trong phan to da dung roi. Chi co tac dung khi cho phep ghep vao lo kin
+        /// (<paramref name="zones"/> = null khi khong cho phep).
+        /// </summary>
+        private static Score ScoreAt(PreparedShape s, long tx, long ty, PlacementPolicy policy, List<LongRect> zones)
+        {
+            Score score = MakeScore(s, tx, ty, policy);
+            if (ZoneOf(s, tx, ty, zones) >= 0) score.K0 = -1;
+            return score;
+        }
+
+        /// <summary>Chi so lo (hop bao) chua tron chi tiet o vi tri nay, hoac -1.</summary>
+        private static int ZoneOf(PreparedShape s, long tx, long ty, List<LongRect> zones)
+        {
+            if (zones == null) return -1;
+            long minX = s.Bounds.MinX + tx, minY = s.Bounds.MinY + ty;
+            long maxX = s.Bounds.MaxX + tx, maxY = s.Bounds.MaxY + ty;
+            for (int i = 0; i < zones.Count; i++)
+            {
+                LongRect z = zones[i];
+                if (minX >= z.MinX && minY >= z.MinY && maxX <= z.MaxX && maxY <= z.MaxY) return i;
+            }
+
+            return -1;
         }
 
         private PlacedItem TryPlace(
@@ -270,6 +305,15 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             int n = sheet.Items.Count;
             long[] clearance = new long[n];
             for (int i = 0; i < n; i++) clearance[i] = rules.PartClearance(part.ToleranceUnits, sheet.Items[i].Placed.ToleranceUnits);
+
+            // Lo kin cua cac chi tiet da xep (hop bao, toa do to) - chi khi duoc phep ghep vao lo.
+            List<LongRect> zones = null;
+            if (rules.AllowPartInsideHole)
+            {
+                zones = new List<LongRect>();
+                for (int i = 0; i < n; i++) zones.AddRange(sheet.Items[i].HoleBounds);
+                if (zones.Count == 0) zones = null;
+            }
 
             // Valid uncompacted positions: the first valid Y for every candidate X and
             // orientation. NO pruning of X candidates (see audit in the class summary).
@@ -373,7 +417,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                             Shape = shape,
                             Tx = dropX,
                             Ty = dropY,
-                            Score = MakeScore(shape, dropX, dropY, policy),
+                            Score = ScoreAt(shape, dropX, dropY, policy, zones),
                             Order = candidates.Count
                         });
                     }
@@ -386,7 +430,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                         long ty = y - shape.Bounds.MinY;
                         if (!IsValid(shape, tx, ty, column, spec, collision)) continue;
 
-                        candidates.Add(new Candidate { Shape = shape, Tx = tx, Ty = ty, Score = MakeScore(shape, tx, ty, policy), Order = candidates.Count });
+                        candidates.Add(new Candidate { Shape = shape, Tx = tx, Ty = ty, Score = ScoreAt(shape, tx, ty, policy, zones), Order = candidates.Count });
 
                         // The lowest valid Y is the one that matters for this X.
                         break;
@@ -394,7 +438,8 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 }
             }
 
-            AddContactCandidates(orientations, sheet, spec, collision, inset, clearance, policy, candidates);
+            AddHoleCandidates(orientations, sheet, spec, collision, clearance, policy, zones, candidates);
+            AddContactCandidates(orientations, sheet, spec, collision, inset, clearance, policy, zones, candidates);
 
             if (candidates.Count == 0) return null;
 
@@ -405,8 +450,14 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             {
                 Candidate c = candidates[i];
                 long tx = c.Tx, ty = c.Ty;
-                Compact(c.Shape, ref tx, ref ty, sheet.Items, spec, collision);
-                c.Score = MakeScore(c.Shape, tx, ty, policy);
+
+                // Ung vien trong lo: ep sat NHUNG KHONG ra khoi lo. Compact thuong nhay thang
+                // toi mep to neu diem dich hop le - tuc la moi chi tiet dat trong lo deu bi
+                // "ep" ra ngoai, chui qua vat lieu cua chi tiet chua no.
+                int zone = ZoneOf(c.Shape, tx, ty, zones);
+                if (zone >= 0) CompactWithin(c.Shape, ref tx, ref ty, zones[zone], sheet.Items, spec, collision);
+                else Compact(c.Shape, ref tx, ref ty, sheet.Items, spec, collision);
+                c.Score = ScoreAt(c.Shape, tx, ty, policy, zones);
 
                 c.Tx = tx;
                 c.Ty = ty;
@@ -449,6 +500,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             long inset,
             long[] clearance,
             PlacementPolicy policy,
+            List<LongRect> zones,
             List<Candidate> candidates)
         {
             int n = sheet.Items.Count;
@@ -458,6 +510,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             // thi sinh ra cung vo ich - bo ngay truoc khi cap phat, vi so cap diem la hang chuc
             // nghin va chinh viec cap phat moi la phan ton thoi gian.
             Score limit;
+            limit.K0 = long.MaxValue;
             limit.K1 = long.MaxValue;
             limit.K2 = long.MaxValue;
             limit.K3 = long.MaxValue;
@@ -506,7 +559,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                             if (box.MinX + tx < inset || box.MinY + ty < inset) continue;
                             if (box.MaxX + tx > sheetL - inset || box.MaxY + ty > sheetW - inset) continue;
 
-                            Score score = MakeScore(shape, tx, ty, policy);
+                            Score score = ScoreAt(shape, tx, ty, policy, zones);
                             if (!score.BetterThan(limit)) continue;
 
                             // Day la cho nong nhat cua ca ham: chay hang chuc nghin lan moi
@@ -571,7 +624,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 SlideAlong(c.Shape, ref backX, ref backY, -c.Nx, -c.Ny, backoff + ContactBackoff, sheet.Items, spec, collision);
                 c.Tx = backX;
                 c.Ty = backY;
-                c.Score = MakeScore(c.Shape, backX, backY, policy);
+                c.Score = ScoreAt(c.Shape, backX, backY, policy, zones);
 
                 // Xep sau cac ung vien quet: hoa diem thi cach cu thang, nen chi them lua
                 // chon chu khong lam doi ket qua da co.
@@ -663,6 +716,102 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
             tx = x0 + (long)Math.Round(ux * moved);
             ty = y0 + (long)Math.Round(uy * moved);
+        }
+
+        /// <summary>
+        /// Ung vien BEN TRONG lo kin: rai mot luoi deu tren hop bao cua moi lo du rong.
+        ///
+        /// Truoc day chi thu dung goc duoi-trai hop bao lo. Lo hinh chu nhat thi trung, nhung
+        /// lo hinh quat / hinh thang / tron (nep vom, mat bich...) thi goc do nam NGOAI lo - nen
+        /// du da tick "cho phep ghep vao lo kin", khong mot chi tiet nao duoc dat vao.
+        /// Phep kiem va cham that van quyet dinh; luoi chi la diem xuat phat, sau do duoc ep
+        /// sat vao thanh lo (<see cref="CompactWithin"/>).
+        /// </summary>
+        private static void AddHoleCandidates(
+            List<PreparedShape> orientations,
+            DecodedSheet sheet,
+            SheetSpec spec,
+            ICollisionModel collision,
+            long[] clearance,
+            PlacementPolicy policy,
+            List<LongRect> zones,
+            List<Candidate> candidates)
+        {
+            if (zones == null) return;
+
+            for (int i = 0; i < sheet.Items.Count; i++)
+            {
+                long c = clearance[i];
+                foreach (LongRect hb in sheet.Items[i].HoleBounds)
+                {
+                    foreach (PreparedShape shape in orientations)
+                    {
+                        long w = shape.Bounds.Width, h = shape.Bounds.Height;
+                        if (!HoleCanHold(hb, w, h, c)) continue;
+
+                        long x0 = hb.MinX + c, x1 = hb.MaxX - c - w;
+                        long y0 = hb.MinY + c, y1 = hb.MaxY - c - h;
+                        for (int gx = 0; gx <= HoleGridSteps; gx++)
+                        {
+                            long x = x0 + (x1 - x0) * gx / HoleGridSteps;
+                            for (int gy = 0; gy <= HoleGridSteps; gy++)
+                            {
+                                long y = y0 + (y1 - y0) * gy / HoleGridSteps;
+                                long tx = x - shape.Bounds.MinX, ty = y - shape.Bounds.MinY;
+                                if (!IsValid(shape, tx, ty, sheet.Items, spec, collision)) continue;
+
+                                candidates.Add(new Candidate
+                                {
+                                    Shape = shape,
+                                    Tx = tx,
+                                    Ty = ty,
+                                    Score = ScoreAt(shape, tx, ty, policy, zones),
+                                    Order = candidates.Count
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>Nhu <see cref="Compact"/> nhung khong bao gio truot ra khoi hop bao <paramref name="zone"/>.</summary>
+        private static void CompactWithin(
+            PreparedShape shape, ref long tx, ref long ty, LongRect zone, List<PlacedItem> items, SheetSpec spec, ICollisionModel collision)
+        {
+            for (int round = 0; round < 6; round++)
+            {
+                long roomX = shape.Bounds.MinX + tx - zone.MinX;
+                long roomY = shape.Bounds.MinY + ty - zone.MinY;
+                long movedX = roomX > 0 ? SlideBy(shape, ref tx, ref ty, -1, 0, roomX, items, spec, collision) : 0;
+                long movedY = roomY > 0 ? SlideBy(shape, ref tx, ref ty, 0, -1, roomY, items, spec, collision) : 0;
+                if (movedX < MinSlideStep && movedY < MinSlideStep) break;
+            }
+        }
+
+        /// <summary>Truot toi da <paramref name="room"/> theo mot truc, chi qua cac vi tri hop le.</summary>
+        private static long SlideBy(
+            PreparedShape shape, ref long tx, ref long ty, int dx, int dy, long room,
+            List<PlacedItem> items, SheetSpec spec, ICollisionModel collision)
+        {
+            long moved = 0;
+            long step = Math.Min(room, InitialSlideStep);
+            while (step >= MinSlideStep)
+            {
+                if (moved + step <= room &&
+                    IsValid(shape, tx + dx * (moved + step), ty + dy * (moved + step), items, spec, collision))
+                {
+                    moved += step;
+                }
+                else
+                {
+                    step /= 2;
+                }
+            }
+
+            tx += dx * moved;
+            ty += dy * moved;
+            return moved;
         }
 
         private static bool HoleCanHold(LongRect hole, long w, long h, long clearance)

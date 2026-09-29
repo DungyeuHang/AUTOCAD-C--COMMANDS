@@ -8,6 +8,8 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
     ///   1. fewer unplaced parts,
     ///   2. fewer sheets,
     ///   3. smaller total used sheet length (the unused tail of a sheet is a remnant, not waste),
+    ///   3b. NHIEU vat lieu hon nam trong LO KIN cua chi tiet khac (manh cat roi trong lo la
+    ///      vun, kho tan dung; lap no truoc de phan to lien con lai to nhat),
     ///   4. tighter packing: smaller total used bounding area (used length x used height),
     ///   5. it don hang bi tron chung tren mot to,
     ///   6. chi tiet cung don nam gan nhau hon.
@@ -36,6 +38,13 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
             long lenA = TotalUsedLength(a), lenB = TotalUsedLength(b);
             if (Math.Abs(lenA - lenB) > LengthTolerance) return lenA.CompareTo(lenB);
+
+            // Cung chieu dai: phuong an nhet NHIEU vat lieu hon vao LO KIN cua chi tiet khac thi
+            // thang. Phan ben trong lo bi cat roi ra thanh manh vun, kho tan dung - xep chi tiet
+            // vao do de phan to LIEN con lai to nhat. Khong cho phep ghep vao lo thi ca hai deu
+            // bang 0 va khoa nay khong doi gi.
+            double holeA = AreaInsideHoles(a), holeB = AreaInsideHoles(b);
+            if (Math.Abs(holeA - holeB) > (double)LengthTolerance * LengthTolerance) return holeB.CompareTo(holeA);
 
             double areaA = TotalUsedArea(a), areaB = TotalUsedArea(b);
             if (Math.Abs(areaA - areaB) > (double)LengthTolerance * LengthTolerance) return areaA.CompareTo(areaB);
@@ -130,6 +139,40 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         {
             long sum = 0;
             foreach (DecodedSheet s in layout.Sheets) sum += s.MaxX;
+            return sum;
+        }
+
+        /// <summary>
+        /// Tong dien tich (thuc, tru lo) cac chi tiet nam TRON trong hop bao mot lo kin cua chi
+        /// tiet khac tren cung to. Bo cuc da qua kiem va cham nen nam trong hop bao lo = nam
+        /// trong lo (phan hop bao ngoai lo la vat lieu cua chi tiet chua no).
+        /// </summary>
+        public static double AreaInsideHoles(DecodedLayout layout)
+        {
+            double sum = 0;
+            foreach (DecodedSheet s in layout.Sheets)
+            {
+                foreach (PlacedItem holder in s.Items)
+                {
+                    LongRect[] holes = holder.HoleBounds;
+                    if (holes == null || holes.Length == 0) continue;
+
+                    foreach (PlacedItem i in s.Items)
+                    {
+                        if (ReferenceEquals(i, holder)) continue;
+                        LongRect b = i.Placed.Bounds;
+                        foreach (LongRect h in holes)
+                        {
+                            if (b.MinX >= h.MinX && b.MinY >= h.MinY && b.MaxX <= h.MaxX && b.MaxY <= h.MaxY)
+                            {
+                                sum += i.Instance.Group.Shape.Polygon.NetArea;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
             return sum;
         }
 

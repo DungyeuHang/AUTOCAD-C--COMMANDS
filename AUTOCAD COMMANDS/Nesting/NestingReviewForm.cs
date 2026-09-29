@@ -43,6 +43,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             BuildUi(recognition.GlobalWarnings, autoZoom);
             LoadRows();
             UpdateState();
+            DialogPlacement.Attach(this, "review");
         }
 
         public bool AutoZoom { get { return _chkAutoZoom.Checked; } }

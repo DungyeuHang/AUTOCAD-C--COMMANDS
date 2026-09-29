@@ -28,10 +28,11 @@ namespace AUTOCAD_COMMANDS.Nesting
         /// Khong doc tu chu, khong doc tu layer, khong suy tu hinh hoc: don hang la thu nguoi
         /// dung khai o bang don, va chi di theo duong nguoi dung da quet.
         ///
-        /// Neu mot chi tiet co duong bao ghep tu nhieu luot quet KHAC don nhau thi khong tu y
-        /// chon bua mot cai - danh dau MO HO de nguoi dung tu quyet o bang kiem tra.
+        /// Neu mot chi tiet co duong bao ghep tu nhieu luot quet KHAC don nhau thi chon don
+        /// chiem NHIEU NET nhat (bang nhau thi theo ten) va CANH BAO - nguoi dung doi duoc o cot
+        /// Don hang tren bang kiem tra. Truoc day danh dau MO HO va chan ca lenh.
         /// </summary>
-        /// <returns>So ban ghi bi vat sang mo ho vi dinh vao hai don.</returns>
+        /// <returns>So ban ghi dinh vao nhieu don (da tu chon, co canh bao).</returns>
         public static int AssignOrders(NestReadResult read, RecognitionResult recognition)
         {
             int conflicts = 0;
@@ -39,27 +40,169 @@ namespace AUTOCAD_COMMANDS.Nesting
             {
                 List<int> sources = part.Outer != null ? part.Outer.Sources : part.GeometrySources;
                 List<string> orders = new List<string>();
+                Dictionary<string, int> count = new Dictionary<string, int>(StringComparer.Ordinal);
                 foreach (int src in sources)
                 {
                     if (src < 0 || src >= read.Sources.Count) continue;
                     string order = read.Sources[src].Order;
-                    if (string.IsNullOrEmpty(order) || orders.Contains(order)) continue;
-                    orders.Add(order);
+                    if (string.IsNullOrEmpty(order)) continue;
+                    int n;
+                    count.TryGetValue(order, out n);
+                    count[order] = n + 1;
+                    if (!orders.Contains(order)) orders.Add(order);
                 }
 
                 if (orders.Count == 0) continue;
 
-                orders.Sort(StringComparer.Ordinal);
+                // Nhieu net nhat thang; bang nhau thi theo ten (tat dinh).
+                orders.Sort((a, b) =>
+                {
+                    int c = count[b].CompareTo(count[a]);
+                    return c != 0 ? c : string.CompareOrdinal(a, b);
+                });
                 part.Order = orders[0];
                 if (orders.Count == 1) continue;
 
+                // Khong chan nguoi dung nua: tu chon don chiem nhieu net nhat, bao ro, va van
+                // doi duoc o cot Don hang tren bang kiem tra.
                 conflicts++;
-                part.Escalate(PartStatus.Ambiguous, string.Format(CultureInfo.InvariantCulture,
-                    "Duong bao ghep tu nhieu don ({0}) - chon lai don cho chi tiet nay.",
-                    string.Join(", ", orders.ToArray())));
+                part.Escalate(PartStatus.Warning, string.Format(CultureInfo.InvariantCulture,
+                    "Duong bao ghep tu nhieu don ({0}) - tu chon {1} (nhieu net nhat); doi o cot Don hang neu can.",
+                    string.Join(", ", orders.ToArray()), orders[0]));
             }
 
             return conflicts;
+        }
+
+        /// <summary>
+        /// Chi tiet la BLOCK cua mot ket qua GHOPHOI cu (giu block): lay lai SL / vat lieu / don
+        /// / ten da gan tren block (xem <see cref="PartPreset"/>), thay cho gia tri mac dinh -
+        /// chu SL cua ban ve goc khong nam trong block. Goi SAU <see cref="AssignOrders"/>: don
+        /// khai tren bang (chay nhieu don) van thang; chi khi bang khong khai don moi lay don cu.
+        /// </summary>
+        /// <returns>So ban ghi da lay lai thong tin.</returns>
+        public static int ApplyPresets(NestReadResult read, RecognitionResult recognition)
+        {
+            if (read.Presets.Count == 0) return 0;
+
+            Dictionary<int, PartPreset> bySource = new Dictionary<int, PartPreset>();
+            foreach (PartPreset p in read.Presets) bySource[p.Source] = p;
+
+            int applied = 0;
+            foreach (RecognizedPart part in recognition.Parts)
+            {
+                PartPreset preset = null;
+                foreach (int src in part.GeometrySources)
+                {
+                    if (bySource.TryGetValue(src, out preset)) break;
+                }
+
+                if (preset == null) continue;
+                applied++;
+
+                // Chu SL / vat lieu nam NGAY tren ban ve (nguoi dung vua sua) thi chu thang.
+                if (!part.QuantityFromText)
+                {
+                    part.Quantity = preset.Quantity;
+                    part.QuantityFromText = true;
+                    part.Notes.RemoveAll(n => n.StartsWith("Khong tim thay SL", StringComparison.Ordinal));
+                }
+
+                if (!part.MaterialFromText && preset.Material.Length > 0)
+                {
+                    part.Material = preset.Material;
+                    part.MaterialFromText = true;
+                    part.Notes.RemoveAll(n => n.StartsWith("Khong tim thay vat lieu", StringComparison.Ordinal));
+                }
+
+                if (string.IsNullOrEmpty(part.Order) && preset.Order.Length > 0) part.Order = preset.Order;
+
+                // Ten cu "P37 287-1006.08.H..." -> bo ma P cu, giu phan ten that.
+                string name = preset.Name.Trim();
+                int space = name.IndexOf(' ');
+                if (name.Length > 1 && name[0] == 'P' && char.IsDigit(name[1]))
+                {
+                    name = space > 0 ? name.Substring(space + 1).Trim() : string.Empty;
+                }
+
+                if (name.Length > 0 && (part.Name ?? string.Empty).IndexOf(name, StringComparison.Ordinal) < 0)
+                {
+                    part.Name = (part.Name + " " + name).Trim();
+                }
+
+                part.Notes.Add("SL / vat lieu / don lay tu block cua lan ghep truoc");
+            }
+
+            return applied;
+        }
+
+        /// <summary>
+        /// Chup gia tri NHAN DANG (truoc khi ap chinh sua cu) cua tung chi tiet, de sau bang KIEM
+        /// TRA biet nguoi dung da sua truong nao. Goi truoc <see cref="ApplyReviewEdits"/>.
+        /// </summary>
+        public static Dictionary<RecognizedPart, ReviewEdit> SnapshotForReview(NestReadResult read, RecognitionResult recognition)
+        {
+            Dictionary<RecognizedPart, ReviewEdit> snap = new Dictionary<RecognizedPart, ReviewEdit>();
+            foreach (RecognizedPart p in recognition.Parts)
+            {
+                snap[p] = new ReviewEdit
+                {
+                    Key = NestingReviewMemory.KeyOf(read, p),
+                    Quantity = p.Quantity,
+                    Material = p.Material ?? string.Empty,
+                    Order = p.Order ?? string.Empty,
+                    Include = p.Include,
+                    Confirmed = p.Confirmed
+                };
+            }
+
+            return snap;
+        }
+
+        /// <summary>Ap lai chinh sua tay lan truoc. Tra ve so chi tiet duoc ap.</summary>
+        public static int ApplyReviewEdits(
+            RecognitionResult recognition, Dictionary<RecognizedPart, ReviewEdit> snapshot, Dictionary<string, ReviewEdit> saved)
+        {
+            if (saved == null || saved.Count == 0) return 0;
+
+            int applied = 0;
+            foreach (RecognizedPart p in recognition.Parts)
+            {
+                ReviewEdit original, e;
+                if (!snapshot.TryGetValue(p, out original) || original.Key.Length == 0) continue;
+                if (!saved.TryGetValue(original.Key, out e)) continue;
+
+                if (e.Quantity.HasValue) p.Quantity = e.Quantity.Value;
+                if (e.Material != null) p.Material = e.Material;
+                if (e.Order != null) p.Order = e.Order;
+                if (e.Include.HasValue) p.Include = e.Include.Value && p.IsNestable;
+                if (e.Confirmed.HasValue) p.Confirmed = e.Confirmed.Value;
+                p.Notes.Add("Da ap lai chinh sua o bang KIEM TRA lan truoc (RESET o bang don hang de bo)");
+                applied++;
+            }
+
+            return applied;
+        }
+
+        /// <summary>Chinh sua cua lan nay = cac truong khac voi gia tri nhan dang ban dau.</summary>
+        public static List<ReviewEdit> DiffAfterReview(RecognitionResult recognition, Dictionary<RecognizedPart, ReviewEdit> snapshot)
+        {
+            List<ReviewEdit> edits = new List<ReviewEdit>();
+            foreach (RecognizedPart p in recognition.Parts)
+            {
+                ReviewEdit o;
+                if (!snapshot.TryGetValue(p, out o) || o.Key.Length == 0) continue;
+
+                ReviewEdit e = new ReviewEdit { Key = o.Key };
+                if (p.Quantity != o.Quantity) e.Quantity = p.Quantity;
+                if (!string.Equals(p.Material ?? string.Empty, o.Material, StringComparison.Ordinal)) e.Material = p.Material ?? string.Empty;
+                if (!string.Equals(p.Order ?? string.Empty, o.Order, StringComparison.Ordinal)) e.Order = p.Order ?? string.Empty;
+                if (p.Include != o.Include) e.Include = p.Include;
+                if (p.Confirmed != o.Confirmed) e.Confirmed = p.Confirmed;
+                if (!e.IsEmpty) edits.Add(e);
+            }
+
+            return edits;
         }
 
         /// <summary>

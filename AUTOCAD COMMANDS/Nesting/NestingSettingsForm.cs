@@ -36,6 +36,7 @@ namespace AUTOCAD_COMMANDS.Nesting
         private CheckBox _chkHere;
         private CheckBox _chkBlocks;
         private CheckBox _chkLabels;
+        private CheckBox _chkLabelNameOrder;
         private CheckBox _chkDeterministic;
         private ComboBox _cboSearch;
         private CheckBox _chkOpen;
@@ -59,6 +60,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             _biggest = biggest ?? new Dictionary<string, double[]>(StringComparer.Ordinal);
             BuildUi();
             LoadValues();
+            DialogPlacement.Attach(this, "settings");
         }
 
         /// <summary>Help cho o "Tim du so luot xep" va o "Thoi gian toi da".</summary>
@@ -219,15 +221,23 @@ namespace AUTOCAD_COMMANDS.Nesting
             GroupBox gOut = new GroupBox { Text = "Xuat ket qua", Dock = DockStyle.Fill };
             FlowLayoutPanel outp = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
             _chkHere = new CheckBox { Text = "Ve thang vao ban ve nay (chon diem dat)", AutoSize = true };
-            _chkBlocks = new CheckBox { Text = "Moi chi tiet la 1 BLOCK", AutoSize = true };
+            _chkBlocks = new CheckBox { Text = "EXPLODE + PURGE sau khi ghep (bo tick = giu block de ghep lai)", AutoSize = true };
             _chkLabels = new CheckBox { Text = "Hien thi ma P + STT tren phoi", AutoSize = true };
+            _chkLabelNameOrder = new CheckBox { Text = "Ghi them ten phoi + ten don hang", AutoSize = true };
+            _chkLabels.CheckedChanged += (s, e) => _chkLabelNameOrder.Enabled = _chkLabels.Checked;
             _chkOpen = new CheckBox { Text = "Mo ban ve sau khi tao", AutoSize = true };
             _chkFixture = new CheckBox { Text = "Luu fixture test (.nest)", AutoSize = true };
             _numSpacing = Num(0, 10000, 0);
             _numSpacing.Width = 80;
             outp.Controls.Add(_chkHere);
             outp.Controls.Add(_chkBlocks);
+            help.SetToolTip(_chkBlocks,
+                "TICK (mac dinh): xep xong EXPLODE het block va PURGE sach - ban ve gon, di cat CNC." + Environment.NewLine +
+                "BO TICK: moi chi tiet la 1 BLOCK mang san SL / vat lieu / don. Muon ghep lai toi uu hon" + Environment.NewLine +
+                "thi go GHOPHOI, quet ca vung ket qua cu la du - khong can quet lai ban ve goc." + Environment.NewLine +
+                "Khung to / nhan / chu (layer GHOPHOI_*) tu dong bi bo qua khi quet.");
             outp.Controls.Add(_chkLabels);
+            outp.Controls.Add(_chkLabelNameOrder);
             outp.Controls.Add(_chkOpen);
             outp.Controls.Add(_chkFixture);
             outp.Controls.Add(new Label { Text = "Khoang cach giua cac to (mm):", AutoSize = true, Padding = new Padding(0, 5, 0, 0) });
@@ -311,8 +321,10 @@ namespace AUTOCAD_COMMANDS.Nesting
             _chkMirror.Checked = _settings.AllowMirror;
             _chkInsideHole.Checked = _settings.AllowPartInsideHole;
             _chkHere.Checked = _settings.OutputToCurrentDrawing;
-            _chkBlocks.Checked = _settings.OutputAsBlocks;
+            _chkBlocks.Checked = !_settings.OutputAsBlocks;
             _chkLabels.Checked = _settings.LabelParts;
+            _chkLabelNameOrder.Checked = _settings.LabelPartNameAndOrder;
+            _chkLabelNameOrder.Enabled = _settings.LabelParts;
             _chkDeterministic.Checked = _settings.DeterministicSearch;
             _cboSearch.SelectedIndex = _settings.SearchEffort == SearchEffort.Balanced ? 1 : 0;
             _chkOpen.Checked = _settings.OpenOutputDrawing;
@@ -555,8 +567,9 @@ namespace AUTOCAD_COMMANDS.Nesting
             _settings.AllowMirror = _chkMirror.Checked;
             _settings.AllowPartInsideHole = _chkInsideHole.Checked;
             _settings.OutputToCurrentDrawing = _chkHere.Checked;
-            _settings.OutputAsBlocks = _chkBlocks.Checked;
+            _settings.OutputAsBlocks = !_chkBlocks.Checked;
             _settings.LabelParts = _chkLabels.Checked;
+            _settings.LabelPartNameAndOrder = _chkLabelNameOrder.Checked;
             _settings.DeterministicSearch = _chkDeterministic.Checked;
             _settings.SearchEffort = _cboSearch.SelectedIndex == 1 ? SearchEffort.Balanced : SearchEffort.Fast;
             _settings.OpenOutputDrawing = _chkOpen.Checked;

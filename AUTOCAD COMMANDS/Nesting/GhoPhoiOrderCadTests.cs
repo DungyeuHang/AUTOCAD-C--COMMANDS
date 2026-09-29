@@ -23,11 +23,345 @@ namespace AUTOCAD_COMMANDS.Nesting
         {
             NestingTestHarness.Run(report, "D1. Bang don: ten trong / trung / xoa / quet lai", D1_OrderListRules);
             NestingTestHarness.Run(report, "D2. Ten don di tu luot quet vao ban ghi nhan dang", D2_OrderReachesRecords);
-            NestingTestHarness.Run(report, "D3. Duong bao ghep tu hai don -> MO HO, khong tu chon bua", D3_ConflictIsAmbiguous);
+            NestingTestHarness.Run(report, "D3. Duong bao ghep tu hai don -> tu chon don nhieu net nhat, CANH BAO", D3_ConflictIsAmbiguous);
             NestingTestHarness.Run(report, "D4. Nhan P + STT: bat thi co, tat thi khong", D4_PartLabelOption);
             NestingTestHarness.Run(report, "D5. Ten don tren to xuat ra; ban ve goc khong doi", D5_OrderOnSheetLabel);
             NestingTestHarness.Run(report, "D6. Ba don di het duong: xep -> nhan -> ban ve xuat ra", D6_ThreeOrdersEndToEnd);
             NestingTestHarness.Run(report, "D7. Ma P KHONG de len chu cat san co cua chi tiet", D7_PartLabelNeverReplacesOwnText);
+            NestingTestHarness.Run(report, "D8. Nhan chi tiet ghi them ten phoi + ten don (bat / tat)", D8_PartLabelNameAndOrder);
+            NestingTestHarness.Run(report, "D9. Mac dinh: ve xong EXPLODE het + PURGE sach block GHOPHOI", D9_ExplodeAndPurgeByDefault);
+            NestingTestHarness.Run(report, "D10. Nho bang don + phoi da quet lan truoc; RESET xoa het", D10_OrderMemory);
+            NestingTestHarness.Run(report, "D11. Giu block -> quet lai ket qua de GHEP LAI: giu SL / vat lieu / don, khong nham block", D11_RenestFromKeptBlocks);
+            NestingTestHarness.Run(report, "D12. Nho chinh sua o bang KIEM TRA; chay lai ap dung cai; RESET xoa", D12_ReviewEditsRemembered);
+        }
+
+        private static void D12_ReviewEditsRemembered()
+        {
+            foreach (string path in new[] { null, Path.Combine(Path.GetTempPath(), "ghophoi_rev_" + Guid.NewGuid().ToString("N") + ".dwg") })
+            {
+                string tag = path == null ? "chua luu" : "co ten";
+                using (Database db = new Database(true, true))
+                {
+                    List<ObjectId> ids = new List<ObjectId>();
+                    using (Transaction tr = db.TransactionManager.StartTransaction())
+                    {
+                        ids.Add(Rect(db, tr, 0, 0, 200, 100));
+                        ids.Add(Rect(db, tr, 300, 0, 150, 80));
+                        tr.Commit();
+                    }
+
+                    GhoPhoiSettings s = new GhoPhoiSettings();
+                    try
+                    {
+                        // ---- lan 1: nguoi dung sua o bang KIEM TRA ----
+                        NestReadResult read;
+                        RecognitionResult rec = ReadLikeCommand(db, ids, s, null, out read);
+                        Dictionary<RecognizedPart, ReviewEdit> snap = GhoPhoiPipeline.SnapshotForReview(read, rec);
+                        RecognizedPart big = rec.Parts.Find(p => p.MinX < 1), small = rec.Parts.Find(p => p.MinX > 1);
+                        big.Quantity = 7;
+                        big.Material = "1.5MM";
+                        small.Include = false;
+
+                        List<string> seen = new List<string>();
+                        foreach (ReviewEdit o in snap.Values) seen.Add(o.Key);
+                        List<ReviewEdit> diff = GhoPhoiPipeline.DiffAfterReview(rec, snap);
+                        Equal(2, diff.Count, tag + ": hai chi tiet bi sua");
+                        NestingReviewMemory.Merge(db, path, seen, diff);
+
+                        // Ban ve co ten: bo ban trong bo nho de ep doc lai tu FILE (nhu tat AutoCAD mo lai).
+                        if (path != null) NestingReviewMemory.ForgetSession(db);
+
+                        // ---- lan 2: chay lai, phai ap dung cai ----
+                        NestReadResult read2;
+                        RecognitionResult rec2 = ReadLikeCommand(db, ids, s, null, out read2);
+                        Dictionary<RecognizedPart, ReviewEdit> snap2 = GhoPhoiPipeline.SnapshotForReview(read2, rec2);
+                        Equal(2, GhoPhoiPipeline.ApplyReviewEdits(rec2, snap2, NestingReviewMemory.Load(db, path)), tag + ": ap lai 2 chi tiet");
+                        RecognizedPart big2 = rec2.Parts.Find(p => p.MinX < 1), small2 = rec2.Parts.Find(p => p.MinX > 1);
+                        Equal(7, big2.Quantity, tag + ": SL da sua");
+                        Equal("1.5MM", big2.Material, tag + ": vat lieu da sua");
+                        True(big2.Include, tag + ": ghep khong doi");
+                        True(!small2.Include, tag + ": bo tick Ghep duoc nho");
+                        Equal(1, small2.Quantity, tag + ": SL cai khong sua van nhu nhan dang");
+
+                        // ---- lan 2 chi quet cai nho, sua lai cho no: chinh sua cua cai lon PHAI con ----
+                        NestReadResult read3;
+                        RecognitionResult rec3 = ReadLikeCommand(db, new List<ObjectId> { ids[1] }, s, null, out read3);
+                        Dictionary<RecognizedPart, ReviewEdit> snap3 = GhoPhoiPipeline.SnapshotForReview(read3, rec3);
+                        GhoPhoiPipeline.ApplyReviewEdits(rec3, snap3, NestingReviewMemory.Load(db, path));
+                        rec3.Parts[0].Include = true;      // tick lai = tro ve nhu nhan dang -> het chinh sua
+                        List<string> seen3 = new List<string>();
+                        foreach (ReviewEdit o in snap3.Values) seen3.Add(o.Key);
+                        NestingReviewMemory.Merge(db, path, seen3, GhoPhoiPipeline.DiffAfterReview(rec3, snap3));
+                        Equal(1, NestingReviewMemory.Load(db, path).Count, tag + ": chi con chinh sua cua cai lon");
+
+                        // ---- RESET ----
+                        NestingOrderMemory.Clear(db, path);
+                        Equal(0, NestingReviewMemory.Load(db, path).Count, tag + ": RESET xoa chinh sua");
+                    }
+                    finally
+                    {
+                        NestingOrderMemory.Clear(db, path);
+                    }
+                }
+            }
+        }
+
+        /// <summary>Doc + nhan dang + gan don + lay lai thong tin tu block, nhu lenh that.</summary>
+        private static RecognitionResult ReadLikeCommand(Database db, IList<ObjectId> ids, GhoPhoiSettings s,
+            IDictionary<ObjectId, string> byEntity, out NestReadResult read)
+        {
+            RecognitionResult rec;
+            using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+            {
+                read = NestingSelectionReader.Read(tr, ids, s, byEntity);
+                rec = new PartRecognizer(s.ToRecognitionSettings()).Recognize(read.Chains, read.Texts);
+            }
+
+            GhoPhoiPipeline.AssignOrders(read, rec);
+            GhoPhoiPipeline.ApplyPresets(read, rec);
+            return rec;
+        }
+
+        private static void D11_RenestFromKeptBlocks()
+        {
+            using (Database db = new Database(true, true))
+            {
+                List<ObjectId> source = new List<ObjectId>();
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    source.Add(Rect(db, tr, 0, 0, 200, 100));
+                    source.Add(Append(db, tr, new MText { Location = new Point3d(20, 80, 0), TextHeight = 10, Contents = "SL: 3\\P1.5MM" }));
+                    source.Add(Rect(db, tr, 300, 0, 150, 80));
+                    source.Add(Append(db, tr, new MText { Location = new Point3d(320, 60, 0), TextHeight = 10, Contents = "SL: 2\\P1.5MM" }));
+                    tr.Commit();
+                }
+
+                Dictionary<ObjectId, string> byEntity = new Dictionary<ObjectId, string>();
+                foreach (ObjectId id in source) byEntity[id] = "DON-X";
+
+                GhoPhoiSettings s = new GhoPhoiSettings { OutputAsBlocks = true };
+                NestReadResult read;
+                RecognitionResult rec = ReadLikeCommand(db, source, s, byEntity, out read);
+                Equal(2, rec.Parts.Count, "hai chi tiet goc");
+
+                NestingRequest req = new NestingRequest { DefaultSheet = new SheetSpec("T", 2000, 1000) };
+                req.SheetByMaterial["1.5MM"] = new SheetSpec("T15", 2000, 1000);
+                req.Settings.TimeBudgetSeconds = 60;
+                req.Groups.AddRange(PartRecognizer.ToPartGroups(rec.Parts, s.ArcToleranceMm));
+                NestingResult res = new SimpleNestingEngine().Nest(req, CancellationToken.None, null);
+                True(res.Validation.IsValid, "validator");
+                Equal(5, res.Statistics.PlacedQuantity, "3 + 2");
+
+                HashSet<ObjectId> before;
+                using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction()) before = new HashSet<ObjectId>(ModelSpaceIds(db, tr));
+                NestingDwgWriter.DrawIntoCurrent(db, new Point3d(0, -5000, 0), req, res, Outputs(req, read), s, "test");
+                List<ObjectId> firstResult;
+                using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+                    firstResult = ModelSpaceIds(db, tr).FindAll(id => !before.Contains(id));
+
+                // ---- quet CA vung ket qua cu (khung, nhan, chu... deu nam trong) ----
+                GhoPhoiSettings s2 = new GhoPhoiSettings();
+                NestReadResult read2;
+                RecognitionResult again = ReadLikeCommand(db, firstResult, s2, null, out read2);
+                List<RecognizedPart> nestable = again.Parts.FindAll(p => p.IsNestable);
+                Equal(5, nestable.Count, "5 block = 5 chi tiet, khung to / nhan bi bo qua: " +
+                    string.Join(" | ", again.Parts.ConvertAll(p => p.Name + " " + p.Status + " " + p.NotesText).ToArray()));
+                Equal(5, read2.Presets.Count, "moi block mang thong tin");
+                foreach (RecognizedPart p in nestable)
+                {
+                    Equal(1, p.Quantity, "moi block la 1 cai");
+                    Equal("1.5MM", SimpleNestingEngine.NormalizeMaterial(p.Material), "vat lieu giu nguyen: " + p.NotesText);
+                    Equal("DON-X", p.Order, "don giu nguyen");
+                    True(p.Status != PartStatus.Ambiguous, "khong mo ho: " + p.NotesText);
+                }
+
+                // ---- ghep lai lan 2 (van giu block): block moi KHONG duoc dung nham dinh nghia cu ----
+                NestingRequest req2 = new NestingRequest { DefaultSheet = new SheetSpec("T", 2000, 1000) };
+                req2.SheetByMaterial["1.5MM"] = new SheetSpec("T15", 2000, 1000);
+                req2.Settings.TimeBudgetSeconds = 60;
+                req2.Groups.AddRange(PartRecognizer.ToPartGroups(again.Parts, s.ArcToleranceMm));
+                NestingResult res2 = new SimpleNestingEngine().Nest(req2, CancellationToken.None, null);
+                True(res2.Validation.IsValid, "validator lan 2");
+
+                // Mot chi tiet MOI hinh khac nhung se mang ten P1 giong lan truoc.
+                ObjectId odd;
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    odd = Rect(db, tr, 10000, 0, 400, 50);
+                    tr.Commit();
+                }
+
+                NestReadResult read3;
+                RecognitionResult rec3 = ReadLikeCommand(db, new List<ObjectId> { odd }, s, null, out read3);
+                NestingRequest req3 = new NestingRequest { DefaultSheet = new SheetSpec("T", 2000, 1000) };
+                req3.Settings.TimeBudgetSeconds = 30;
+                req3.Groups.AddRange(PartRecognizer.ToPartGroups(rec3.Parts, s.ArcToleranceMm));
+                NestingResult res3 = new SimpleNestingEngine().Nest(req3, CancellationToken.None, null);
+
+                using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction()) before = new HashSet<ObjectId>(ModelSpaceIds(db, tr));
+                NestingDwgWriter.DrawIntoCurrent(db, new Point3d(0, -20000, 0), req3, res3, Outputs(req3, read3), s, "test");
+                using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+                {
+                    int refs = 0;
+                    foreach (ObjectId id in ModelSpaceIds(db, tr))
+                    {
+                        if (before.Contains(id)) continue;
+                        BlockReference br = tr.GetObject(id, OpenMode.ForRead) as BlockReference;
+                        if (br == null) continue;
+                        refs++;
+                        Extents3d e = br.GeometricExtents;
+                        double longest = Math.Max(e.MaxPoint.X - e.MinPoint.X, e.MaxPoint.Y - e.MinPoint.Y);
+                        True(Math.Abs(longest - 400) < 1e-3, "block moi phai la hinh MOI (400), dang la " + longest);
+                    }
+
+                    Equal(1, refs, "mot block moi");
+                }
+            }
+        }
+
+        private static void D10_OrderMemory()
+        {
+            // ---- luat cua bang ----
+            NestingOrderList list = new NestingOrderList();
+            list.Restore(null);
+            Equal(1, list.Count, "nap bang rong -> mot dong trong");
+            True(!list.AnyScanned, "chua quet gi");
+
+            using (Database db = new Database(true, true))
+            {
+                ObjectId a, b, c;
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    a = Rect(db, tr, 0, 0, 100, 100);
+                    b = Rect(db, tr, 200, 0, 100, 100);
+                    c = Rect(db, tr, 400, 0, 100, 100);
+                    tr.Commit();
+                }
+
+                NestingOrderEntry e1 = new NestingOrderEntry { Name = "DH-A" };
+                e1.Ids.AddRange(new[] { a, b });
+                NestingOrderEntry e2 = new NestingOrderEntry { Name = "DH-B" };
+                e2.Ids.Add(c);
+                NestingOrderEntry empty = new NestingOrderEntry { Name = "DH-TRONG" };   // chua quet -> khong luu
+
+                foreach (string path in new[] { null, Path.Combine(Path.GetTempPath(), "ghophoi_mem_" + Guid.NewGuid().ToString("N") + ".dwg") })
+                {
+                    string tag = path == null ? "ban ve chua luu" : "ban ve co ten";
+                    try
+                    {
+                        NestingOrderMemory.Save(db, path, new[] { e1, e2, empty });
+
+                        int missing;
+                        List<NestingOrderEntry> back = NestingOrderMemory.Load(db, path, out missing);
+                        Equal(2, back.Count, tag + ": hai don da quet");
+                        Equal("DH-A", back[0].Name, tag + ": dung ten, dung thu tu");
+                        Equal(2, back[0].Ids.Count, tag + ": don A hai doi tuong");
+                        True(back[0].Ids.Contains(a) && back[0].Ids.Contains(b), tag + ": dung doi tuong");
+                        Equal(0, missing, tag + ": khong thieu");
+
+                        list.Restore(back);
+                        Equal(2, list.Count, tag + ": bang nap lai hai dong");
+                        True(list.AnyScanned, tag + ": da co quet");
+
+                        list.Reset();
+                        Equal(1, list.Count, tag + ": RESET con mot dong");
+                        True(!list.AnyScanned, tag + ": RESET xoa het quet");
+
+                        NestingOrderMemory.Clear(db, path);
+                        Equal(0, NestingOrderMemory.Load(db, path, out missing).Count, tag + ": RESET xoa ca ban luu");
+                    }
+                    finally
+                    {
+                        NestingOrderMemory.Clear(db, path);
+                    }
+                }
+
+                // ---- doc tu FILE (phien sau): doi tuong da bi xoa thi bo qua va dem ----
+                string file = Path.Combine(Path.GetTempPath(), "ghophoi_mem_" + Guid.NewGuid().ToString("N") + ".dwg");
+                try
+                {
+                    NestingOrderMemory.Save(db, file, new[] { e1, e2 });
+                    using (Transaction tr = db.TransactionManager.StartTransaction())
+                    {
+                        tr.GetObject(b, OpenMode.ForWrite).Erase();
+                        tr.Commit();
+                    }
+
+                    using (Database other = new Database(true, true))
+                    {
+                        // Database khac = khong co ban trong bo nho -> phai doc tu file. Handle cua
+                        // ban ve moi khong trung voi ban ve kia, nen chi kiem la doc duoc hai dong.
+                        int ignored;
+                        Equal(2, NestingOrderMemory.Load(other, file, out ignored).Count, "doc lai tu file: hai don");
+                    }
+
+                    int missing;
+                    List<NestingOrderEntry> back = NestingOrderMemory.Load(db, file, out missing);
+                    Equal(1, back[0].Ids.Count, "doi tuong da xoa bi bo qua");
+                    Equal(1, missing, "va duoc dem de bao nguoi dung");
+                }
+                finally
+                {
+                    NestingOrderMemory.Clear(db, file);
+                }
+            }
+        }
+
+        private static void D9_ExplodeAndPurgeByDefault()
+        {
+            using (Database db = new Database(true, true))
+            {
+                NestReadResult read;
+                RecognitionResult rec;
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    Rect(db, tr, 0, 0, 200, 100);
+                    Rect(db, tr, 300, 0, 150, 80);
+                    Rect(db, tr, 320, 10, 150, 40);     // chong len cai tren -> gop thanh 1 chi tiet
+                    tr.Commit();
+                }
+
+                GhoPhoiSettings s = new GhoPhoiSettings();
+                True(!s.OutputAsBlocks, "mac dinh KHONG giu block");
+                using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+                {
+                    read = NestingSelectionReader.Read(tr, ModelSpaceIds(db, tr), s);
+                    rec = new PartRecognizer(s.ToRecognitionSettings()).Recognize(read.Chains, read.Texts);
+                }
+
+                Equal(2, rec.Parts.Count, "hai chi tiet (cai chong nhau da gop): " +
+                    string.Join(" | ", rec.Parts.ConvertAll(p => p.Name + " " + p.Status + " " + p.NotesText).ToArray()));
+                True(rec.Parts.TrueForAll(p => p.IsNestable), "ca hai ghep duoc");
+
+                NestingRequest req = new NestingRequest { DefaultSheet = new SheetSpec("T", 2000, 1000) };
+                req.Settings.TimeBudgetSeconds = 60;
+                req.Groups.AddRange(PartRecognizer.ToPartGroups(rec.Parts, s.ArcToleranceMm));
+                NestingResult res = new SimpleNestingEngine().Nest(req, CancellationToken.None, null);
+                True(res.Validation.IsValid, "validator");
+
+                NestingDwgWriter.DrawIntoCurrent(db, new Point3d(0, -5000, 0), req, res, Outputs(req, read), s, "test");
+
+                using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+                {
+                    int inserts = 0;
+                    foreach (ObjectId id in ModelSpaceIds(db, tr))
+                    {
+                        if (tr.GetObject(id, OpenMode.ForRead) is BlockReference) inserts++;
+                    }
+
+                    Equal(0, inserts, "khong con BlockReference nao");
+
+                    List<string> left = new List<string>();
+                    BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                    foreach (ObjectId id in bt)
+                    {
+                        BlockTableRecord btr = (BlockTableRecord)tr.GetObject(id, OpenMode.ForRead);
+                        if (btr.Name.StartsWith("GHOPHOI", StringComparison.OrdinalIgnoreCase)) left.Add(btr.Name);
+                    }
+
+                    Equal(0, left.Count, "khong con dinh nghia block GHOPHOI_*: " + string.Join(", ", left.ToArray()));
+                }
+            }
         }
 
         // ==================================================================================
@@ -75,6 +409,14 @@ namespace AUTOCAD_COMMANDS.Nesting
             }
 
             return outputs;
+        }
+
+        /// <summary>Dong dau cua noi dung MText (nhan chi tiet: ma P nam o dong dau).</summary>
+        private static string FirstLine(string contents)
+        {
+            string text = contents ?? string.Empty;
+            int cut = text.IndexOf("\\P", StringComparison.Ordinal);
+            return cut < 0 ? text : text.Substring(0, cut);
         }
 
         // ==================================================================================
@@ -231,8 +573,9 @@ namespace AUTOCAD_COMMANDS.Nesting
         }
 
         /// <summary>
-        /// Mot duong bao ghep tu hai luot quet KHAC don: khong duoc tu y chon mot don roi di
-        /// tiep - phai danh dau MO HO de nguoi dung quyet.
+        /// Mot duong bao ghep tu hai luot quet KHAC don: tu chon don chiem nhieu net nhat (bang
+        /// nhau thi theo ten), chi CANH BAO - khong chan nguoi dung nua (yeu cau cua nguoi dung).
+        /// Ghi chu van phai neu du ten ca hai don.
         /// </summary>
         private static void D3_ConflictIsAmbiguous()
         {
@@ -256,7 +599,8 @@ namespace AUTOCAD_COMMANDS.Nesting
 
                 Equal(1, GhoPhoiPipeline.AssignOrders(read, rec), "phai bao dung mot xung dot");
                 Equal(1, rec.Parts.Count, "mot ban ghi");
-                Equal(PartStatus.Ambiguous, rec.Parts[0].Status, "phai la MO HO");
+                Equal(PartStatus.Warning, rec.Parts[0].Status, "chi CANH BAO, khong chan");
+                Equal("DON-A", rec.Parts[0].Order, "bang nhau 2-2 thi chon theo ten");
                 True(rec.Parts[0].NotesText.Contains("DON-A") && rec.Parts[0].NotesText.Contains("DON-B"),
                     "ghi chu phai neu ten ca hai don, dang co: " + rec.Parts[0].NotesText);
             }
@@ -316,7 +660,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                             MText t = tr.GetObject(id, OpenMode.ForRead) as MText;
                             if (t == null || t.Layer != NestingDwgWriter.LabelLayer) continue;
 
-                            string text = t.Contents ?? string.Empty;
+                            string text = FirstLine(t.Contents);
                             if (text.Length == 3 && text[0] == 'P' && char.IsDigit(text[1]) && char.IsDigit(text[2]))
                             {
                                 labels++;
@@ -501,7 +845,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                             MText mt = tr.GetObject(id, OpenMode.ForRead) as MText;
                             if (mt == null || mt.Layer != NestingDwgWriter.LabelLayer) continue;
 
-                            string t = mt.Contents ?? string.Empty;
+                            string t = FirstLine(mt.Contents);
                             if (t.Length == 3 && t[0] == 'P') pLabels++;
                         }
 
@@ -522,6 +866,103 @@ namespace AUTOCAD_COMMANDS.Nesting
 
                 True(ownTextKept, "chu cat cua nguoi dung phai duoc giu nguyen van");
                 Equal(1, pLabels, "chi cai KHONG co chu san moi duoc ve ma P (dang co " + pLabels + ")");
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(path)) File.Delete(path);
+                }
+                catch (IOException)
+                {
+                    // chi la file tam
+                }
+            }
+        }
+
+        /// <summary>
+        /// Bat "ghi them ten phoi + ten don": nhan cua moi chi tiet = ma P, ten phoi, ten don
+        /// (ca ba trong cung MOT MText). Tat thi chi con ma P nhu cu.
+        /// </summary>
+        private static void D8_PartLabelNameAndOrder()
+        {
+            List<string> on = PartLabels(true);
+            Equal(2, on.Count, "hai chi tiet hai nhan");
+            foreach (string t in on)
+            {
+                string[] lines = t.Split(new[] { "\\P" }, StringSplitOptions.None);
+                Equal(3, lines.Length, "ma P + ten phoi + ten don, dang co: " + t);
+                True(lines[0].Length == 3 && lines[0][0] == 'P', "dong dau van la ma P: " + t);
+                True(lines[1].StartsWith("P", StringComparison.Ordinal), "dong hai la ten phoi: " + t);
+                True(lines[2] == "Don: DON-A" || lines[2] == "Don: DON-B", "dong ba la ten don: " + t);
+            }
+
+            True(on.Exists(t => t.EndsWith("DON-A", StringComparison.Ordinal)) &&
+                 on.Exists(t => t.EndsWith("DON-B", StringComparison.Ordinal)), "moi chi tiet dung don cua no");
+
+            List<string> off = PartLabels(false);
+            Equal(2, off.Count, "tat thi van hai nhan ma P");
+            True(off.TrueForAll(t => t.Length == 3 && t[0] == 'P'), "tat thi chi con ma P");
+        }
+
+        /// <summary>Noi dung cac nhan chi tiet (layer nhan) trong ban ve xuat ra.</summary>
+        private static List<string> PartLabels(bool nameAndOrder)
+        {
+            string path = Path.Combine(Path.GetTempPath(), "ghophoi_order_" + Guid.NewGuid().ToString("N") + ".dwg");
+            try
+            {
+                using (Database db = new Database(true, true))
+                {
+                    NestReadResult read;
+                    RecognitionResult rec;
+                    using (Transaction tr = db.TransactionManager.StartTransaction())
+                    {
+                        Rect(db, tr, 0, 0, 300, 200);
+                        Rect(db, tr, 500, 0, 300, 200);
+                        tr.Commit();
+                    }
+
+                    GhoPhoiSettings s = new GhoPhoiSettings { LabelParts = true, LabelPartNameAndOrder = nameAndOrder };
+                    using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+                    {
+                        List<ObjectId> ids = ModelSpaceIds(db, tr);
+                        Dictionary<ObjectId, string> byEntity = new Dictionary<ObjectId, string>
+                        {
+                            { ids[0], "DON-A" },
+                            { ids[1], "DON-B" }
+                        };
+
+                        read = NestingSelectionReader.Read(tr, ids, s, byEntity);
+                        rec = new PartRecognizer(s.ToRecognitionSettings()).Recognize(read.Chains, read.Texts);
+                        Equal(0, GhoPhoiPipeline.AssignOrders(read, rec), "khong co xung dot don");
+                    }
+
+                    NestingRequest req = new NestingRequest { DefaultSheet = new SheetSpec("T", 2000, 1000) };
+                    req.Settings.TimeBudgetSeconds = 60;
+                    req.Groups.AddRange(PartRecognizer.ToPartGroups(rec.Parts, s.ArcToleranceMm));
+
+                    NestingResult res = new SimpleNestingEngine().Nest(req, CancellationToken.None, null);
+                    True(res.Validation.IsValid, "validator");
+                    Equal(2, res.Statistics.PlacedQuantity, "hai chi tiet");
+
+                    NestingDwgWriter.Write(db, path, req, res, Outputs(req, read), s, "test");
+                }
+
+                List<string> labels = new List<string>();
+                using (Database check = new Database(false, true))
+                {
+                    check.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare, true, string.Empty);
+                    using (Transaction tr = check.TransactionManager.StartOpenCloseTransaction())
+                    {
+                        foreach (ObjectId id in ModelSpaceIds(check, tr))
+                        {
+                            MText mt = tr.GetObject(id, OpenMode.ForRead) as MText;
+                            if (mt != null && mt.Layer == NestingDwgWriter.LabelLayer) labels.Add(mt.Contents ?? string.Empty);
+                        }
+                    }
+                }
+
+                return labels;
             }
             finally
             {

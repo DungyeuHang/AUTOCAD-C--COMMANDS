@@ -12,7 +12,8 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
     ///   3. loops are validated (>= 3 vertices, non-zero area, not self-intersecting),
     ///   4. containment depth: even depth = part outline, odd depth = hole of its parent,
     ///      so a part drawn inside another part's hole is still its own part,
-    ///   5. crossing/touching contours are reported,
+    ///   5. crossing/touching contours are merged into ONE part nested by their outer boundary
+    ///      (so are branching nodes and self-crossing loops, see <see cref="OuterBoundary"/>),
     ///   6. open geometry inside a part is kept as marking (bend lines...), open geometry
     ///      outside every part is an INVALID GEOMETRY record (probably a broken contour).
     /// Every selected entity ends up in a part, a marking, or an explicit invalid record.
@@ -51,6 +52,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             public int Depth;
             public bool Invalid;
             public string InvalidReason;
+            public string Note;
             public RecognizedPart Part;
         }
 
@@ -164,6 +166,27 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
 
                 if (branching)
                 {
+                    // Nhieu net gap nhau mot diem (thuong la net ve chong len nhau): khong bat
+                    // nguoi dung sua ma lay DUONG BAO NGOAI CUNG cua ca cum lam mot duong bao.
+                    // Moi mat kin ben trong deu bi cat nen dung lam chi tiet hay lam lo deu dung.
+                    List<IList<IntPoint>> paths = new List<IList<IntPoint>>();
+                    List<bool> closedFlags = new List<bool>();
+                    List<int> componentSources = new List<int>();
+                    foreach (Edge edge in component)
+                    {
+                        paths.Add(ToInts(edge.Chain.Points));
+                        closedFlags.Add(false);
+                        if (!componentSources.Contains(edge.Chain.SourceIndex)) componentSources.Add(edge.Chain.SourceIndex);
+                    }
+
+                    IntPoint[] outline = OuterBoundary.Of(paths, closedFlags);
+                    if (outline != null)
+                    {
+                        AddLoop(loops, records, ToPts(outline), componentSources, component.Exists(e => e.Chain.Approximated),
+                            "Hinh hoc re nhanh tai " + branchAt + " (hon 2 doi tuong gap nhau 1 diem) - da gop, ghep theo duong bao ngoai cung");
+                        continue;
+                    }
+
                     branchingComponents.Add(component);
                     branchPoints.Add(branchAt);
                     continue;
@@ -183,7 +206,11 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 for (int j = i - 1; j >= 0; j--)
                 {
                     if (!BoxContains(loops[j].Data, loops[i].Data)) continue;
-                    if (GeometryMath.PointInRing(loops[i].Ring[0], loops[j].Ring) > 0)
+                    // Vong CHAM / CAT vong kia thi khong phai "nam trong" no - hai vong do se duoc
+                    // gop o buoc 5. Khong loai ra thi mot chi tiet chong len chi tiet khac bi coi
+                    // la LO, va cac lo cua no lai thanh chi tiet rieng.
+                    if (GeometryMath.PointInRing(loops[i].Ring[0], loops[j].Ring) > 0 &&
+                        !GeometryMath.RingsTouch(loops[i].Ring, loops[j].Ring))
                     {
                         loops[i].Parent = j;
                         loops[i].Depth = loops[j].Depth + 1;
@@ -216,25 +243,12 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 owner.GeometrySources.AddRange(loop.Data.Sources);
             }
 
-            for (int i = 0; i < loops.Count; i++)
-            {
-                if (loops[i].Invalid) loops[i].Part.Escalate(PartStatus.InvalidGeometry, loops[i].InvalidReason);
+            MergeTouchingLoops(loops, parts);
 
-                for (int j = i + 1; j < loops.Count; j++)
-                {
-                    if (!BoxOverlap(loops[i].Data, loops[j].Data)) continue;
-                    IntPoint touch;
-                    if (GeometryMath.RingsTouch(loops[i].Ring, loops[j].Ring, out touch))
-                    {
-                        // Duong bao TRUNG KHIT da duoc gop lam 1 tu truoc (xem AddLoop), nen den
-                        // day chi con truong hop cham / cat that su.
-                        string msg = string.Format(CultureInfo.InvariantCulture,
-                            "Duong bao cat/cham duong bao khac (lo cham bien hoac 2 chi tiet chong nhau) - tai ({0:0.##}, {1:0.##})",
-                            NestUnits.ToMm(touch.X), NestUnits.ToMm(touch.Y));
-                        loops[i].Part.Escalate(PartStatus.InvalidGeometry, msg);
-                        loops[j].Part.Escalate(PartStatus.InvalidGeometry, msg);
-                    }
-                }
+            foreach (Loop loop in loops)
+            {
+                if (loop.Invalid) loop.Part.Escalate(PartStatus.InvalidGeometry, loop.InvalidReason);
+                if (loop.Note != null) loop.Part.Escalate(PartStatus.Warning, loop.Note);
             }
 
             // ---- 6. open / branching geometry ----
@@ -254,6 +268,12 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
         }
 
         private void AddLoop(List<Loop> loops, List<RecognizedPart> records, List<Pt> pts, List<int> sources, bool approximated)
+        {
+            AddLoop(loops, records, pts, sources, approximated, null);
+        }
+
+        private void AddLoop(
+            List<Loop> loops, List<RecognizedPart> records, List<Pt> pts, List<int> sources, bool approximated, string note)
         {
             // Drop duplicate closing point.
             if (pts.Count > 1 && pts[0].DistanceTo(pts[pts.Count - 1]) <= _settings.JoinTolerance)
@@ -279,7 +299,20 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             int ea, eb;
             if (!GeometryMath.IsSimpleRing(ring, out ea, out eb))
             {
-                invalid = "Duong bao tu cat (self-intersecting)";
+                // Net ve chong / cat lai chinh no: lay duong bao ngoai cung. Chi nhan khi tim
+                // duoc DUNG duong bao (khong dung bao loi): vong nay co the la mot LO, ma bao
+                // loi cua lo thi lon hon khoang trong that.
+                IntPoint[] outline = OuterBoundary.Of(new IList<IntPoint>[] { ring }, new[] { true });
+                if (outline != null)
+                {
+                    ring = outline;
+                    data = new RecognizedLoop(ToPts(outline), sources, approximated);
+                    note = note ?? "Duong bao tu cat / net chong len nhau - da ghep theo duong bao ngoai cung";
+                }
+                else
+                {
+                    invalid = "Duong bao tu cat (self-intersecting)";
+                }
             }
 
             // Duong bao TRUNG KHIT voi mot duong da co (ve de len nhau hai lan) khong phai la
@@ -300,7 +333,200 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 return;
             }
 
-            loops.Add(new Loop { Data = data, Ring = ring, Invalid = invalid != null, InvalidReason = invalid });
+            loops.Add(new Loop { Data = data, Ring = ring, Invalid = invalid != null, InvalidReason = invalid, Note = note });
+        }
+
+        /// <summary>
+        /// Cac duong bao CHAM / CAT / CHONG nhau (lo cham bien, hai chi tiet ve de len nhau,
+        /// net trung mot khuc...) khong con bi bao loi: ca cum duoc GOP thanh MOT chi tiet.
+        ///
+        ///   - Duong bao de ghep = duong bao ngoai cung cua moi vong trong cum (khong tim duoc
+        ///     thi dung bao loi) -> moi net deu nam trong, khong bao gio de len chi tiet khac.
+        ///   - Moi doi tuong goc cua cac chi tiet bi gop deu thanh hinh cua chi tiet chung, nen
+        ///     khi xuat van cat dung tung net nhu ban ve.
+        ///   - Lo nao dinh vao cum (cham, hoac nam trong vat lieu cua chi tiet khac trong cum)
+        ///     thi bo khoi hinh ghep - coi cho do la dac, khong xep gi vao. Chi mat cho, khong
+        ///     bao gio sai.
+        /// </summary>
+        private static void MergeTouchingLoops(List<Loop> loops, List<RecognizedPart> parts)
+        {
+            int n = loops.Count;
+            int[] root = new int[n];
+            for (int i = 0; i < n; i++) root[i] = i;
+            Func<int, int> find = null;
+            find = x => root[x] == x ? x : (root[x] = find(root[x]));
+
+            IntPoint?[] firstTouch = new IntPoint?[n];
+            for (int i = 0; i < n; i++)
+            {
+                for (int j = i + 1; j < n; j++)
+                {
+                    if (!BoxOverlap(loops[i].Data, loops[j].Data)) continue;
+                    IntPoint touch;
+                    if (!GeometryMath.RingsTouch(loops[i].Ring, loops[j].Ring, out touch)) continue;
+
+                    int a = find(i), b = find(j);
+                    IntPoint? at = firstTouch[a] ?? firstTouch[b] ?? touch;
+                    if (a != b) root[b] = a;
+                    firstTouch[a] = at;
+                }
+            }
+
+            Dictionary<int, List<Loop>> groups = new Dictionary<int, List<Loop>>();
+            for (int i = 0; i < n; i++)
+            {
+                int r = find(i);
+                if (r == i && firstTouch[i] == null) continue;
+                List<Loop> g;
+                if (!groups.TryGetValue(r, out g))
+                {
+                    g = new List<Loop>();
+                    groups[r] = g;
+                }
+
+                g.Add(loops[i]);
+            }
+
+            foreach (KeyValuePair<int, List<Loop>> kv in groups)
+            {
+                List<Loop> group = kv.Value;
+                if (group.Count < 2) continue;
+
+                // Cac chi tiet dinh vao cum, cung vong ngoai + cac lo cua tung cai.
+                List<RecognizedPart> involved = new List<RecognizedPart>();
+                foreach (Loop l in group)
+                {
+                    if (!involved.Contains(l.Part)) involved.Add(l.Part);
+                }
+
+                Dictionary<RecognizedPart, Loop> outerOf = new Dictionary<RecognizedPart, Loop>();
+                Dictionary<RecognizedPart, List<Loop>> holesOf = new Dictionary<RecognizedPart, List<Loop>>();
+                foreach (RecognizedPart p in involved) holesOf[p] = new List<Loop>();
+                foreach (Loop l in loops)
+                {
+                    if (!holesOf.ContainsKey(l.Part)) continue;
+                    if (ReferenceEquals(l.Data, l.Part.Outer)) outerOf[l.Part] = l;
+                    else if (l.Part.Holes.Contains(l.Data)) holesOf[l.Part].Add(l);   // lo da bo o cum truoc thi thoi
+                }
+
+                RecognizedPart main = involved[0];
+                foreach (RecognizedPart p in involved)
+                {
+                    if (p.Outer.Area > main.Outer.Area) main = p;
+                }
+
+                // ---- duong bao ghep ----
+                List<Loop> shapeLoops = new List<Loop>();
+                foreach (RecognizedPart p in involved) shapeLoops.Add(outerOf[p]);
+                foreach (Loop l in group)
+                {
+                    if (!shapeLoops.Contains(l)) shapeLoops.Add(l);
+                }
+
+                List<IList<IntPoint>> paths = new List<IList<IntPoint>>();
+                List<bool> closedFlags = new List<bool>();
+                List<int> sources = new List<int>();
+                bool approximated = false;
+                foreach (Loop l in shapeLoops)
+                {
+                    paths.Add(l.Ring);
+                    closedFlags.Add(true);
+                    approximated |= l.Data.Approximated;
+                    foreach (int s in l.Data.Sources)
+                    {
+                        if (!sources.Contains(s)) sources.Add(s);
+                    }
+                }
+
+                bool hull = false;
+                IntPoint[] outline = OuterBoundary.Of(paths, closedFlags);
+                if (outline == null)
+                {
+                    outline = OuterBoundary.ConvexHull(paths);
+                    hull = true;
+                }
+
+                IntPoint where = firstTouch[kv.Key].Value;
+                string at = string.Format(CultureInfo.InvariantCulture, "({0:0.##}, {1:0.##})",
+                    NestUnits.ToMm(where.X), NestUnits.ToMm(where.Y));
+
+                if (outline == null)
+                {
+                    foreach (RecognizedPart p in involved)
+                    {
+                        p.Escalate(PartStatus.InvalidGeometry,
+                            "Duong bao cat/cham duong bao khac, khong gop duoc - tai " + at);
+                    }
+
+                    continue;
+                }
+
+                // ---- lo con giu lai ----
+                HashSet<Loop> inGroup = new HashSet<Loop>(group);
+                List<RecognizedLoop> keptHoles = new List<RecognizedLoop>();
+                foreach (RecognizedPart p in involved)
+                {
+                    foreach (Loop h in holesOf[p])
+                    {
+                        if (inGroup.Contains(h)) continue;
+
+                        bool covered = false;
+                        foreach (Loop other in shapeLoops)
+                        {
+                            if (other == outerOf[p] || other == h) continue;
+                            if (GeometryMath.PointInRing(h.Ring[0], other.Ring) >= 0)
+                            {
+                                covered = true;
+                                break;
+                            }
+                        }
+
+                        if (!covered) keptHoles.Add(h.Data);
+                    }
+                }
+
+                // ---- gop vao chi tiet lon nhat ----
+                RecognizedLoop merged = new RecognizedLoop(ToPts(outline), sources, approximated);
+                Loop mainOuter = outerOf[main];
+                mainOuter.Data = merged;
+                mainOuter.Ring = outline;
+
+                main.Outer = merged;
+                main.Holes.Clear();
+                main.Holes.AddRange(keptHoles);
+                main.MinX = merged.MinX;
+                main.MinY = merged.MinY;
+                main.MaxX = merged.MaxX;
+                main.MaxY = merged.MaxY;
+
+                foreach (RecognizedPart p in involved)
+                {
+                    if (p == main) continue;
+                    foreach (int s in p.GeometrySources)
+                    {
+                        if (!main.GeometrySources.Contains(s)) main.GeometrySources.Add(s);
+                    }
+
+                    foreach (string note in p.Notes) main.Escalate(p.Status, note);
+                    parts.Remove(p);
+                }
+
+                foreach (Loop l in loops)
+                {
+                    if (involved.Contains(l.Part)) l.Part = main;
+                }
+
+                main.Escalate(PartStatus.Warning, string.Format(CultureInfo.InvariantCulture,
+                    "Gop {0} duong bao cham/chong nhau thanh 1 chi tiet - tai {1}; ghep theo {2}",
+                    shapeLoops.Count, at, hull ? "bao loi (ton vat lieu hon)" : "duong bao ngoai cung"));
+            }
+        }
+
+        private static List<Pt> ToPts(IList<IntPoint> ring)
+        {
+            List<Pt> pts = new List<Pt>(ring.Count);
+            foreach (IntPoint p in ring) pts.Add(new Pt(NestUnits.ToMm(p.X), NestUnits.ToMm(p.Y)));
+            return pts;
         }
 
         private static RecognizedPart InvalidRecord(List<int> sources, double minX, double minY, double maxX, double maxY, string reason)
@@ -356,6 +582,9 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                     if (!owner.GeometrySources.Contains(s)) owner.GeometrySources.Add(s);
                 }
 
+                // Moi nhom duong ho lai goi vao day: chi giu MOT ghi chu voi so moi nhat.
+                owner.Notes.RemoveAll(note => note.StartsWith("Co ", StringComparison.Ordinal) &&
+                                              note.Contains(" duong ho ben trong "));
                 owner.Escalate(PartStatus.Warning, string.Format(CultureInfo.InvariantCulture,
                     "Co {0} duong ho ben trong (duong chan/khac) - giu nguyen khi xuat, khong dung de ghep",
                     owner.MarkingSources.Count));

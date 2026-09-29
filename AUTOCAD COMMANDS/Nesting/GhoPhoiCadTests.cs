@@ -43,7 +43,7 @@ namespace AUTOCAD_COMMANDS.Nesting
 
         private static GhoPhoiSettings Settings()
         {
-            return new GhoPhoiSettings();
+            return new GhoPhoiSettings { OutputAsBlocks = true };
         }
 
         private static ObjectId Append(Database db, Transaction tr, Entity e)

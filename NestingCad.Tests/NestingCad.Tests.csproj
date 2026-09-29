@@ -95,6 +95,12 @@
     <Compile Include="..\AUTOCAD COMMANDS\Nesting\NestingOrderList.cs">
       <Link>Linked\NestingOrderList.cs</Link>
     </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\NestingOrderMemory.cs">
+      <Link>Linked\NestingOrderMemory.cs</Link>
+    </Compile>
+    <Compile Include="..\AUTOCAD COMMANDS\Nesting\NestingReviewMemory.cs">
+      <Link>Linked\NestingReviewMemory.cs</Link>
+    </Compile>
     <Compile Include="..\AUTOCAD COMMANDS\Nesting\GhoPhoiPipeline.cs">
       <Link>Linked\GhoPhoiPipeline.cs</Link>
     </Compile>

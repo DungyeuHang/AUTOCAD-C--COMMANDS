@@ -36,21 +36,62 @@ namespace AUTOCAD_COMMANDS.Nesting
         private readonly Editor _editor;
         private readonly Func<IList<ObjectId>, int[]> _summarize;
 
+        private readonly Action<IList<NestingOrderEntry>> _save;
+        private readonly Action _clearSaved;
+
         private DataGridView _grid;
+        private Label _hint;
         private Label _summary;
         private Button _btnContinue;
         private bool _loading;
+
+        private const string HintText =
+            "Go ten don hang vao bang, roi bam QUET PHOI tren dong do de chon chi tiet cua don ay."
+            + "\r\nChay mot don thi de nguyen mot dong. Ten don khong duoc de trong.";
 
         /// <param name="summarize">
         /// Nhan dang thu mot tap doi tuong, tra ve {so chi tiet, tong SL}. Chi de hien thi.
         /// </param>
         public NestingOrderForm(Editor editor, Func<IList<ObjectId>, int[]> summarize)
+            : this(editor, summarize, null, 0, null, null)
+        {
+        }
+
+        /// <param name="restored">Bang da luu lan truoc (rong/null = bat dau moi).</param>
+        /// <param name="missing">So doi tuong trong bang da luu khong con trong ban ve.</param>
+        /// <param name="save">Luu bang khi dong hop thoai (ca TIEP TUC lan HUY).</param>
+        /// <param name="clearSaved">Xoa ban luu (nut RESET).</param>
+        public NestingOrderForm(
+            Editor editor, Func<IList<ObjectId>, int[]> summarize,
+            IList<NestingOrderEntry> restored, int missing,
+            Action<IList<NestingOrderEntry>> save, Action clearSaved)
         {
             _editor = editor;
             _summarize = summarize;
+            _save = save;
+            _clearSaved = clearSaved;
             BuildUi();
+
+            if (restored != null && restored.Count > 0)
+            {
+                _orders.Restore(restored);
+                foreach (NestingOrderEntry o in _orders.Items)
+                {
+                    if (o.Scanned) Preview(o);
+                }
+
+                int objects = 0;
+                foreach (NestingOrderEntry o in _orders.Items) objects += o.Ids.Count;
+                _hint.Text = HintText + "\r\n" + string.Format(CultureInfo.InvariantCulture,
+                    "DA NAP LAI bang lan truoc: {0} don, {1} doi tuong{2}. Sua dong nao can sua; bam RESET de xoa het.",
+                    _orders.Count, objects,
+                    missing > 0 ? " (" + missing.ToString(CultureInfo.InvariantCulture) + " doi tuong da bi xoa khoi ban ve - bo qua)" : string.Empty);
+                _hint.ForeColor = Color.FromArgb(0, 102, 204);
+            }
+
             LoadRows();
             UpdateState();
+            DialogPlacement.Attach(this, "orders");
         }
 
         /// <summary>Cac don da khai, theo dung thu tu tren bang. Chi doc sau khi bam TIEP TUC.</summary>
@@ -64,10 +105,23 @@ namespace AUTOCAD_COMMANDS.Nesting
         /// </summary>
         public void FillFirstRow(IEnumerable<ObjectId> ids)
         {
-            _orders.ApplyScan(0, ids, false);
-            if (!_orders[0].Scanned) return;
+            // Bang lan truoc da nap lai: KHONG de len dong dau (mat luot quet cu), ma dua phan
+            // vua chon vao mot dong MOI.
+            int row = 0;
+            if (_orders.AnyScanned)
+            {
+                _orders.Add();
+                row = _orders.Count - 1;
+            }
 
-            Preview(_orders[0]);
+            _orders.ApplyScan(row, ids, false);
+            if (!_orders[row].Scanned)
+            {
+                if (row > 0) _orders.Remove(row);
+                return;
+            }
+
+            Preview(_orders[row]);
             LoadRows();
             UpdateState();
         }
@@ -83,14 +137,12 @@ namespace AUTOCAD_COMMANDS.Nesting
             ClientSize = new Size(880, 420);
             MinimumSize = new Size(700, 340);
 
-            Label hint = new Label
+            _hint = new Label
             {
                 Dock = DockStyle.Top,
-                Height = 44,
+                Height = 62,
                 Padding = new Padding(10, 8, 10, 4),
-                Text = "Go ten don hang vao bang, roi bam QUET PHOI tren dong do de chon chi tiet cua don ay."
-                     + Environment.NewLine
-                     + "Chay mot don thi de nguyen mot dong. Ten don khong duoc de trong."
+                Text = HintText
             };
 
             _grid = new DataGridView
@@ -134,13 +186,16 @@ namespace AUTOCAD_COMMANDS.Nesting
             Button btnAdd = new Button { Text = "+ THEM DON", Left = 10, Top = 10, Width = 130, Height = 30 };
             btnAdd.Click += OnAddOrder;
 
+            Button btnReset = new Button { Text = "RESET", Left = 10, Top = 48, Width = 130, Height = 30 };
+            btnReset.Click += OnReset;
+
             _summary = new Label { Left = 150, Top = 16, Width = 560, Height = 44, AutoSize = false };
 
             _btnContinue = new Button { Text = "TIEP TUC", Width = 120, Height = 30, DialogResult = DialogResult.OK };
             Button btnCancel = new Button { Text = "HUY", Width = 90, Height = 30, DialogResult = DialogResult.Cancel };
             _btnContinue.Click += OnContinue;
 
-            bottom.Controls.AddRange(new Control[] { btnAdd, _summary, _btnContinue, btnCancel });
+            bottom.Controls.AddRange(new Control[] { btnAdd, btnReset, _summary, _btnContinue, btnCancel });
             bottom.Resize += delegate
             {
                 btnCancel.Left = bottom.ClientSize.Width - btnCancel.Width - 10;
@@ -152,7 +207,7 @@ namespace AUTOCAD_COMMANDS.Nesting
 
             Controls.Add(_grid);
             Controls.Add(bottom);
-            Controls.Add(hint);
+            Controls.Add(_hint);
 
             // Enter khong duoc coi la TIEP TUC: nguoi dung dang go ten don trong bang.
             AcceptButton = null;
@@ -337,9 +392,55 @@ namespace AUTOCAD_COMMANDS.Nesting
             _btnContinue.Enabled = scanned > 0;
         }
 
+        private void OnReset(object sender, EventArgs e)
+        {
+            if (MessageBox.Show("Xoa HET bang don hang, cac phoi da quet va cac chinh sua o bang KIEM TRA (ca ban da luu)?", "GHOPHOI",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            {
+                return;
+            }
+
+            _orders.Reset();
+            if (_clearSaved != null) _clearSaved();
+            _hint.Text = HintText;
+            _hint.ForeColor = SystemColors.ControlText;
+            LoadRows();
+            UpdateState();
+        }
+
+        /// <summary>
+        /// Luu bang TRUOC khi chot (chot se bo dong chua quet va xoa ten khi chi co mot don) -
+        /// lan sau mo lai phai thay dung bang nguoi dung da go.
+        /// </summary>
+        private void SaveTable()
+        {
+            if (_save == null) return;
+            try
+            {
+                _save(new List<NestingOrderEntry>(_orders.Items));
+            }
+            catch (Exception)
+            {
+                // luu bang chi la tien ich - hong thi thoi, khong duoc lam hong lenh
+            }
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            // TIEP TUC da luu trong OnContinue (truoc khi chot). HUY / nut X thi luu o day.
+            if (DialogResult != DialogResult.OK)
+            {
+                ReadNames();
+                SaveTable();
+            }
+
+            base.OnFormClosing(e);
+        }
+
         private void OnContinue(object sender, EventArgs e)
         {
             ReadNames();
+            SaveTable();
 
             string error = _orders.Finalize();
             if (error == null) return;

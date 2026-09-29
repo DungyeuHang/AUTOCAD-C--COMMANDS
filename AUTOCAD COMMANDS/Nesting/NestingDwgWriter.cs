@@ -58,6 +58,24 @@ namespace AUTOCAD_COMMANDS.Nesting
             GhoPhoiSettings settings,
             string sourceName)
         {
+            return Write(source, outputPath, request, result, parts, settings, sourceName, null);
+        }
+
+        /// <param name="reservedBlockNames">
+        /// Ten block KHONG duoc dung (ten da co trong ban ve se nhan ket qua). Chen vao ban ve
+        /// co san block trung ten thi AutoCAD giu dinh nghia CU - chi tiet se mang hinh cua lan
+        /// ghep truoc.
+        /// </param>
+        private static NestingDwgWriteResult Write(
+            Database source,
+            string outputPath,
+            NestingRequest request,
+            NestingResult result,
+            IList<OutputPart> parts,
+            GhoPhoiSettings settings,
+            string sourceName,
+            ICollection<string> reservedBlockNames)
+        {
             // Bat bien cuoi cung: ket qua DA BIET la khong qua validator thi khong bao gio duoc
             // ghi, ke ca khi ben goi quen chan. (Validation = null: ket qua dung tay o muc thap,
             // vd. phep thu 8 huong - van cho ghi; duong san xuat luon co Validation.)
@@ -97,7 +115,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                     {
                         BlockTableRecord btr = new BlockTableRecord
                         {
-                            Name = UniqueBlockName(bt, p.Group),
+                            Name = UniqueBlockName(bt, p.Group, reservedBlockNames),
                             Origin = p.Origin
                         };
                         blockIds[p.Group.Id] = bt.Add(btr);
@@ -175,7 +193,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                             if (!blockIds.TryGetValue(pl.PartGroupId, out blockId)) continue;
 
                             Point3d position = new Point3d(corner.X + pl.TranslationXMm, corner.Y + pl.TranslationYMm, 0);
-                            AddPlacement(ms, tr, blockId, position, pl, settings.OutputAsBlocks);
+                            AddPlacement(ms, tr, blockId, position, pl, settings.OutputAsBlocks, byGroup[pl.PartGroupId].Group);
                             write.BlockReferenceCount++;
 
                             // Ma P + STT chi de doi chieu khi ra xuong; chi tiet nao DA CO chu
@@ -184,7 +202,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                             if (settings.LabelParts && !HasOwnText(byGroup[pl.PartGroupId]))
                             {
                                 OutputPart op = byGroup[pl.PartGroupId];
-                                AddPartLabel(ms, tr, labelLayer, op.Group, pl, corner, partNumber);
+                                AddPartLabel(ms, tr, labelLayer, op.Group, pl, corner, partNumber, settings.LabelPartNameAndOrder);
                             }
                         }
 
@@ -217,6 +235,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                             BlockReference br = new BlockReference(pos, blockIds[kv.Key]);
                             ms.AppendEntity(br);
                             tr.AddNewlyCreatedDBObject(br, true);
+                            TagPart(tr, br, op.Group, kv.Value);
                             CadMTextHelper.AddMText(ms, tr, labelLayer, new Point3d(ux, uy + 50, 0), 1000,
                                 string.Format(CultureInfo.InvariantCulture, "{0} x{1} CHUA XEP", op.Group.Name, kv.Value), 25);
                             ux += op.Group.Shape.WidthMm + spacing;
@@ -228,6 +247,13 @@ namespace AUTOCAD_COMMANDS.Nesting
                         Summary(request, result, sourceName), 30);
 
                     tr.Commit();
+                }
+
+                // ---- 5. khong giu block: explode HET (ca block long trong chi tiet) + purge ----
+                if (!settings.OutputAsBlocks)
+                {
+                    ExplodeAllBlocks(target);
+                    PurgeUnusedBlocks(target, null);
                 }
 
                 target.SaveAs(outputPath, DwgVersion.Current);
@@ -263,12 +289,20 @@ namespace AUTOCAD_COMMANDS.Nesting
             NestingDwgWriteResult write;
             try
             {
-                write = Write(db, temp, request, result, parts, settings, sourceName);
+                HashSet<string> taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                using (Transaction rt = db.TransactionManager.StartOpenCloseTransaction())
+                {
+                    BlockTable existing = (BlockTable)rt.GetObject(db.BlockTableId, OpenMode.ForRead);
+                    foreach (ObjectId id in existing) taken.Add(((BlockTableRecord)rt.GetObject(id, OpenMode.ForRead)).Name);
+                }
+
+                write = Write(db, temp, request, result, parts, settings, sourceName, taken);
 
                 using (Database layout = new Database(false, true))
                 {
                     layout.ReadDwgFile(temp, FileOpenMode.OpenForReadAndAllShare, true, string.Empty);
 
+                    HashSet<ObjectId> blocksBefore = BlockIds(db);
                     ObjectId blockId = db.Insert(UniqueName(db, "GHOPHOI_KETQUA"), layout, false);
 
                     try
@@ -299,8 +333,16 @@ namespace AUTOCAD_COMMANDS.Nesting
                         throw;
                     }
 
-                    // Dinh nghia block chi la phuong tien de chen - bo di cho ban ve sach.
+                    // Dinh nghia block chi la phuong tien de chen - bo di cho ban ve sach. Khong
+                    // giu block thi purge ca moi dinh nghia block VUA mang vao ma khong con ai
+                    // dung (block cua nguoi dung co san tu truoc thi khong dung vao).
                     PurgeBlock(db, blockId);
+                    if (!settings.OutputAsBlocks)
+                    {
+                        HashSet<ObjectId> added = BlockIds(db);
+                        added.ExceptWith(blocksBefore);
+                        PurgeUnusedBlocks(db, added);
+                    }
                 }
 
                 write.Path = string.Empty;
@@ -355,7 +397,103 @@ namespace AUTOCAD_COMMANDS.Nesting
             }
         }
 
-        private static void AddPlacement(BlockTableRecord ms, Transaction tr, ObjectId blockId, Point3d position, Placement pl, bool asBlock)
+        private static HashSet<ObjectId> BlockIds(Database db)
+        {
+            HashSet<ObjectId> ids = new HashSet<ObjectId>();
+            using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+            {
+                BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                foreach (ObjectId id in bt) ids.Add(id);
+            }
+
+            return ids;
+        }
+
+        /// <summary>
+        /// Explode moi BlockReference trong model space, lap lai cho den khi khong con cai nao
+        /// (block long nhau). Chi dung tren ban ve KET QUA tam, khong bao gio tren ban ve goc.
+        /// Block khong explode duoc (xref, block cam explode) thi de nguyen.
+        /// </summary>
+        private static void ExplodeAllBlocks(Database db)
+        {
+            HashSet<ObjectId> stuck = new HashSet<ObjectId>();
+            for (int pass = 0; pass < 32; pass++)
+            {
+                bool exploded = false;
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    BlockTableRecord ms = (BlockTableRecord)tr.GetObject(
+                        SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+                    List<ObjectId> refs = new List<ObjectId>();
+                    foreach (ObjectId id in ms)
+                    {
+                        if (!stuck.Contains(id) && id.ObjectClass.IsDerivedFrom(Autodesk.AutoCAD.Runtime.RXObject.GetClass(typeof(BlockReference)))) refs.Add(id);
+                    }
+
+                    foreach (ObjectId id in refs)
+                    {
+                        BlockReference br = (BlockReference)tr.GetObject(id, OpenMode.ForWrite);
+                        BlockTableRecord def = (BlockTableRecord)tr.GetObject(br.BlockTableRecord, OpenMode.ForRead);
+                        if (def.IsFromExternalReference || def.IsLayout || !def.Explodable)
+                        {
+                            stuck.Add(id);
+                            continue;
+                        }
+
+                        try
+                        {
+                            br.ExplodeToOwnerSpace();
+                            br.Erase();
+                            exploded = true;
+                        }
+                        catch (Autodesk.AutoCAD.Runtime.Exception)
+                        {
+                            stuck.Add(id);      // vd. ty le khong deu voi cung tron - de nguyen
+                        }
+                    }
+
+                    tr.Commit();
+                }
+
+                if (!exploded) break;
+            }
+        }
+
+        /// <summary>
+        /// Purge dinh nghia block khong con ai dung, lap lai cho den het (block long nhau).
+        /// <paramref name="only"/> = null: moi block trong ban ve; khac null: chi trong tap nay.
+        /// </summary>
+        private static void PurgeUnusedBlocks(Database db, ICollection<ObjectId> only)
+        {
+            for (int pass = 0; pass < 32; pass++)
+            {
+                ObjectIdCollection candidates = new ObjectIdCollection();
+                using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+                {
+                    BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                    foreach (ObjectId id in bt)
+                    {
+                        if (id.IsErased || (only != null && !only.Contains(id))) continue;
+                        BlockTableRecord btr = (BlockTableRecord)tr.GetObject(id, OpenMode.ForRead);
+                        if (btr.IsLayout || btr.IsFromExternalReference || btr.IsDependent) continue;
+                        candidates.Add(id);
+                    }
+                }
+
+                if (candidates.Count == 0) return;
+                db.Purge(candidates);
+                if (candidates.Count == 0) return;
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    foreach (ObjectId id in candidates) tr.GetObject(id, OpenMode.ForWrite).Erase();
+                    tr.Commit();
+                }
+            }
+        }
+
+        private static void AddPlacement(
+            BlockTableRecord ms, Transaction tr, ObjectId blockId, Point3d position, Placement pl, bool asBlock, PartGroup g)
         {
             BlockReference br = new BlockReference(position, blockId)
             {
@@ -364,6 +502,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             };
             ms.AppendEntity(br);
             tr.AddNewlyCreatedDBObject(br, true);
+            if (asBlock) TagPart(tr, br, g, 1);
 
             if (!asBlock)
             {
@@ -371,6 +510,33 @@ namespace AUTOCAD_COMMANDS.Nesting
                 br.ExplodeToOwnerSpace();
                 br.Erase();
             }
+        }
+
+        /// <summary>
+        /// Gan SL / vat lieu / don / ten len block chi tiet (XData "GHOPHOI_PART"). Chon lai ket
+        /// qua (giu block) de GHEP LAI thi GHOPHOI doc lai dung thong tin nay, khong phai quet
+        /// lai ban ve goc: chu SL cua nguoi dung khong nam trong block nen khong co cach nao khac.
+        /// Xem <see cref="NestingSelectionReader"/> va GhoPhoiPipeline.ApplyPresets.
+        /// </summary>
+        private static void TagPart(Transaction tr, BlockReference br, PartGroup g, int quantity)
+        {
+            Database db = br.Database;
+            RegAppTable rat = (RegAppTable)tr.GetObject(db.RegAppTableId, OpenMode.ForRead);
+            if (!rat.Has(PartPreset.XDataApp))
+            {
+                rat.UpgradeOpen();
+                RegAppTableRecord app = new RegAppTableRecord { Name = PartPreset.XDataApp };
+                rat.Add(app);
+                tr.AddNewlyCreatedDBObject(app, true);
+            }
+
+            br.XData = PartPreset.ToXData(new PartPreset
+            {
+                Quantity = Math.Max(1, quantity),
+                Material = g.Material ?? string.Empty,
+                Order = g.Order ?? string.Empty,
+                Name = g.Name ?? string.Empty
+            });
         }
 
         /// <summary>Chi tiet nay da mang san chu khac cua nguoi dung chua.</summary>
@@ -385,24 +551,51 @@ namespace AUTOCAD_COMMANDS.Nesting
         /// Ghi ma P + so thu tu vao giua mot chi tiet. So thu tu dem TRONG TUNG TO, vi nguoi
         /// dung dung no de doi chieu tren chinh to dang cam.
         ///
-        /// KHONG ghep them chu cua nguoi dung vao day: lam vay thi nhin tren ban ve se tuong
-        /// chuong trinh da sua chu cua ho roi phong to mang ra giua chi tiet.
+        /// <paramref name="withNameAndOrder"/>: them dong TEN PHOI va dong TEN DON HANG ngay
+        /// duoi ma P (khong co don thi bo dong don). Day chi la nhan doi chieu tren layer khong
+        /// in - chu cat cua nguoi dung van nam nguyen trong chi tiet, khong bi dung vao.
         /// </summary>
         private static void AddPartLabel(
-            BlockTableRecord ms, Transaction tr, ObjectId layer, PartGroup g, Placement pl, Point3d corner, int number)
+            BlockTableRecord ms, Transaction tr, ObjectId layer, PartGroup g, Placement pl, Point3d corner, int number,
+            bool withNameAndOrder)
         {
             PolyShape world = g.Shape.Polygon.Transform(pl.Orientation, pl.TranslationX, pl.TranslationY);
             double cx = corner.X + NestUnits.ToMm((world.Bounds.MinX + world.Bounds.MaxX) / 2);
             double cy = corner.Y + NestUnits.ToMm((world.Bounds.MinY + world.Bounds.MaxY) / 2);
-            double size = Math.Min(NestUnits.ToMm(world.Bounds.Width), NestUnits.ToMm(world.Bounds.Height));
-            double h = Math.Max(2.0, Math.Min(15.0, size / 6.0));
+            double bw = NestUnits.ToMm(world.Bounds.Width), bh = NestUnits.ToMm(world.Bounds.Height);
+
+            List<string> lines = new List<string> { "P" + number.ToString("00", CultureInfo.InvariantCulture) };
+            if (withNameAndOrder)
+            {
+                if (!string.IsNullOrWhiteSpace(g.Name)) lines.Add(g.Name.Trim());
+                if (!string.IsNullOrEmpty(g.Order)) lines.Add("Don: " + g.Order);
+            }
+
+            double h = Math.Min(bw, bh) / 6.0;
+            if (lines.Count > 1)
+            {
+                // Nhieu dong: chia chieu cao cho so dong, va dong dai nhat phai lot vua chieu ngang.
+                int longest = 1;
+                foreach (string line in lines) longest = Math.Max(longest, line.Length);
+                h = Math.Min(h, bh / (lines.Count * 1.6 + 4.4));
+                h = Math.Min(h, bw * 0.9 / (longest * 0.8));
+            }
+
+            h = Math.Max(2.0, Math.Min(15.0, h));
+
+            StringBuilder contents = new StringBuilder();
+            foreach (string line in lines)
+            {
+                if (contents.Length > 0) contents.Append("\\P");
+                contents.Append(line.Replace("\\", "\\\\").Replace("{", "\\{").Replace("}", "\\}"));
+            }
 
             MText label = new MText
             {
                 Location = new Point3d(cx, cy, 0),
                 Attachment = AttachmentPoint.MiddleCenter,
                 TextHeight = h,
-                Contents = "P" + number.ToString("00", CultureInfo.InvariantCulture),
+                Contents = contents.ToString(),
                 LayerId = layer
             };
             ms.AppendEntity(label);
@@ -435,7 +628,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             return id;
         }
 
-        private static string UniqueBlockName(BlockTable bt, PartGroup g)
+        private static string UniqueBlockName(BlockTable bt, PartGroup g, ICollection<string> reserved)
         {
             StringBuilder sb = new StringBuilder("GHOPHOI_");
             foreach (char c in g.Name ?? g.Id)
@@ -447,7 +640,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             if (baseName.Length > 200) baseName = baseName.Substring(0, 200);
             string name = baseName;
             int k = 2;
-            while (bt.Has(name)) name = baseName + "_" + (k++).ToString(CultureInfo.InvariantCulture);
+            while (bt.Has(name) || (reserved != null && reserved.Contains(name))) name = baseName + "_" + (k++).ToString(CultureInfo.InvariantCulture);
             return name;
         }
 

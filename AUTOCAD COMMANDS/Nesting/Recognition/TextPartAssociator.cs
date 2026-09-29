@@ -52,6 +52,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             foreach (RecognizedPart p in parts) assigned[p] = new List<Assigned>();
 
             Dictionary<RecognizedPart, string> nameCandidates = new Dictionary<RecognizedPart, string>();
+            List<PendingText> pending = new List<PendingText>();
 
             foreach (TextItem text in texts)
             {
@@ -136,13 +137,13 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 if (second != null && d2 <= _settings.MaxTextDistance &&
                     d2 - d1 < Math.Max(_settings.AmbiguityAbsolute, d1 * (_settings.AmbiguityRatio - 1.0)))
                 {
-                    string msg = string.Format(CultureInfo.InvariantCulture,
-                        "Text \"{0}\" gan {1} ({2:0.#} mm) va {3} ({4:0.#} mm) gan nhu nhau - can xac nhan",
-                        shortText, "#" + best.Index, d1, "#" + second.Index, d2);
-                    best.Escalate(PartStatus.Ambiguous, msg);
-                    second.Escalate(PartStatus.Ambiguous, msg);
-                    best.TextSources.Add(text.SourceIndex);
-                    second.TextSources.Add(text.SourceIndex);
+                    // Chua ket luan o day: can biet hai chi tiet da co SL / vat lieu RIENG chua,
+                    // ma dieu do chi biet khi da duyet het moi chu. Xem ResolvePending.
+                    pending.Add(new PendingText
+                    {
+                        Items = items, Text = text, ShortText = shortText,
+                        Best = best, Second = second, D1 = d1, D2 = d2
+                    });
                     continue;
                 }
 
@@ -155,12 +156,100 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 best.TextSources.Add(text.SourceIndex);
             }
 
+            ResolvePending(pending, assigned);
+
             foreach (RecognizedPart p in parts)
             {
                 string name;
                 if (nameCandidates.TryGetValue(p, out name)) p.Name = p.Name + " " + name;
                 ApplyFacts(p, assigned[p]);
             }
+        }
+
+        /// <summary>Chu thong tin nam gan HAI chi tiet gan nhu nhau - cho ket luan.</summary>
+        private sealed class PendingText
+        {
+            public List<Assigned> Items;
+            public TextItem Text;
+            public string ShortText;
+            public RecognizedPart Best, Second;
+            public double D1, D2;
+        }
+
+        /// <summary>
+        /// Chu nam giua hai chi tiet. Truoc day LUON bao mo ho, ke ca khi nhin la biet ngay:
+        /// tren ban ve that moi chi tiet co chu SL rieng, va chu cua chi tiet ben canh nam sat
+        /// ca hai. Gio chi con mo ho khi THAT SU khong biet:
+        ///   - mot ben DA CO du thong tin (SL / vat lieu) cua chu nay, ben kia CHUA CO -> gan cho
+        ///     ben chua co;
+        ///   - ca hai ben deu da co du -> chu thua, bo qua (ghi chu cho biet);
+        ///   - con lai (ca hai cung thieu, hoac chu sai dang) -> MO HO nhu cu, vi gan bua thi
+        ///     sai SL - loi nang nhat.
+        /// </summary>
+        private static void ResolvePending(List<PendingText> pending, Dictionary<RecognizedPart, List<Assigned>> assigned)
+        {
+            foreach (PendingText t in pending)
+            {
+                bool hasIssue = t.Items.Exists(x => x.Issue != null);
+                List<MetadataKind> kinds = new List<MetadataKind>();
+                foreach (Assigned x in t.Items)
+                {
+                    if (x.Fact != null && !kinds.Contains(x.Fact.Kind)) kinds.Add(x.Fact.Kind);
+                }
+
+                bool bestHas = kinds.Count > 0 && kinds.TrueForAll(k => HasKind(assigned[t.Best], k));
+                bool secondHas = kinds.Count > 0 && kinds.TrueForAll(k => HasKind(assigned[t.Second], k));
+                bool bestLacks = kinds.TrueForAll(k => !HasKind(assigned[t.Best], k));
+                bool secondLacks = kinds.TrueForAll(k => !HasKind(assigned[t.Second], k));
+
+                RecognizedPart target = null;
+                if (!hasIssue && kinds.Count > 0)
+                {
+                    if (bestLacks && secondHas) target = t.Best;
+                    else if (secondLacks && bestHas) target = t.Second;
+                }
+
+                if (target != null)
+                {
+                    RecognizedPart other = target == t.Best ? t.Second : t.Best;
+                    double d = target == t.Best ? t.D1 : t.D2;
+                    foreach (Assigned x in t.Items)
+                    {
+                        x.How = string.Format(CultureInfo.InvariantCulture,
+                            "ngoai chi tiet, cach {0:0.#} mm; #{1} da co thong tin rieng", d, other.Index);
+                        assigned[target].Add(x);
+                    }
+
+                    target.TextSources.Add(t.Text.SourceIndex);
+                    target.Escalate(PartStatus.Warning, string.Format(CultureInfo.InvariantCulture,
+                        "Text \"{0}\" gan ca #{1} va #{2} - tu gan cho chi tiet nay vi #{3} da co thong tin rieng",
+                        t.ShortText, t.Best.Index, t.Second.Index, other.Index));
+                    continue;
+                }
+
+                if (!hasIssue && bestHas && secondHas)
+                {
+                    string skip = string.Format(CultureInfo.InvariantCulture,
+                        "Text \"{0}\" gan ca #{1} va #{2}, nhung ca hai da co thong tin rieng - bo qua chu nay",
+                        t.ShortText, t.Best.Index, t.Second.Index);
+                    t.Best.Escalate(PartStatus.Warning, skip);
+                    t.Second.Escalate(PartStatus.Warning, skip);
+                    continue;
+                }
+
+                string msg = string.Format(CultureInfo.InvariantCulture,
+                    "Text \"{0}\" gan {1} ({2:0.#} mm) va {3} ({4:0.#} mm) gan nhu nhau - can xac nhan",
+                    t.ShortText, "#" + t.Best.Index, t.D1, "#" + t.Second.Index, t.D2);
+                t.Best.Escalate(PartStatus.Ambiguous, msg);
+                t.Second.Escalate(PartStatus.Ambiguous, msg);
+                t.Best.TextSources.Add(t.Text.SourceIndex);
+                t.Second.TextSources.Add(t.Text.SourceIndex);
+            }
+        }
+
+        private static bool HasKind(List<Assigned> facts, MetadataKind kind)
+        {
+            return facts.Exists(a => a.Fact != null && a.Fact.Kind == kind);
         }
 
         private void ApplyFacts(RecognizedPart part, List<Assigned> facts)

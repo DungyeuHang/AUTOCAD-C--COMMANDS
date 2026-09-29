@@ -46,6 +46,13 @@ namespace AUTOCAD_COMMANDS.Nesting
         /// <summary>Them mot dong moi voi ten mac dinh chua bi trung.</summary>
         public NestingOrderEntry Add()
         {
+            NestingOrderEntry entry = new NestingOrderEntry { Name = UnusedName() };
+            _items.Add(entry);
+            return entry;
+        }
+
+        private string UnusedName()
+        {
             string name;
             int n = _items.Count + 1;
             do
@@ -55,9 +62,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             }
             while (IndexOfName(name, -1) >= 0);
 
-            NestingOrderEntry entry = new NestingOrderEntry { Name = name };
-            _items.Add(entry);
-            return entry;
+            return name;
         }
 
         /// <summary>
@@ -69,6 +74,47 @@ namespace AUTOCAD_COMMANDS.Nesting
             if (index < 0 || index >= _items.Count) return;
             _items.RemoveAt(index);
             if (_items.Count == 0) Add();
+        }
+
+        /// <summary>
+        /// Thay ca bang bang cac dong da luu lan truoc (xem <see cref="NestingOrderMemory"/>).
+        /// Dong khong con doi tuong nao (da bi xoa het khoi ban ve) van giu lai - con ten de
+        /// nguoi dung quet lai. Khong co dong nao thi ve bang mot dong trong nhu moi.
+        /// </summary>
+        public void Restore(IEnumerable<NestingOrderEntry> entries)
+        {
+            _items.Clear();
+            if (entries != null)
+            {
+                foreach (NestingOrderEntry e in entries)
+                {
+                    if (e == null) continue;
+                    string name = (e.Name ?? string.Empty).Trim();
+                    if (name.Length == 0) name = UnusedName();
+                    NestingOrderEntry copy = new NestingOrderEntry { Name = name };
+                    foreach (ObjectId id in e.Ids)
+                    {
+                        if (!copy.Ids.Contains(id)) copy.Ids.Add(id);
+                    }
+
+                    _items.Add(copy);
+                }
+            }
+
+            if (_items.Count == 0) Add();
+        }
+
+        /// <summary>RESET: xoa het, ve lai mot dong trong nhu lan dau.</summary>
+        public void Reset()
+        {
+            _items.Clear();
+            Add();
+        }
+
+        /// <summary>Co dong nao da quet chua.</summary>
+        public bool AnyScanned
+        {
+            get { return _items.Exists(e => e.Scanned); }
         }
 
         /// <summary>Dat ten cho mot dong. Khoang trang thua o hai dau bi cat bo.</summary>

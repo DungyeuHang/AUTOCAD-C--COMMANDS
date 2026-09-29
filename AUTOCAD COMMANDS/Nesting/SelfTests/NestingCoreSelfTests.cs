@@ -36,6 +36,7 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "H-C. Lo kin + AllowPartInsideHole=false -> khong dat vao lo", HC_ClosedHoleDisallowed);
             NestingTestHarness.Run(report, "H-D. Lo kin + AllowPartInsideHole=true -> dat vao lo", HD_ClosedHoleAllowed);
             NestingTestHarness.Run(report, "H-E. Lo khong du lon -> khong dat vao lo", HE_HoleTooSmall);
+            NestingTestHarness.Run(report, "H-F. Lo KHONG vuong (tam giac / quat): van xep duoc manh nho vao", HF_NonRectangularHoleIsUsed);
             NestingTestHarness.Run(report, "C12. SL 7 -> dung 7 placement, id rieng", C12_QuantityExpansion);
             NestingTestHarness.Run(report, "C12b. SL tach nhieu to: tong = SL", C12b_QuantitySplitAcrossSheets);
             NestingTestHarness.Run(report, "C13. Tach vat lieu - khong ghep chung", C13_MaterialGrouping);
@@ -540,6 +541,49 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             Equal(1, res.Sheets.Count, "square inside the frame hole");
             True(res.Validation.MinPartDistanceMm >= 5.0, "clearance to the hole wall");
             True(Check(r, At("F", 1, 5, 5), At("S", 1, 105, 105)).IsValid, "validator accepts part-in-hole when allowed");
+        }
+
+        /// <summary>
+        /// Lo KHONG phai hinh chu nhat (nep vom: lo hinh quat / hinh thang). Goc duoi-trai hop
+        /// bao cua lo nam NGOAI lo, nen truoc day khong co ung vien nao trong lo; Compact con
+        /// nhay chi tiet ra mep to. Gio phai xep het may manh nho vao lo, to khong dai them.
+        /// </summary>
+        private static void HF_NonRectangularHoleIsUsed()
+        {
+            // To CAO HON chi tiet lon: con cho trong phia tren no (giong ban ve that - nep vom
+            // de hai goc trong). Truoc day cho do luon thang vi mep phai nho hon.
+            NestingRequest r = Request(1200, 600);
+            r.Settings.AllowPartInsideHole = true;
+            r.Groups.Add(Poly("F", 1, new double[] { 0, 0, 600, 0, 600, 300, 0, 300 },
+                new double[] { 100, 40, 500, 40, 300, 280 }));      // lo TAM GIAC
+            r.Groups.Add(Rect("S", 40, 40, 4));
+
+            NestingResult res = Nest(r);
+            AssertValid(res);
+            Equal(1, res.Sheets.Count, "mot to");
+            Equal(4, InsideFrame(r, res), "ca 4 manh nho phai vao lo tam giac (vat lieu mien phi)");
+
+            // Khong cho phep thi van nhu cu: khong manh nao vao lo.
+            r.Settings.AllowPartInsideHole = false;
+            NestingResult off = Nest(r);
+            AssertValid(off);
+            Equal(0, InsideFrame(r, off), "tat thi khong manh nao vao lo");
+        }
+
+        /// <summary>So manh "S" co hop bao nam tron trong hop bao cua chi tiet "F" (tuc la trong lo cua no).</summary>
+        private static int InsideFrame(NestingRequest r, NestingResult res)
+        {
+            Placement f = new List<Placement>(res.Placements).Find(p => p.PartGroupId == "F");
+            LongRect fb = World(r, f).Bounds;
+            int inside = 0;
+            foreach (Placement p in res.Placements)
+            {
+                if (p.PartGroupId != "S") continue;
+                LongRect b = World(r, p).Bounds;
+                if (b.MinX >= fb.MinX && b.MinY >= fb.MinY && b.MaxX <= fb.MaxX && b.MaxY <= fb.MaxY) inside++;
+            }
+
+            return inside;
         }
 
         private static void HE_HoleTooSmall()
@@ -1123,6 +1167,39 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             withUnplaced.Unplaced.Add(new UnplacedPart("x", "g", "r"));
             True(e.Compare(a, withUnplaced) < 0, "placing everything beats fewer sheets");
             Equal(0, e.Compare(b, b), "equal to itself");
+
+            // Cung so to, cung chieu dai, cung dien tich hop bao: manh nho nam TRONG lo kin cua
+            // chi tiet khac thang manh nam ngoai (manh cat roi trong lo la vun).
+            DecodedLayout inHole = HoleLayout(100, 100);
+            DecodedLayout outside = HoleLayout(400, 0);
+            True(LexicographicSolutionEvaluator.AreaInsideHoles(inHole) > 0, "dem duoc dien tich trong lo");
+            Equal(0.0, LexicographicSolutionEvaluator.AreaInsideHoles(outside), "ngoai lo = 0");
+            True(e.Compare(inHole, outside) < 0, "nhet vao lo kin thang");
+            True(e.Compare(outside, inHole) > 0, "doi xung");
+
+            // Nhung KHONG duoc doi lay vat lieu: dai hon 1 mm tro len thi van thua.
+            DecodedLayout longer = HoleLayout(100, 100);
+            longer.Sheets[0].MaxX += 2000;
+            True(e.Compare(outside, longer) < 0, "to ngan hon van thang, du co lap lo");
+        }
+
+        /// <summary>Khung 300x300 co lo 200x200 tai (0,0) + manh 50x50 tai (x, y) mm; hop bao to co dinh.</summary>
+        private static DecodedLayout HoleLayout(double sx, double sy)
+        {
+            PolygonCollisionModel collision = new PolygonCollisionModel(new NestingSettings { AllowPartInsideHole = true });
+            PartGroup f = Poly("F", 1, Frame, FrameHole);
+            PartGroup s = Rect("S", 50, 50, 1);
+            PreparedShape fs = collision.Prepare(f, new OrientationTransform(0, false));
+            PreparedShape ss = collision.Prepare(s, new OrientationTransform(0, false));
+            long tx = NestUnits.ToUnits(sx), ty = NestUnits.ToUnits(sy);
+
+            DecodedSheet sheet = new DecodedSheet { MaxX = NestUnits.ToUnits(700), MaxY = NestUnits.ToUnits(300) };
+            sheet.Items.Add(new PlacedItem(new PartInstance("F#0", f, 0), fs, 0, 0, collision.Place(fs, 0, 0)));
+            sheet.Items.Add(new PlacedItem(new PartInstance("S#0", s, 0), ss, tx, ty, collision.Place(ss, tx, ty)));
+
+            DecodedLayout layout = new DecodedLayout();
+            layout.Sheets.Add(sheet);
+            return layout;
         }
 
         // ==================================================================================

@@ -65,7 +65,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             GhoPhoiSettings settings = GhoPhoiSettingsStore.Load();
 
             // ---- 1. don hang + chon chi tiet ----
-            IList<NestingOrderEntry> orders = AskOrders(ed, db, settings);
+            IList<NestingOrderEntry> orders = AskOrders(doc, ed, db, settings);
             if (orders == null)
             {
                 ed.WriteMessage("\nGHOPHOI: Da huy o bang don hang - ban ve giu nguyen.");
@@ -121,8 +121,15 @@ namespace AUTOCAD_COMMANDS.Nesting
             if (orderConflicts > 0)
             {
                 recognition.GlobalWarnings.Add(string.Format(CultureInfo.InvariantCulture,
-                    "{0} chi tiet co duong bao ghep tu nhieu don - chon lai don o bang kiem tra.",
+                    "{0} chi tiet co duong bao ghep tu nhieu don - da tu chon don nhieu net nhat, xem lai cot Don hang.",
                     orderConflicts));
+            }
+
+            int reused = GhoPhoiPipeline.ApplyPresets(read, recognition);
+            if (reused > 0)
+            {
+                recognition.GlobalWarnings.Add(string.Format(CultureInfo.InvariantCulture,
+                    "{0} chi tiet la block cua lan ghep truoc - da lay lai SL / vat lieu / don tu block.", reused));
             }
 
             if (recognition.Parts.Count == 0)
@@ -137,12 +144,43 @@ namespace AUTOCAD_COMMANDS.Nesting
                 recognition.Parts.Count, read.Sources.Count, read.Texts.Count));
 
             // ---- 3. review ----
+            // Chinh sua tay lan truoc (SL, vat lieu, don, Ghep / Xac nhan) cua CHINH ban ve nay
+            // duoc ap lai; sua lan nay duoc luu lai - ca khi bam HUY.
+            string drawingPath = doc.IsNamedDrawing ? doc.Name : null;
+            Dictionary<RecognizedPart, ReviewEdit> original = GhoPhoiPipeline.SnapshotForReview(read, recognition);
+            try
+            {
+                int reapplied = GhoPhoiPipeline.ApplyReviewEdits(
+                    recognition, original, NestingReviewMemory.Load(db, drawingPath));
+                if (reapplied > 0)
+                {
+                    recognition.GlobalWarnings.Add(string.Format(CultureInfo.InvariantCulture,
+                        "Da ap lai chinh sua lan truoc cho {0} chi tiet (RESET o bang don hang de bo).", reapplied));
+                }
+            }
+            catch (Exception)
+            {
+                // chi la tien ich - ban luu hong thi bat dau moi
+            }
+
             using (NestingReviewForm review = new NestingReviewForm(
                 recognition, r => ZoomTo(ed, db, read, r), settings.AutoZoomInReview))
             {
                 WF.DialogResult answer = Application.ShowModalDialog(review);
                 settings.AutoZoomInReview = review.AutoZoom;
                 ClearHighlight(db);
+
+                try
+                {
+                    List<string> seen = new List<string>();
+                    foreach (ReviewEdit o in original.Values) seen.Add(o.Key);
+                    NestingReviewMemory.Merge(db, drawingPath, seen, GhoPhoiPipeline.DiffAfterReview(recognition, original));
+                }
+                catch (Exception)
+                {
+                    // chi la tien ich
+                }
+
                 if (answer != WF.DialogResult.OK)
                 {
                     GhoPhoiSettingsStore.Save(settings);
@@ -326,8 +364,8 @@ namespace AUTOCAD_COMMANDS.Nesting
                 "\nGHOPHOI: Da ve {0} chi tiet tren {1} to vao ban ve hien tai tai ({2:0.##}, {3:0.##}).",
                 written.BlockReferenceCount, result.Sheets.Count, pick.Value.X, pick.Value.Y));
             ed.WriteMessage(settings.OutputAsBlocks
-                ? "\n  Moi chi tiet la 1 BLOCK. Muon may CNC chi cat duong bao thi bo tick \"Moi chi tiet la 1 BLOCK\" de pha khoi."
-                : "\n  Da pha khoi: moi doi tuong giu nguyen LAYER cua no - xuat di cat thi chon dung layer can cat.");
+                ? "\n  Moi chi tiet la 1 BLOCK. Muon explode + purge thi bo tick \"Giu moi chi tiet la 1 BLOCK\"."
+                : "\n  Da EXPLODE het block va PURGE dinh nghia block thua: moi doi tuong giu nguyen LAYER cua no - xuat di cat thi chon dung layer can cat.");
             ed.WriteMessage("\n  Khong vua y thi Ctrl+Z mot lan la het.");
 
             foreach (string w in written.Warnings) ed.WriteMessage("\n  (!) " + w);
@@ -338,12 +376,30 @@ namespace AUTOCAD_COMMANDS.Nesting
         ///
         /// Neu nguoi dung da chon san truoc khi go lenh thi dien luon vao dong dau - khong bat
         /// chon lai. Tra ve null khi nguoi dung huy.
+        ///
+        /// Bang lan truoc cua CHINH ban ve nay (ten don + phoi da quet) duoc nap lai san; nut
+        /// RESET tren bang xoa het. Xem <see cref="NestingOrderMemory"/>.
         /// </summary>
-        private static IList<NestingOrderEntry> AskOrders(Editor ed, Database db, GhoPhoiSettings settings)
+        private static IList<NestingOrderEntry> AskOrders(Document doc, Editor ed, Database db, GhoPhoiSettings settings)
         {
             Func<IList<ObjectId>, int[]> summarize = picked => Summarize(db, picked, settings);
 
-            using (NestingOrderForm form = new NestingOrderForm(ed, summarize))
+            string drawingPath = doc.IsNamedDrawing ? doc.Name : null;
+            int missing = 0;
+            List<NestingOrderEntry> restored;
+            try
+            {
+                restored = NestingOrderMemory.Load(db, drawingPath, out missing);
+            }
+            catch (Exception)
+            {
+                restored = new List<NestingOrderEntry>();     // ban luu hong thi bat dau moi
+            }
+
+            using (NestingOrderForm form = new NestingOrderForm(
+                ed, summarize, restored, missing,
+                entries => NestingOrderMemory.Save(db, drawingPath, entries),
+                () => NestingOrderMemory.Clear(db, drawingPath)))
             {
                 PromptSelectionResult implied = ed.SelectImplied();
                 if (implied.Status == PromptStatus.OK && implied.Value != null && implied.Value.Count > 0)
@@ -375,6 +431,7 @@ namespace AUTOCAD_COMMANDS.Nesting
 
                 RecognitionResult recognition = new PartRecognizer(settings.ToRecognitionSettings())
                     .Recognize(read.Chains, read.Texts);
+                GhoPhoiPipeline.ApplyPresets(read, recognition);
 
                 int parts = 0, qty = 0;
                 foreach (RecognizedPart p in recognition.Parts)
