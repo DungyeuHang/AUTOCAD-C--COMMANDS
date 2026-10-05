@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -39,9 +39,6 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         {
             public string Name;
             public Func<PartGroup, double> Key;       // larger key = placed earlier
-
-            /// <summary>Xep het chi tiet cua mot don roi moi sang don khac.</summary>
-            public bool GroupByOrder;
         }
 
         /// <summary>
@@ -54,28 +51,26 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         }
 
         /// <param name="orderAware">
-        /// Co tu hai don hang tro len: khi do chay them may thu tu xep GOM THEO DON.
+        /// Giu cho tuong thich - KHONG con anh huong: so don hang khong doi cach xep (xem
+        /// <see cref="BuildOrderings"/>).
         /// </param>
         public static int RunCount(NestingSettings settings, bool orderAware)
         {
             int extra = settings != null ? Math.Max(0, settings.ExtraSeededOrderings) : 0;
-            int grouped = orderAware ? OrderOrderingCount : 0;
             int localSearch = settings != null && settings.SearchEffort == SearchEffort.Balanced ? OrderLocalSearch.Budget : 0;
-            return (BaseOrderingCount + extra + grouped) * PlacementPolicyCount + localSearch;
+            return (BaseOrderingCount + extra) * PlacementPolicyCount + localSearch;
         }
 
         /// <summary>So thu tu xep co dinh trong <see cref="BuildOrderings"/> (chua tinh nhieu).</summary>
-        private const int BaseOrderingCount = 5;
+        private const int BaseOrderingCount = 6;
 
         /// <summary>
-        /// So thu tu xep GOM THEO DON, chi them vao khi co tu hai don tro len.
-        ///
-        /// Chay mot don thi chung trung y het thu tu goc nen chi ton thoi gian vo ich - do la
-        /// truong hop thuong gap nhat, khong duoc lam no cham di.
+        /// Trai-duoi, ngan nhat, va OM SAT (<see cref="PlacementPolicy.MaxContact"/>). Om sat la
+        /// chinh sach them sau cung: tren ban ve that 5 to ngan hon 2.5% (12779 -> 12457 mm),
+        /// tren 24 bo ngau nhien bot 1-2 to va ngan hon 0.6%, ton them ~40% thoi gian. Moi luot
+        /// cu van chay nen ket qua KHONG BAO GIO te hon truoc.
         /// </summary>
-        private const int OrderOrderingCount = 2;
-
-        private const int PlacementPolicyCount = 2;
+        private const int PlacementPolicyCount = 3;
 
         public OptimizationOutcome Optimize(MaterialJob job, CancellationToken cancellation, Action<NestingProgress> progress)
         {
@@ -83,7 +78,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             Stopwatch watch = Stopwatch.StartNew();
 
             List<Ordering> orderings = BuildOrderings(job);
-            PlacementPolicy[] policies = { PlacementPolicy.LeftBottom, PlacementPolicy.MinLength };
+            PlacementPolicy[] policies = { PlacementPolicy.LeftBottom, PlacementPolicy.MinLength, PlacementPolicy.MaxContact };
             int total = orderings.Count * policies.Length;
 
             // Every (ordering, policy) run is independent and the core has no shared mutable
@@ -132,7 +127,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 PlacementPolicy policy = policies[i % policies.Length];
                 Interlocked.Increment(ref started);
 
-                List<PartInstance> order = Order(job.Instances, ordering.Key, ordering.GroupByOrder);
+                List<PartInstance> order = Order(job.Instances, ordering.Key);
                 DecodedLayout layout = _decoder.Decode(order, job, policy, cancellation);
                 layout.OrderingName = ordering.Name + " / " + policy;
                 layouts[i] = layout;
@@ -232,23 +227,22 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 0.5 * g.Shape.Polygon.NetArea / maxArea +
                 0.5 * Math.Max(g.Shape.Polygon.Bounds.Width, g.Shape.Polygon.Bounds.Height) / maxLong;
 
+            // MOI thu tu deu la "TAM TO TRUOC": tam to dat truoc, cung nhau, tam nho lap vao
+            // cho trong con lai - cach ghep tay cua tho, va la cach it thua phoi nhat.
+            //
+            // KHONG con thu tu "gom theo don" (xep het don nay roi moi sang don kia): no lam
+            // chi tiet NHO cua don dau chiem cho truoc chi tiet TO cua don sau, va ket qua
+            // trong nhu "uu tien theo don" thay vi uu tien kich thuoc. Don hang gio chi con la
+            // khoa CHIA BAI khi hai cach xep da hoa nhau ve vat lieu (xem bo xep hang).
             List<Ordering> list = new List<Ordering>
             {
                 new Ordering { Name = "Dien tich giam dan", Key = g => g.Shape.Polygon.NetArea },
+                new Ordering { Name = "Dien tich hop bao giam dan", Key = g => (double)g.Shape.Polygon.Bounds.Width * g.Shape.Polygon.Bounds.Height },
                 new Ordering { Name = "Chieu cao bao giam dan", Key = g => g.Shape.Polygon.Bounds.Height },
                 new Ordering { Name = "Chieu rong bao giam dan", Key = g => g.Shape.Polygon.Bounds.Width },
                 new Ordering { Name = "Canh dai nhat giam dan", Key = g => Math.Max(g.Shape.Polygon.Bounds.Width, g.Shape.Polygon.Bounds.Height) },
                 new Ordering { Name = "Ket hop", Key = combined }
             };
-
-            // Gom theo don: xep xong het mot don roi moi sang don khac. Dieu nay TU NO khong
-            // quyet dinh gi - no chi de ra them mot phuong an de bo xep hang chon. Neu phuong
-            // an gom don ton them to hoac them chieu dai thi no thua ngay o khoa 2 / khoa 3.
-            if (job.OrderAware)
-            {
-                list.Add(new Ordering { Name = "Theo don + dien tich giam dan", Key = g => g.Shape.Polygon.NetArea, GroupByOrder = true });
-                list.Add(new Ordering { Name = "Theo don + ket hop", Key = combined, GroupByOrder = true });
-            }
 
             for (int k = 0; k < Math.Max(0, job.Settings.ExtraSeededOrderings); k++)
             {
@@ -269,7 +263,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             return list;
         }
 
-        private static List<PartInstance> Order(List<PartInstance> instances, Func<PartGroup, double> key, bool groupByOrder)
+        private static List<PartInstance> Order(List<PartInstance> instances, Func<PartGroup, double> key)
         {
             List<PartInstance> order = new List<PartInstance>(instances);
             Dictionary<string, double> keys = new Dictionary<string, double>();
@@ -280,12 +274,6 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
             order.Sort((a, b) =>
             {
-                if (groupByOrder)
-                {
-                    int byOrder = string.CompareOrdinal(a.Order, b.Order);
-                    if (byOrder != 0) return byOrder;
-                }
-
                 int c = keys[b.PartGroupId].CompareTo(keys[a.PartGroupId]);
                 if (c != 0) return c;
                 c = string.CompareOrdinal(a.PartGroupId, b.PartGroupId);

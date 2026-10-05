@@ -211,6 +211,12 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
 
         public bool MaterialFromText { get; set; }
 
+        /// <summary>
+        /// LOAI vat lieu ("INOX", "THEP"...) doc tu chu tren ban ve. False = dang dung loai mac
+        /// dinh - doi loai mac dinh o bang kiem tra thi chi nhung chi tiet nay doi theo.
+        /// </summary>
+        public bool MaterialTypeFromText { get; set; }
+
         public PartStatus Status { get; set; }
 
         public List<string> Notes { get; private set; }

@@ -197,6 +197,78 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             return true;
         }
 
+        /// <summary>
+        /// Chi tiet KHONG co chu SL / vat lieu nao, nhung GIONG HET HINH mot chi tiet khac CO
+        /// chu -> MO HO, bat nguoi dung xem lai.
+        ///
+        /// Truoc day no lang le nhan SL 1 / vat lieu mac dinh, va hai truong hop thuong gap deu
+        /// ra sai ma khong ai biet:
+        ///   - BAN SAO cua chi tiet (ket qua ghep cu ve vao ban ve nay, copy de nhap...) bi quet
+        ///     cung -> cung mot phoi xuat hien HAI LAN, mot lan o vat lieu mac dinh (1.2MM);
+        ///   - cap chi tiet DOI XUNG dung chung mot chu ("CHAN DOI XUNG") -> chiec kia mat do day.
+        /// Ca hai deu phai do NGUOI quyet: bo tick Ghep (ban sao) hoac sua SL / vat lieu.
+        ///
+        /// Goi SAU khi da gan chu va lay lai thong tin tu block cu. Tra ve so chi tiet bi danh dau.
+        /// </summary>
+        public static int FlagUntextedTwins(IList<RecognizedPart> parts)
+        {
+            List<RecognizedPart> withText = new List<RecognizedPart>();
+            foreach (RecognizedPart p in parts)
+            {
+                if (p.IsNestable && p.TextSources.Count > 0) withText.Add(p);
+            }
+
+            if (withText.Count == 0) return 0;
+
+            int flagged = 0;
+            foreach (RecognizedPart p in parts)
+            {
+                if (!p.IsNestable || p.TextSources.Count > 0) continue;
+
+                RecognizedPart twin = withText.Find(t => SameShape(t, p));
+                if (twin == null) continue;
+
+                flagged++;
+                string note = string.Format(CultureInfo.InvariantCulture,
+                    "GIONG HET hinh {0} nhung KHONG co chu SL / vat lieu (dang tam lay SL {1}, {2}) - neu la BAN SAO (vd. ket qua ghep cu) thi bo tick Ghep, neu la chi tiet doi xung thi sua SL / vat lieu",
+                    twin.Name, p.Quantity, p.Material);
+
+                // Ghi chu nay quan trong hon cac ghi chu "mac dinh" - dat len DAU de nhin thay ngay.
+                p.Escalate(PartStatus.Ambiguous, null);
+                if (!p.Notes.Contains(note)) p.Notes.Insert(0, note);
+            }
+
+            return flagged;
+        }
+
+        /// <summary>Cung hinh (ke ca da xoay / lat): cung so lo, dien tich va chu vi lech duoi 0.3%.</summary>
+        private static bool SameShape(RecognizedPart a, RecognizedPart b)
+        {
+            if (a.Holes.Count != b.Holes.Count) return false;
+            double areaA = NetArea(a), areaB = NetArea(b);
+            if (!Close(areaA, areaB)) return false;
+            return Close(Perimeter(a.Outer.Points), Perimeter(b.Outer.Points));
+        }
+
+        private static bool Close(double x, double y)
+        {
+            return Math.Abs(x - y) <= 0.003 * Math.Max(Math.Abs(x), Math.Abs(y)) + 1e-6;
+        }
+
+        private static double NetArea(RecognizedPart p)
+        {
+            double a = p.Outer.Area;
+            foreach (RecognizedLoop h in p.Holes) a -= h.Area;
+            return a;
+        }
+
+        private static double Perimeter(List<Pt> ring)
+        {
+            double sum = 0;
+            for (int i = 0, j = ring.Count - 1; i < ring.Count; j = i++) sum += ring[i].DistanceTo(ring[j]);
+            return sum;
+        }
+
         private static double MedianHeight(List<RecognizedPart> parts)
         {
             if (parts.Count == 0) return 1.0;

@@ -33,16 +33,18 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
     internal sealed class OrderLocalSearch
     {
         /// <summary>Khoang cach xa nhat giua hai vi tri duoc hoan doi.</summary>
-        public const int Window = 3;
+        public const int Window = 6;
 
         /// <summary>
         /// So luot giai ma toi da cho MOT vat lieu.
         ///
-        /// Da do (W=3): ban ve that -1.54% chieu dai voi 32 luot (~4 lan thoi gian). W=6 / 128
-        /// luot go them cho vai fixture tong hop nhung khong hon tren ban ve that va ton gap
-        /// ~2.5 lan nua - khong dang.
+        /// Da do (W=3): ban ve that -1.54% chieu dai voi 32 luot (~4 lan thoi gian).
+        /// Sau khi co chinh sach OM SAT, do lai tren 24 bo ngau nhien (chu nhat / L / U / T /
+        /// tam giac, 10-28 nhom): W=3/32 -1.0%, W=6/64 -1.4%, W=8/96 -1.5% so voi muc Nhanh cu,
+        /// thoi gian 3.2x / 4.4x / 5.8x. Chon W=6/64: phan lon loi ich, thoi gian con chap nhan
+        /// duoc (ban ve that 5 to: ~6 s).
         /// </summary>
-        public const int Budget = 32;
+        public const int Budget = 64;
 
         /// <summary>So lan can giai ma cung luc trong mot lo. HANG SO de ket qua khong phu thuoc may.</summary>
         public const int Batch = 8;

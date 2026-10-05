@@ -43,7 +43,7 @@ namespace AUTOCAD_COMMANDS.Nesting
 
         private static GhoPhoiSettings Settings()
         {
-            return new GhoPhoiSettings { OutputAsBlocks = true };
+            return new GhoPhoiSettings { DefaultMaterialType = string.Empty, OutputAsBlocks = true };
         }
 
         private static ObjectId Append(Database db, Transaction tr, Entity e)
@@ -1815,11 +1815,11 @@ namespace AUTOCAD_COMMANDS.Nesting
         /// </summary>
         private static void B17_SettingsRejectNonsense()
         {
-            GhoPhoiSettings d = new GhoPhoiSettings();
+            GhoPhoiSettings d = new GhoPhoiSettings { DefaultMaterialType = string.Empty };
             string[] doubles = { "GapMm", "EdgeMarginMm", "TimeBudgetSeconds", "ArcToleranceMm", "JoinToleranceMm", "MaxTextDistanceMm", "SheetSpacingMm" };
             foreach (string bad in new[] { "Infinity", "-Infinity", "NaN", "1e400", "abc", "" })
             {
-                GhoPhoiSettings s = new GhoPhoiSettings();
+                GhoPhoiSettings s = new GhoPhoiSettings { DefaultMaterialType = string.Empty };
                 foreach (string key in doubles) GhoPhoiSettingsStore.Apply(s, key, bad);
                 Equal(d.GapMm, s.GapMm, "GapMm '" + bad + "'");
                 Equal(d.EdgeMarginMm, s.EdgeMarginMm, "EdgeMarginMm '" + bad + "'");
@@ -1832,12 +1832,12 @@ namespace AUTOCAD_COMMANDS.Nesting
 
             foreach (string bad in new[] { "5", "-1", "3", "Bogus" })
             {
-                GhoPhoiSettings s = new GhoPhoiSettings { RotationMode = GhoPhoiRotationMode.HalfTurns };
+                GhoPhoiSettings s = new GhoPhoiSettings { DefaultMaterialType = string.Empty, RotationMode = GhoPhoiRotationMode.HalfTurns };
                 GhoPhoiSettingsStore.Apply(s, "RotationMode", bad);
                 Equal(GhoPhoiRotationMode.HalfTurns, s.RotationMode, "RotationMode '" + bad + "' phai bi bo qua");
             }
 
-            GhoPhoiSettings good = new GhoPhoiSettings();
+            GhoPhoiSettings good = new GhoPhoiSettings { DefaultMaterialType = string.Empty };
             GhoPhoiSettingsStore.Apply(good, "GapMm", "6.5");
             GhoPhoiSettingsStore.Apply(good, "EdgeMarginMm", "0");
             GhoPhoiSettingsStore.Apply(good, "RotationMode", "None");
@@ -1847,6 +1847,14 @@ namespace AUTOCAD_COMMANDS.Nesting
             Equal(0.0, good.EdgeMarginMm, "le 0 hop le");
             Equal(GhoPhoiRotationMode.None, good.RotationMode, "enum dung van doc");
             Equal(SearchEffort.Balanced, good.SearchEffort, "muc tim kiem");
+
+            GhoPhoiSettings alg = new GhoPhoiSettings { DefaultMaterialType = string.Empty };
+            GhoPhoiSettingsStore.Apply(alg, "Algorithm", "Compare");
+            Equal(GhoPhoiAlgorithmMode.Compare, alg.Algorithm, "thuat toan: so sanh");
+            GhoPhoiSettingsStore.Apply(alg, "Algorithm", "7");
+            Equal(GhoPhoiAlgorithmMode.Compare, alg.Algorithm, "thuat toan: so la bi bo qua");
+            GhoPhoiSettingsStore.Apply(alg, "Algorithm", "Nfp");
+            Equal(NestingAlgorithm.Nfp, alg.ToNestingSettings().Algorithm, "NFP di xuong loi");
             True(good.AllowPartInsideHole, "cho phep lo kin");
 
             double v;

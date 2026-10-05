@@ -59,6 +59,128 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "R43. Chu trong LO cua khung: 10 truong hop topo", R43_TextInsideHoleTopology);
             NestingTestHarness.Run(report, "R44. Toa do rat xa (+-1e6 .. 1e7 mm): cung ket qua nhan dang", R44_FarCoordinates);
             NestingTestHarness.Run(report, "R45. Doi khang: dau hai cham full-width, 0MM, duoi MM la, sat bien 0.001, chu chong cho", R45_AdversarialMetadata);
+            NestingTestHarness.Run(report, "R46. MText 3 dong 'SL: 1 / 0.75MM / CHAN DOI XUNG' -> SL + do day + ten", R46_MultiLineMTextNameAndMaterial);
+            NestingTestHarness.Run(report, "R47. Loai vat lieu: INOX / SUS304 / THEP / MA KEM; INOX va THEP cung do day KHONG tron", R47_MaterialTypes);
+            NestingTestHarness.Run(report, "R48. Ten vat lieu: tach / ghep / danh muc kho ghi do day, loai hoac ca hai", R48_MaterialNameMatching);
+            NestingTestHarness.Run(report, "R49. Phoi GIONG HET phoi khac ma khong co chu -> MO HO (ban sao / doi xung)", R49_UntextedTwinFlagged);
+        }
+
+        private static void R46_MultiLineMTextNameAndMaterial()
+        {
+            foreach (string mtext in new[] { "SL: 1\r\n0.75MM\r\nCHAN DOI XUNG", "SL: 1\n0.75MM\nCHAN DOI XUNG", "SL: 1 0.75MM CHAN DOI XUNG" })
+            {
+                RecognizedPart p = Valid(Recognize(new List<CurveChain> { Box(0, 0, 300, 200) }, Text(mtext, 150, 100)))[0];
+                Equal(1, p.Quantity, "SL");
+                Equal("0.75MM", p.Material, "do day dong 2 phai duoc doc");
+                True(p.QuantityFromText && p.MaterialFromText, "ca hai tu chu");
+                Equal(PartStatus.Ok, p.Status, "du thong tin -> OK");
+                True(p.Name.EndsWith("CHAN DOI XUNG", StringComparison.Ordinal), "phan chu con lai lam ten: " + p.Name);
+                Equal(0, p.EngravingSources.Count, "chu thong tin KHONG bi mang di cat");
+            }
+
+            // Chu don vi / chu dem khong thanh ten.
+            RecognizedPart q = Valid(Recognize(new List<CurveChain> { Box(0, 0, 300, 200) }, Text("SL: 2 cai\n1.2MM", 150, 100)))[0];
+            Equal("P1", q.Name, "'cai' khong phai ten");
+        }
+
+        private static void R47_MaterialTypes()
+        {
+            MetadataParser p = new MetadataParser(new MetadataRules());
+            string[] texts = { "INOX 1.2MM", "SUS304 1.5MM", "SUS 304", "INOX-201", "TH\u00c9P 2MM", "thep 2mm", "TON MA KEM 0.8MM", "SS400", "SS304", "NHOM 3MM", "TON" };
+            string[] want = { "INOX", "INOX 304", "INOX 304", "INOX 201", "THEP", "THEP", "MA KEM", "THEP", "INOX 304", "NHOM", "TON" };
+            for (int i = 0; i < texts.Length; i++)
+            {
+                MetadataFact f = p.Parse(texts[i]).Find(x => x.Kind == MetadataKind.MaterialType);
+                True(f != null && f.Value == want[i], "'" + texts[i] + "' -> " + want[i] + " (doc duoc: " + (f == null ? "-" : f.Value) + ")");
+            }
+
+            foreach (string none in new[] { "CHAN DOI XUNG", "DONG GOI", "SLOT 3", "AL", "TONG", "STONE" })
+            {
+                True(!p.Parse(none).Exists(x => x.Kind == MetadataKind.MaterialType), "'" + none + "' khong phai loai vat lieu");
+            }
+
+            Equal("INOX 304", p.ParseType("sus304"), "o sua tay");
+            True(p.ParseType("abc") == null, "khong nhan ra -> null");
+
+            // Nhan dang: loai ghi tren ban ve thang; khong ghi thi lay loai mac dinh.
+            RecognitionSettings rs = new RecognitionSettings();
+            rs.Metadata.DefaultMaterialType = "THEP";
+            List<CurveChain> c = new List<CurveChain> { Box(0, 0, 200, 100), Box(600, 0, 200, 100) };
+            RecognitionResult r = new PartRecognizer(rs).Recognize(c, new[] { Text("SL: 2\nINOX 1.2MM", 100, 50), Text("SL: 3\n1.2MM", 700, 50) });
+            RecognizedPart a = At(r, 0), b = At(r, 600);
+            Equal("INOX 1.2MM", a.Material, "INOX tu chu");
+            True(a.MaterialTypeFromText, "co co loai tu chu");
+            Equal("THEP 1.2MM", b.Material, "khong ghi loai -> mac dinh THEP");
+            True(!b.MaterialTypeFromText, "loai mac dinh");
+            Equal(PartStatus.Ok, a.Status, "A OK");
+            Equal(PartStatus.Ok, b.Status, "B OK (khong ghi loai khong phai loi)");
+
+            foreach (RecognizedPart x in r.Parts) x.Include = true;
+            List<Core.PartGroup> groups = PartRecognizer.ToPartGroups(r.Parts, 0.05);
+            True(groups[0].Material != groups[1].Material, "INOX 1.2MM va THEP 1.2MM la hai vat lieu - khong ghep chung");
+
+            // "INOX" + "INOX 304" = cu the hon, khong mau thuan; "INOX" + "THEP" = mau thuan.
+            RecognizedPart same = Valid(Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text("INOX 1.2MM", 100, 50), Text("SUS304", 100, 30)))[0];
+            Equal("INOX 304 1.2MM", same.Material, "mac cu the thang");
+            True(same.Status != PartStatus.Ambiguous, "khong mo ho");
+            RecognizedPart clash = Valid(Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text("INOX 1.2MM", 100, 50), Text("THEP", 100, 30)))[0];
+            Equal(PartStatus.Ambiguous, clash.Status, "hai loai khac nhau -> mo ho");
+
+            // Mac dinh rong (nhu truoc): khong co loai -> chi do day.
+            Equal("1.2MM", Valid(Recognize(new List<CurveChain> { Box(0, 0, 200, 100) }, Text("SL: 1 1.2MM", 100, 50)))[0].Material, "khong loai = nhu cu");
+        }
+
+        private static void R48_MaterialNameMatching()
+        {
+            string type, thick;
+            Core.MaterialName.Split("INOX 304 1.2MM", out type, out thick);
+            Equal("INOX 304", type, "tach loai");
+            Equal("1.2MM", thick, "tach do day");
+            Core.MaterialName.Split("1.2MM", out type, out thick);
+            True(type.Length == 0 && thick == "1.2MM", "chi do day");
+            Equal("THEP 2MM", Core.MaterialName.Compose("thep", "2mm"), "ghep");
+            Equal("INOX 2MM", Core.MaterialName.WithType("THEP 2MM", "INOX"), "doi loai giu do day");
+
+            True(Core.MaterialName.EntryMatches("1.2MM", "THEP 1.2MM"), "danh muc cu ghi do day -> moi loai");
+            True(Core.MaterialName.EntryMatches("INOX", "INOX 304 1.2MM"), "ghi loai -> moi mac / do day");
+            True(Core.MaterialName.EntryMatches("INOX 1.2MM", "INOX 1.2MM"), "day du");
+            True(!Core.MaterialName.EntryMatches("INOX 304", "INOX 1.2MM"), "ghi mac -> chi mac do");
+            True(!Core.MaterialName.EntryMatches("INOX 1.2MM", "THEP 1.2MM"), "khac loai");
+            True(!Core.MaterialName.EntryMatches("1.5MM", "INOX 1.2MM"), "khac do day");
+            True(!Core.MaterialName.EntryMatches("INOX", "1.2MM"), "vat lieu khong loai khong khop muc chi loai");
+
+            Core.SheetSpec sheet = new Core.SheetSpec("K", 2440, 1220);
+            sheet.Materials.Add("INOX");
+            True(sheet.IsCompatibleWith("INOX 1.5MM") && !sheet.IsCompatibleWith("THEP 1.5MM"), "kho chi danh cho INOX");
+
+            List<string> sorted = new List<string> { "THEP 10MM", "INOX 2MM", "THEP 2MM", "INOX 1.2MM" };
+            sorted.Sort(Core.MaterialName.Compare);
+            Equal("INOX 1.2MM|INOX 2MM|THEP 2MM|THEP 10MM", string.Join("|", sorted.ToArray()), "sap theo loai roi do day (so)");
+        }
+
+        private static void R49_UntextedTwinFlagged()
+        {
+            // A co chu, B y het (ban sao) khong co chu, C khac hinh khong co chu, D = A xoay 90 do.
+            List<CurveChain> c = new List<CurveChain>
+            {
+                Box(0, 0, 200, 100), Box(1000, 0, 200, 100), Box(2000, 0, 150, 150), Box(3000, 0, 100, 200)
+            };
+            RecognitionResult r = Recognize(c, Text("SL: 1\n0.75MM", 100, 50));
+            Equal(2, PartRecognizer.FlagUntextedTwins(r.Parts), "B va D (xoay) bi danh dau");
+            Equal(PartStatus.Ok, At(r, 0).Status, "A giu nguyen");
+            Equal(PartStatus.Ambiguous, At(r, 1000).Status, "ban sao khong chu -> mo ho");
+            True(At(r, 1000).NotesText.Contains("BAN SAO"), "ghi chu noi ro");
+            Equal(PartStatus.Ambiguous, At(r, 3000).Status, "xoay 90 do van la cung hinh");
+            True(At(r, 2000).Status != PartStatus.Ambiguous, "khac hinh -> khong dung vao");
+
+            // Moi chi tiet deu co chu rieng -> khong danh dau gi.
+            RecognitionResult ok = Recognize(new List<CurveChain> { Box(0, 0, 200, 100), Box(1000, 0, 200, 100) },
+                Text("SL: 1\n0.75MM", 100, 50), Text("SL: 2\n1.2MM", 1100, 50));
+            Equal(0, PartRecognizer.FlagUntextedTwins(ok.Parts), "du chu -> khong co gi");
+
+            // Khong chi tiet nao co chu -> khong co can cu de so sanh, giu nhu cu.
+            RecognitionResult bare = Recognize(new List<CurveChain> { Box(0, 0, 200, 100), Box(1000, 0, 200, 100) });
+            Equal(0, PartRecognizer.FlagUntextedTwins(bare.Parts), "khong chu nao -> khong danh dau");
         }
 
         private static void R20_SlInsideMaterialOutside()
@@ -476,11 +598,16 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
         private static void R02_MaterialFormats()
         {
             MetadataParser p = new MetadataParser(new MetadataRules());
-            foreach (string s in new[] { "1.2MM", "1.2 MM", "1,2MM", "1,2 MM", "1.2mm", "INOX 1.2MM" })
+            foreach (string s in new[] { "1.2MM", "1.2 MM", "1,2MM", "1,2 MM", "1.2mm" })
             {
                 List<MetadataFact> f = p.Parse(s);
                 True(f.Count == 1 && f[0].Kind == MetadataKind.Material && f[0].Value == "1.2MM", "parse '" + s + "'");
             }
+
+            // Co ghi loai: do day van doc dung, CONG them loai vat lieu (xem R47).
+            List<MetadataFact> inox = p.Parse("INOX 1.2MM");
+            True(inox.Exists(x => x.Kind == MetadataKind.Material && x.Value == "1.2MM"), "parse 'INOX 1.2MM' - do day");
+            True(inox.Exists(x => x.Kind == MetadataKind.MaterialType && x.Value == "INOX"), "parse 'INOX 1.2MM' - loai");
 
             Equal("1.5MM", p.Parse("1.50 mm")[0].Value, "normalised");
             Equal("2MM", p.Parse("2MM")[0].Value, "integer thickness");

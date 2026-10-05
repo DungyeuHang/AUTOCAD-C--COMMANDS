@@ -17,6 +17,19 @@ namespace AUTOCAD_COMMANDS.Nesting
         None
     }
 
+    /// <summary>Thuat toan sinh vi tri dat - lua chon cua nguoi dung o bang cai dat.</summary>
+    public enum GhoPhoiAlgorithmMode
+    {
+        /// <summary>Diem ung vien (nhu truoc) - nhanh.</summary>
+        CandidatePoints = 0,
+
+        /// <summary>NFP da giac that (tong Minkowski) - cham hon 3-4 lan.</summary>
+        Nfp = 1,
+
+        /// <summary>Chay CA HAI, bao so sanh, nguoi dung chon ket qua de ve.</summary>
+        Compare = 2
+    }
+
     /// <summary>User settings of GHOPHOI (persisted by <see cref="GhoPhoiSettingsStore"/>).</summary>
     public sealed class GhoPhoiSettings
     {
@@ -55,6 +68,9 @@ namespace AUTOCAD_COMMANDS.Nesting
 
         public int ExtraSeededOrderings { get; set; } = 3;
 
+        /// <summary>Thuat toan sinh vi tri dat. Mac dinh = diem ung vien (nhu truoc).</summary>
+        public GhoPhoiAlgorithmMode Algorithm { get; set; } = GhoPhoiAlgorithmMode.CandidatePoints;
+
         /// <summary>Arc chord tolerance for the computational polygon (mm). Added to every clearance.</summary>
         public double ArcToleranceMm { get; set; } = 0.05;
 
@@ -64,6 +80,12 @@ namespace AUTOCAD_COMMANDS.Nesting
         public double MaxTextDistanceMm { get; set; } = 300.0;
 
         public string DefaultMaterial { get; set; } = "1.2MM";
+
+        /// <summary>
+        /// LOAI vat lieu khi ban ve khong ghi loai ("THEP"). Chu tren ban ve ("INOX", "SUS304")
+        /// luon thang. Rong = chi phan biet do day nhu truoc. Doi duoc ngay o bang KIEM TRA.
+        /// </summary>
+        public string DefaultMaterialType { get; set; } = "THEP";
 
         public int DefaultQuantity { get; set; } = 1;
 
@@ -163,7 +185,10 @@ namespace AUTOCAD_COMMANDS.Nesting
                 DeterministicSearch = DeterministicSearch,
                 SearchEffort = SearchEffort,
                 Seed = Seed,
-                ExtraSeededOrderings = ExtraSeededOrderings
+                ExtraSeededOrderings = ExtraSeededOrderings,
+
+                // So sanh: lenh tu chay hai lan (xem GhoPhoiCommand) - o day la lan dau.
+                Algorithm = Algorithm == GhoPhoiAlgorithmMode.Nfp ? NestingAlgorithm.Nfp : NestingAlgorithm.CandidatePoints
             };
 
             switch (RotationMode)
@@ -190,6 +215,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                 MaxTextDistance = MaxTextDistanceMm
             };
             r.Metadata.DefaultMaterial = DefaultMaterial;
+            r.Metadata.DefaultMaterialType = DefaultMaterialType ?? string.Empty;
             r.Metadata.DefaultQuantity = DefaultQuantity;
             return r;
         }

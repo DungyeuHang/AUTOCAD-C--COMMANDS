@@ -138,6 +138,12 @@ namespace AUTOCAD_COMMANDS.Nesting
 
             int unengraved = GhoPhoiPipeline.AttachEngravings(read, recognition, settings);
             GhoPhoiPipeline.ApplyPresets(read, recognition);
+            int twins = PartRecognizer.FlagUntextedTwins(recognition.Parts);
+            if (twins > 0)
+            {
+                recognition.GlobalWarnings.Add(string.Format(ci,
+                    "{0} chi tiet giong het chi tiet khac nhung khong co chu SL / vat lieu - co the la ban sao.", twins));
+            }
 
             long recogniseMs = sw.ElapsedMilliseconds;
             log.AppendLine(string.Format(ci, "READ\tsources={0}\tchains={1}\ttexts={2}\tmarkings={3}\tignored={4}\t{5} ms",

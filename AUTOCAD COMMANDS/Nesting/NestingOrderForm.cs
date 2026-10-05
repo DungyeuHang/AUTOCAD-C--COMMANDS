@@ -47,7 +47,7 @@ namespace AUTOCAD_COMMANDS.Nesting
 
         private const string HintText =
             "Go ten don hang vao bang, roi bam QUET PHOI tren dong do de chon chi tiet cua don ay."
-            + "\r\nChay mot don thi de nguyen mot dong. Ten don khong duoc de trong.";
+            + "\r\nChay mot don van nen dat ten (de ghi ten don len phoi). Quet mot phoi vao don khac = CHUYEN phoi sang don do.";
 
         /// <param name="summarize">
         /// Nhan dang thu mot tap doi tuong, tra ve {so chi tiet, tong SL}. Chi de hien thi.
@@ -114,7 +114,8 @@ namespace AUTOCAD_COMMANDS.Nesting
                 row = _orders.Count - 1;
             }
 
-            _orders.ApplyScan(row, ids, false);
+            int moved = _orders.ApplyScan(row, ids, false);
+            if (moved > 0) ShowMoved(moved, _orders[row].Name);
             if (!_orders[row].Scanned)
             {
                 if (row > 0) _orders.Remove(row);
@@ -342,10 +343,30 @@ namespace AUTOCAD_COMMANDS.Nesting
             ObjectId[] picked = Pick(order.Name);
             if (picked == null || picked.Length == 0) return;
 
-            _orders.ApplyScan(index, picked, append);
+            int moved = _orders.ApplyScan(index, picked, append);
+
+            // Don khac vua mat doi tuong: tinh lai so chi tiet / SL cua chung.
+            if (moved > 0)
+            {
+                foreach (NestingOrderEntry other in _orders.Items)
+                {
+                    if (!ReferenceEquals(other, order)) Preview(other);
+                }
+
+                ShowMoved(moved, order.Name);
+            }
+
             Preview(order);
             LoadRows();
             UpdateState();
+        }
+
+        private void ShowMoved(int moved, string orderName)
+        {
+            _hint.Text = HintText + "\r\n" + string.Format(CultureInfo.InvariantCulture,
+                "Da CHUYEN {0} doi tuong tu don khac sang don \"{1}\" (moi phoi chi thuoc mot don - luot quet sau thang).",
+                moved, orderName);
+            _hint.ForeColor = Color.FromArgb(0, 102, 204);
         }
 
         private void Preview(NestingOrderEntry order)

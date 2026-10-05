@@ -50,7 +50,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                         tr.Commit();
                     }
 
-                    GhoPhoiSettings s = new GhoPhoiSettings();
+                    GhoPhoiSettings s = new GhoPhoiSettings { DefaultMaterialType = string.Empty };
                     try
                     {
                         // ---- lan 1: nguoi dung sua o bang KIEM TRA ----
@@ -139,7 +139,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                 Dictionary<ObjectId, string> byEntity = new Dictionary<ObjectId, string>();
                 foreach (ObjectId id in source) byEntity[id] = "DON-X";
 
-                GhoPhoiSettings s = new GhoPhoiSettings { OutputAsBlocks = true };
+                GhoPhoiSettings s = new GhoPhoiSettings { DefaultMaterialType = string.Empty, OutputAsBlocks = true };
                 NestReadResult read;
                 RecognitionResult rec = ReadLikeCommand(db, source, s, byEntity, out read);
                 Equal(2, rec.Parts.Count, "hai chi tiet goc");
@@ -160,7 +160,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                     firstResult = ModelSpaceIds(db, tr).FindAll(id => !before.Contains(id));
 
                 // ---- quet CA vung ket qua cu (khung, nhan, chu... deu nam trong) ----
-                GhoPhoiSettings s2 = new GhoPhoiSettings();
+                GhoPhoiSettings s2 = new GhoPhoiSettings { DefaultMaterialType = string.Empty };
                 NestReadResult read2;
                 RecognitionResult again = ReadLikeCommand(db, firstResult, s2, null, out read2);
                 List<RecognizedPart> nestable = again.Parts.FindAll(p => p.IsNestable);
@@ -321,7 +321,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                     tr.Commit();
                 }
 
-                GhoPhoiSettings s = new GhoPhoiSettings();
+                GhoPhoiSettings s = new GhoPhoiSettings { DefaultMaterialType = string.Empty };
                 True(!s.OutputAsBlocks, "mac dinh KHONG giu block");
                 using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
                 {
@@ -502,12 +502,29 @@ namespace AUTOCAD_COMMANDS.Nesting
                 // Chot khi chua quet gi -> phai bao loi.
                 True(list.Finalize() != null, "chua quet gi thi khong chot duoc");
 
-                // Chot voi DUNG MOT don -> ten bi xoa trang (mot don khong phai la chay theo don).
+                // Chot voi DUNG MOT don -> ten nguoi dung dat duoc GIU (de ghi "P + ten don" len phoi).
                 list.SetName(0, "DON-DUY-NHAT");
                 list.ApplyScan(0, new[] { a }, false);
                 Equal(null, list.Finalize(), "chot duoc");
                 Equal(1, list.Count, "chi con dong da quet");
-                Equal(string.Empty, list[0].Name, "mot don thi de ten rong");
+                Equal("DON-DUY-NHAT", list[0].Name, "mot don van giu ten nguoi dung dat");
+
+                // ... chi ten TU SINH ("DON-01") moi bi xoa trang.
+                NestingOrderList auto = new NestingOrderList();
+                auto.ApplyScan(0, new[] { a }, false);
+                Equal(null, auto.Finalize(), "chot duoc voi ten tu sinh");
+                Equal(string.Empty, auto[0].Name, "ten tu sinh DON-01 khong mang di ghi");
+                True(NestingOrderList.IsAutoName("DON-12") && !NestingOrderList.IsAutoName("DON-A1") && !NestingOrderList.IsAutoName("DH-01"), "nhan ra ten tu sinh");
+
+                // Quet mot doi tuong da thuoc don khac -> CHUYEN sang don moi (luot quet sau thang).
+                NestingOrderList move = new NestingOrderList();
+                move.SetName(0, "CU");
+                move.ApplyScan(0, new[] { a, b }, false);
+                move.Add();
+                move.SetName(1, "MOI");
+                Equal(1, move.ApplyScan(1, new[] { b, c }, false), "bao so doi tuong da chuyen");
+                True(move[0].Ids.Count == 1 && move[0].Ids[0] == a, "don cu mat doi tuong vua chuyen");
+                True(move[1].Ids.Contains(b) && move[1].Ids.Contains(c), "don moi co doi tuong vua quet");
 
                 // Chot voi HAI don -> giu nguyen ten ca hai.
                 NestingOrderList two = new NestingOrderList();
@@ -549,7 +566,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                     { b, "DON-B" }
                 };
 
-                GhoPhoiSettings s = new GhoPhoiSettings();
+                GhoPhoiSettings s = new GhoPhoiSettings { DefaultMaterialType = string.Empty };
                 NestReadResult read = NestingSelectionReader.Read(tr, new[] { a, b }, s, byEntity);
                 RecognitionResult rec = new PartRecognizer(s.ToRecognitionSettings()).Recognize(read.Chains, read.Texts);
 
@@ -593,7 +610,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                     { l1, "DON-A" }, { l2, "DON-A" }, { l3, "DON-B" }, { l4, "DON-B" }
                 };
 
-                GhoPhoiSettings s = new GhoPhoiSettings();
+                GhoPhoiSettings s = new GhoPhoiSettings { DefaultMaterialType = string.Empty };
                 NestReadResult read = NestingSelectionReader.Read(tr, new[] { l1, l2, l3, l4 }, s, byEntity);
                 RecognitionResult rec = new PartRecognizer(s.ToRecognitionSettings()).Recognize(read.Chains, read.Texts);
 
@@ -631,7 +648,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                         tr.Commit();
                     }
 
-                    GhoPhoiSettings s = new GhoPhoiSettings { LabelParts = labelParts };
+                    GhoPhoiSettings s = new GhoPhoiSettings { DefaultMaterialType = string.Empty, LabelParts = labelParts };
                     using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
                     {
                         read = NestingSelectionReader.Read(tr, ModelSpaceIds(db, tr), s);
@@ -712,7 +729,7 @@ namespace AUTOCAD_COMMANDS.Nesting
 
                     // Ten don co ca loai DAI de thu phan rut gon nhan.
                     string longName = "DON-HANG-CUC-KY-DAI-DE-THU-PHAN-RUT-GON-NHAN-TREN-TO-PHOI";
-                    GhoPhoiSettings s = new GhoPhoiSettings { LabelParts = false };
+                    GhoPhoiSettings s = new GhoPhoiSettings { DefaultMaterialType = string.Empty, LabelParts = false };
                     using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
                     {
                         List<ObjectId> ids = ModelSpaceIds(db, tr);
@@ -815,7 +832,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                         tr.Commit();
                     }
 
-                    GhoPhoiSettings s = new GhoPhoiSettings { LabelParts = true };
+                    GhoPhoiSettings s = new GhoPhoiSettings { DefaultMaterialType = string.Empty, LabelParts = true };
                     using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
                     {
                         read = NestingSelectionReader.Read(tr, ModelSpaceIds(db, tr), s);
@@ -922,7 +939,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                         tr.Commit();
                     }
 
-                    GhoPhoiSettings s = new GhoPhoiSettings { LabelParts = true, LabelPartNameAndOrder = nameAndOrder };
+                    GhoPhoiSettings s = new GhoPhoiSettings { DefaultMaterialType = string.Empty, LabelParts = true, LabelPartNameAndOrder = nameAndOrder };
                     using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
                     {
                         List<ObjectId> ids = ModelSpaceIds(db, tr);
@@ -1003,7 +1020,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                         before = ModelSpaceIds(db, tr);
                     }
 
-                    GhoPhoiSettings s = new GhoPhoiSettings { LabelParts = false };
+                    GhoPhoiSettings s = new GhoPhoiSettings { DefaultMaterialType = string.Empty, LabelParts = false };
                     using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
                     {
                         List<ObjectId> ids = ModelSpaceIds(db, tr);

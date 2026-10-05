@@ -65,6 +65,19 @@ namespace AUTOCAD_COMMANDS.Nesting
             return name;
         }
 
+        /// <summary>Ten tu sinh ("DON-01", "DON-02"...) - nguoi dung chua dat ten that.</summary>
+        public static bool IsAutoName(string name)
+        {
+            string n = (name ?? string.Empty).Trim();
+            if (n.Length < 5 || !n.StartsWith("DON-", StringComparison.OrdinalIgnoreCase)) return false;
+            for (int i = 4; i < n.Length; i++)
+            {
+                if (!char.IsDigit(n[i])) return false;
+            }
+
+            return true;
+        }
+
         /// <summary>
         /// Xoa mot dong. Bang khong bao gio duoc rong: xoa dong cuoi thi tu tao lai mot dong
         /// trong, de nguoi dung con cho ma go.
@@ -158,10 +171,15 @@ namespace AUTOCAD_COMMANDS.Nesting
         /// de mat mot luot quet cu ma khong bao la loi nang.
         ///
         /// Doi tuong trung nhau chi tinh mot lan.
+        ///
+        /// LUOT QUET SAU THANG: doi tuong vua quet ma dang nam o DON KHAC thi duoc CHUYEN sang
+        /// don nay (bo khoi don kia). Truoc day don quet TRUOC giu doi tuong - nen sau khi bang
+        /// lan truoc duoc nap lai, quet mot phoi vao don moi thi phoi van am tham thuoc don cu.
         /// </summary>
-        public void ApplyScan(int index, IEnumerable<ObjectId> ids, bool append)
+        /// <returns>So doi tuong da chuyen tu don khac sang (de bao cho nguoi dung).</returns>
+        public int ApplyScan(int index, IEnumerable<ObjectId> ids, bool append)
         {
-            if (index < 0 || index >= _items.Count || ids == null) return;
+            if (index < 0 || index >= _items.Count || ids == null) return 0;
 
             NestingOrderEntry entry = _items[index];
             if (!append) entry.Ids.Clear();
@@ -169,6 +187,16 @@ namespace AUTOCAD_COMMANDS.Nesting
             {
                 if (!entry.Ids.Contains(id)) entry.Ids.Add(id);
             }
+
+            HashSet<ObjectId> mine = new HashSet<ObjectId>(entry.Ids);
+            int moved = 0;
+            for (int i = 0; i < _items.Count; i++)
+            {
+                if (i == index) continue;
+                moved += _items[i].Ids.RemoveAll(mine.Contains);
+            }
+
+            return moved;
         }
 
         /// <summary>
@@ -176,9 +204,10 @@ namespace AUTOCAD_COMMANDS.Nesting
         ///
         /// Null = chot duoc. Sau khi chot, <see cref="Items"/> chi con cac dong da quet.
         ///
-        /// Chi co DUNG MOT don thi ten bi xoa trang: mot don khong phai la "chay theo don",
-        /// va de trang thi moi thu phia sau (nhan tren to, bang kiem tra, cach xep hang) im
-        /// lang y nhu truoc khi co tinh nang nay - ket qua ghep khong doi mot mili nao.
+        /// Chi co DUNG MOT don: ten nguoi dung DA DAT duoc GIU (de nhan "P + ten don" va nhan
+        /// tren to co ten don - truoc day bi xoa trang nen chay mot don thi khong bao gio thay
+        /// ten don). Chi ten TU SINH ("DON-01") moi bi xoa, vi no khong noi them dieu gi. Cach
+        /// xep khong doi: mot ten don duy nhat khong lam bo xep hang chia bai theo don.
         /// </summary>
         public string Finalize()
         {
@@ -206,7 +235,7 @@ namespace AUTOCAD_COMMANDS.Nesting
 
             _items.Clear();
             _items.AddRange(used);
-            if (_items.Count == 1) _items[0].Name = string.Empty;
+            if (_items.Count == 1 && IsAutoName(_items[0].Name)) _items[0].Name = string.Empty;
             return null;
         }
 

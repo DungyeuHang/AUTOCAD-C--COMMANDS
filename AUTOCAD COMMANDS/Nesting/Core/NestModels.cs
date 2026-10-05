@@ -124,7 +124,10 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
         public double WidthMm { get; private set; }
 
-        /// <summary>Compatible materials. Empty = any material.</summary>
+        /// <summary>
+        /// Compatible materials. Empty = any material. Muc co the ghi day du ("INOX 1.2MM"),
+        /// chi do day ("1.2MM") hoac chi loai ("INOX") - xem <see cref="MaterialName.EntryMatches"/>.
+        /// </summary>
         public List<string> Materials { get; private set; }
 
         public long LengthUnits { get { return NestUnits.ToUnits(LengthMm); } }
@@ -136,7 +139,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             if (Materials.Count == 0) return true;
             foreach (string m in Materials)
             {
-                if (string.Equals(m, material, StringComparison.OrdinalIgnoreCase)) return true;
+                if (MaterialName.EntryMatches(m, material)) return true;
             }
 
             return false;
@@ -169,8 +172,24 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         Balanced = 1
     }
 
+    /// <summary>
+    /// Cach SINH VI TRI DAT cho tung chi tiet. Moi cach deu qua cung phep kiem va cham chinh
+    /// xac, cung bo xep hang va cung validator - chi khac nguon ung vien.
+    /// </summary>
+    public enum NestingAlgorithm
+    {
+        /// <summary>Diem ung vien (quet cot X + vi tri cham nhau) - cach mac dinh.</summary>
+        CandidatePoints = 0,
+
+        /// <summary>NFP da giac that (tong Minkowski) - xem NfpCandidates.</summary>
+        Nfp = 1
+    }
+
     public sealed class NestingSettings
     {
+        /// <summary>Nguon vi tri dat. Mac dinh = diem ung vien (nhu truoc).</summary>
+        public NestingAlgorithm Algorithm { get; set; } = NestingAlgorithm.CandidatePoints;
+
         public double GapMm { get; set; } = 5.0;
 
         public double EdgeMarginMm { get; set; } = 5.0;

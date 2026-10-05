@@ -713,4 +713,4 @@ END
 PART id=G047 qty=1 material=1.2MM tol=0 name=P47
 OUTER 207.602,12.904 207.602,22.711 184.123,46.293 164.029,73.936 163.802,73.936 163.802,94.518 164.898,94.518 173.802,103.422 33.8,103.422 42.704,94.518 43.8,94.518 43.8,73.936 43.573,73.936 23.479,46.293 0,22.711 0,12.904 12.8,0 194.802,0
 END
-EXPECT placed=85 unplaced=0 sheets<=5 usedlength<=12781 mingap>=5 minedge>=5
+EXPECT placed=85 unplaced=0 sheets<=5 usedlength<=12458 mingap>=5 minedge>=5

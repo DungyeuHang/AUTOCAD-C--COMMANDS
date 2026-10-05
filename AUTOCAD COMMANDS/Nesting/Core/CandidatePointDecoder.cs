@@ -25,9 +25,10 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
     /// Vai chuc ung vien dan dau duoc NEN (truot trai roi truot xuong), roi cham diem LAI sau
     /// khi nen - vi truoc khi nen thi hai cho cung cot X trong y het nhau.
     ///
-    /// Day KHONG phai NFP dung nghia: khong dung Minkowski, khong hop cac vung cam, khong phu
-    /// cac vi tri cham kieu dinh-cham-canh. Do la mot tap UNG VIEN; phep kiem va cham that van
-    /// la trong tai duy nhat quyet dinh cho nao dat duoc. Cung khong co GA / SA.
+    /// Nguon B KHONG phai NFP dung nghia. NFP THAT (tong Minkowski, xem <see cref="NfpCandidates"/>)
+    /// la nguon THU BA, chi bat khi <see cref="NestingSettings.Algorithm"/> = Nfp. Moi nguon chi la
+    /// UNG VIEN; phep kiem va cham that van la trong tai duy nhat quyet dinh cho nao dat duoc.
+    /// Khong co GA / SA.
     /// </summary>
     public sealed class CandidatePointDecoder : IPlacementDecoder
     {
@@ -64,6 +65,19 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
         /// <summary>Score quantum for the LeftBottom policy (1 mm) so that tiny compaction noise does not dominate.</summary>
         private const long ScoreQuantum = 1000;
+
+        /// <summary>
+        /// Chinh sach OM SAT chi chon trong cac cho (da nen) lam to DAI THEM toi da chung nay so
+        /// voi cho ngan nhat (30 mm). Khong gioi han thi mot cho "khit" nhung loi han ra ngoai
+        /// se thang - doi chieu dai lay do khit. Da do 10 / 30 / 60 mm: 30 la tot nhat.
+        /// </summary>
+        private const long ContactLengthSlack = 30000;
+
+        /// <summary>Hai mep coi la TIEP XUC khi cach nhau khong qua khe bat buoc + 1 mm.</summary>
+        private const double ContactReach = 1000;
+
+        /// <summary>Hai mep coi la song song khi lech nhau duoi ~1.1 do (sin).</summary>
+        private const double ContactParallel = 0.02;
 
         /// <summary>
         /// So ung vien TIEP XUC duoc dem di kiem va cham that, theo thu tu diem tot dan.
@@ -249,7 +263,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             long minX = s.Bounds.MinX + tx, minY = s.Bounds.MinY + ty;
             long maxX = s.Bounds.MaxX + tx, maxY = s.Bounds.MaxY + ty;
             Score score;
-            if (policy == PlacementPolicy.MinLength)
+            if (policy == PlacementPolicy.MinLength || policy == PlacementPolicy.MaxContact)
             {
                 score.K1 = maxX / ScoreQuantum;
                 score.K2 = maxY / ScoreQuantum;
@@ -367,6 +381,10 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             List<long> xs = new List<long>();
             List<long> ys = new List<long>();
 
+            // NFP: ung vien NFP THEM VAO ung vien cu (khong thay the). Da do: NFP thuan kem
+            // hon tren 50 fixture (56346 so voi 56068 mm) vi chi giu duoc it diem tot nhat va
+            // bo qua nhung cho buoc NEN tim ra.
+            bool useNfp = job.Settings.Algorithm == NestingAlgorithm.Nfp;
             foreach (PreparedShape shape in orientations)
             {
                 long w = shape.Bounds.Width, h = shape.Bounds.Height;
@@ -483,6 +501,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                 }
             }
 
+            if (useNfp) AddNfpCandidates(orientations, sheet, job, spec, collision, inset, clearance, policy, zones, candidates);
             AddHoleCandidates(orientations, sheet, spec, collision, clearance, policy, zones, candidates);
             AddContactCandidates(orientations, sheet, spec, collision, inset, clearance, policy, zones, candidates);
 
@@ -491,6 +510,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             candidates.Sort(CompareCandidates);
 
             Candidate chosen = null;
+            List<Candidate> compacted = new List<Candidate>(CompactedCandidates);
             for (int i = 0; i < candidates.Count && i < CompactedCandidates; i++)
             {
                 Candidate c = candidates[i];
@@ -506,10 +526,154 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
 
                 c.Tx = tx;
                 c.Ty = ty;
+                compacted.Add(c);
                 if (chosen == null || c.Score.BetterThan(chosen.Score)) chosen = c;
             }
 
+            if (policy == PlacementPolicy.MaxContact) chosen = MostContact(compacted, chosen, sheet.Items, clearance, inset, sheetL, sheetW);
+
+            // NFP: EP TINH tung don vi (0.001 mm) cho vi tri DA CHON. Buoc nen thuong dung o
+            // 0.05 mm, khong khep duoc phan du rat nho do lam tron NFP - ma o cho vua khit tuyet
+            // doi, phan du do la khac biet giua "vua" va "khong vua" cho chi tiet tiep theo.
+            if (useNfp)
+            {
+                long tx = chosen.Tx, ty = chosen.Ty;
+                for (long step = 32; step >= 1; step /= 2)
+                {
+                    while (IsValid(chosen.Shape, tx - step, ty, sheet.Items, spec, collision)) tx -= step;
+                    while (IsValid(chosen.Shape, tx, ty - step, sheet.Items, spec, collision)) ty -= step;
+                }
+
+                chosen.Tx = tx;
+                chosen.Ty = ty;
+            }
+
             return new PlacedItem(instance, chosen.Shape, chosen.Tx, chosen.Ty, collision.Place(chosen.Shape, chosen.Tx, chosen.Ty));
+        }
+
+        /// <summary>
+        /// OM SAT: trong cac cho da nen, lay cho co mep tiep xuc DAI NHAT; hon kem nhau duoi
+        /// 1 mm thi cho co diem xep hang tot hon thang (tat dinh). Chi xet cac cho khong lam to
+        /// dai them qua <see cref="ContactLengthSlack"/> so voi cho ngan nhat.
+        /// </summary>
+        private static Candidate MostContact(
+            List<Candidate> compacted, Candidate fallback, List<PlacedItem> items, long[] clearance, long inset, long sheetL, long sheetW)
+        {
+            long shortest = long.MaxValue;
+            foreach (Candidate c in compacted) shortest = Math.Min(shortest, c.Shape.Bounds.MaxX + c.Tx);
+
+            Candidate best = null;
+            double bestContact = 0;
+            foreach (Candidate c in compacted)
+            {
+                if (c.Shape.Bounds.MaxX + c.Tx > shortest + ContactLengthSlack) continue;
+                double contact = ContactLength(c.Shape, c.Tx, c.Ty, items, clearance, inset, sheetL, sheetW);
+                bool better = best == null || contact > bestContact + ScoreQuantum ||
+                              (contact >= bestContact - ScoreQuantum && c.Score.BetterThan(best.Score));
+                if (!better) continue;
+                best = c;
+                bestContact = contact;
+            }
+
+            return best ?? fallback;
+        }
+
+        /// <summary>
+        /// Tong chieu dai (don vi) cac MEP cua chi tiet (dat tai tx, ty) nam SAT mep chi tiet da
+        /// dat hoac mep to: hai doan gan song song, cach nhau khong qua khe bat buoc + 1 mm,
+        /// tinh phan chong len nhau theo phuong doan. Chi la DIEM de chon cho - khong dinh gi
+        /// toi phep kiem va cham (vi tri dua vao day deu da hop le).
+        /// </summary>
+        internal static double ContactLength(
+            PreparedShape s, long tx, long ty, List<PlacedItem> items, long[] clearance, long inset, long sheetL, long sheetW)
+        {
+            double total = 0;
+            IntPoint[] ea = s.EdgeA, eb = s.EdgeB;
+            for (int e = 0; e < ea.Length; e++)
+            {
+                double ax = ea[e].X + tx, ay = ea[e].Y + ty, bx = eb[e].X + tx, by = eb[e].Y + ty;
+                double dx = bx - ax, dy = by - ay;
+                double len = Math.Sqrt(dx * dx + dy * dy);
+                if (len < 1) continue;
+                double ux = dx / len, uy = dy / len;
+
+                // Mep to (da tru le mep): doan nam doc / ngang ngay tren duong gioi han.
+                if (Math.Abs(ax - inset) <= ContactReach && Math.Abs(bx - inset) <= ContactReach) total += len;
+                else if (Math.Abs(ax - (sheetL - inset)) <= ContactReach && Math.Abs(bx - (sheetL - inset)) <= ContactReach) total += len;
+                if (Math.Abs(ay - inset) <= ContactReach && Math.Abs(by - inset) <= ContactReach) total += len;
+                else if (Math.Abs(ay - (sheetW - inset)) <= ContactReach && Math.Abs(by - (sheetW - inset)) <= ContactReach) total += len;
+
+                double eminX = Math.Min(ax, bx), emaxX = Math.Max(ax, bx), eminY = Math.Min(ay, by), emaxY = Math.Max(ay, by);
+                for (int i = 0; i < items.Count; i++)
+                {
+                    double reach = clearance[i] + ContactReach;
+                    LongRect b = items[i].Placed.Bounds;
+                    if (b.MinX > emaxX + reach || b.MaxX < eminX - reach || b.MinY > emaxY + reach || b.MaxY < eminY - reach) continue;
+
+                    IntPoint[] fa = items[i].Placed.EdgeA, fb = items[i].Placed.EdgeB;
+                    for (int f = 0; f < fa.Length; f++)
+                    {
+                        double cx = fa[f].X, cy = fa[f].Y, ex = fb[f].X, ey = fb[f].Y;
+                        if (Math.Max(cx, ex) < eminX - reach || Math.Min(cx, ex) > emaxX + reach ||
+                            Math.Max(cy, ey) < eminY - reach || Math.Min(cy, ey) > emaxY + reach) continue;
+
+                        double fdx = ex - cx, fdy = ey - cy;
+                        double flen = Math.Sqrt(fdx * fdx + fdy * fdy);
+                        if (flen < 1) continue;
+                        if (Math.Abs(ux * fdy - uy * fdx) / flen > ContactParallel) continue;
+
+                        double dist = Math.Abs((cx - ax) * uy - (cy - ay) * ux);
+                        if (dist > reach) continue;
+
+                        double t0 = (cx - ax) * ux + (cy - ay) * uy, t1 = (ex - ax) * ux + (ey - ay) * uy;
+                        double lo = Math.Max(0, Math.Min(t0, t1)), hi = Math.Min(len, Math.Max(t0, t1));
+                        if (hi > lo) total += hi - lo;
+                    }
+                }
+            }
+
+            return total;
+        }
+
+        /// <summary>
+        /// So vi tri NFP HOP LE (sau kiem va cham chinh xac) giu lai moi lan dat, va so phep kiem
+        /// toi da. Da do 16/64 va 32/200: nhu nhau, 32/200 cham hon 50%.
+        /// </summary>
+        private const int NfpKept = 16;
+
+        private const int NfpChecked = 64;
+
+        /// <summary>
+        /// Ung vien tu NFP that (xem <see cref="NfpCandidates"/>): vi tri CHAM khit cac chi tiet
+        /// da dat, ke ca o khe giua hai chi tiet ma quet cot / tha roi khong voi toi. Lay cac
+        /// diem tot nhat theo cung tieu chi xep hang, KIEM VA CHAM CHINH XAC tung diem - NFP chi
+        /// de xuat, khong bao gio quyet dinh thay phep kiem.
+        /// </summary>
+        private static void AddNfpCandidates(
+            List<PreparedShape> orientations, DecodedSheet sheet, MaterialJob job, SheetSpec spec, ICollisionModel collision,
+            long inset, long[] clearance, PlacementPolicy policy, List<HoleZone> zones, List<Candidate> candidates)
+        {
+            NfpCache cache = NfpCache.For(job);
+            List<Candidate> pool = new List<Candidate>();
+            foreach (PreparedShape shape in orientations)
+            {
+                foreach (IntPoint t in NfpCandidates.Generate(shape, sheet.Items, clearance, inset, spec.LengthUnits, spec.WidthUnits, cache, 2 * NfpKept))
+                {
+                    pool.Add(new Candidate { Shape = shape, Tx = t.X, Ty = t.Y, Score = ScoreAt(shape, t.X, t.Y, policy, zones), Order = pool.Count });
+                }
+            }
+
+            pool.Sort(CompareCandidates);
+            int kept = 0, checks = 0;
+            foreach (Candidate c in pool)
+            {
+                if (kept >= NfpKept || checks >= NfpChecked) break;
+                checks++;
+                if (!IsValid(c.Shape, c.Tx, c.Ty, sheet.Items, spec, collision)) continue;
+                c.Order = candidates.Count;
+                candidates.Add(c);
+                kept++;
+            }
         }
 
         private static int CompareCandidates(Candidate a, Candidate b)

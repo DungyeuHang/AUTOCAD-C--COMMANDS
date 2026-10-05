@@ -71,7 +71,15 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
         LeftBottom,
 
         /// <summary>Smallest right edge (sheet length consumed) first, then lowest top edge.</summary>
-        MinLength
+        MinLength,
+
+        /// <summary>
+        /// OM SAT: xep hang ung vien nhu <see cref="MinLength"/>, nhung trong cac cho tot nhat
+        /// (sau khi nen) chon cho co MEP TIEP XUC dai nhat voi chi tiet da dat va mep to -
+        /// cach tho ghep tay: tam nao "khit" vao cho trong thi dat do. Xem
+        /// CandidatePointDecoder.ContactLength.
+        /// </summary>
+        MaxContact
     }
 
     /// <summary>

@@ -3,13 +3,14 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 using System.Windows.Forms;
+using AUTOCAD_COMMANDS.Nesting.Core;
 using AUTOCAD_COMMANDS.Nesting.Recognition;
 using Font = System.Drawing.Font;
 
 namespace AUTOCAD_COMMANDS.Nesting
 {
     /// <summary>
-    /// Review table: Part | Quantity | Material | Status (+ size, holes, notes).
+    /// Review table: Part | Quantity | Material type | Thickness | Status (+ size, holes, notes).
     /// Safety rules enforced here (and again in PartRecognizer.ToPartGroups):
     ///   - INVALID GEOMETRY records can never be nested; if any exist the user must tick
     ///     an explicit acknowledgement that they are left out,
@@ -20,11 +21,23 @@ namespace AUTOCAD_COMMANDS.Nesting
     internal sealed class NestingReviewForm : Form
     {
         private const int ColIndex = 0, ColOrder = 1, ColName = 2, ColSize = 3, ColHoles = 4, ColQty = 5,
-                          ColMaterial = 6, ColStatus = 7, ColConfirm = 8, ColInclude = 9, ColNotes = 10;
+                          ColType = 6, ColThick = 7, ColStatus = 8, ColConfirm = 9, ColInclude = 10, ColNotes = 11;
+
+        /// <summary>Muc hien trong o "loai mac dinh" cho lua chon KHONG phan loai (chi do day).</summary>
+        private const string NoTypeItem = "(khong phan loai)";
+
+        /// <summary>Loai vat lieu goi y san (go tay loai khac van duoc).</summary>
+        internal static readonly string[] KnownTypes = { "THEP", "INOX", "INOX 201", "INOX 304", "INOX 316", "INOX 430", "MA KEM", "NHOM", "TON", "DONG" };
 
         private readonly List<RecognizedPart> _records;
         private readonly Action<RecognizedPart> _zoom;
         private readonly MetadataParser _parser = new MetadataParser(new MetadataRules());
+
+        /// <summary>Chi tiet nguoi dung DA sua loai bang tay - doi loai mac dinh khong dung vao.</summary>
+        private readonly HashSet<RecognizedPart> _typeEdited = new HashSet<RecognizedPart>();
+
+        private string _defaultType;
+        private ComboBox _cboDefaultType;
 
         private DataGridView _grid;
         private CheckBox _chkAckInvalid;
@@ -37,9 +50,16 @@ namespace AUTOCAD_COMMANDS.Nesting
         private bool _userEdited;
 
         public NestingReviewForm(RecognitionResult recognition, Action<RecognizedPart> zoom, bool autoZoom)
+            : this(recognition, zoom, autoZoom, string.Empty)
+        {
+        }
+
+        /// <param name="defaultType">Loai vat lieu dang dung cho chi tiet ban ve khong ghi loai.</param>
+        public NestingReviewForm(RecognitionResult recognition, Action<RecognizedPart> zoom, bool autoZoom, string defaultType)
         {
             _records = recognition.Parts;
             _zoom = zoom;
+            _defaultType = (defaultType ?? string.Empty).Trim().ToUpperInvariant();
             BuildUi(recognition.GlobalWarnings, autoZoom);
             LoadRows();
             UpdateState();
@@ -47,6 +67,9 @@ namespace AUTOCAD_COMMANDS.Nesting
         }
 
         public bool AutoZoom { get { return _chkAutoZoom.Checked; } }
+
+        /// <summary>Loai vat lieu mac dinh nguoi dung chon o bang nay (rong = khong phan loai).</summary>
+        public string DefaultMaterialType { get { return _defaultType; } }
 
         private void BuildUi(List<string> warnings, bool autoZoom)
         {
@@ -66,9 +89,46 @@ namespace AUTOCAD_COMMANDS.Nesting
                 Padding = new Padding(8, 6, 8, 0),
                 ForeColor = Color.FromArgb(0, 102, 204),
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
-                Text = "Kiem tra SL / vat lieu cua tung chi tiet. Chon dong de zoom den chi tiet trong ban ve.\n" +
-                       "Co the sua truc tiep cot SL va Vat lieu. Dong MO HO phai duoc xac nhan; dong LOI HINH HOC khong the ghep."
+                Text = "Kiem tra SL / loai vat lieu / do day cua tung chi tiet. Chon dong de zoom den chi tiet trong ban ve.\n" +
+                       "Sua truc tiep o cot SL, Loai VL, Day. Dong MO HO phai duoc xac nhan (hoac bo tick Ghep); dong LOI HINH HOC khong the ghep."
             };
+
+            // LOAI MAC DINH: chi tiet nao ban ve KHONG ghi loai thi theo o nay. Dat o day (khong
+            // phai bang cai dat) vi day la luc nguoi dung nhin thay ket qua doi ngay tren bang.
+            FlowLayoutPanel typeBar = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                Height = 34,
+                Padding = new Padding(8, 4, 8, 0),
+                WrapContents = false
+            };
+            typeBar.Controls.Add(new Label
+            {
+                Text = "Loai vat lieu cho chi tiet ban ve KHONG ghi loai:",
+                AutoSize = true,
+                Margin = new Padding(0, 6, 6, 0),
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+            });
+            _cboDefaultType = new ComboBox { DropDownStyle = ComboBoxStyle.DropDown, Width = 150 };
+            _cboDefaultType.Items.Add(NoTypeItem);
+            _cboDefaultType.Items.AddRange(KnownTypes);
+            _cboDefaultType.Text = _defaultType.Length == 0 ? NoTypeItem : _defaultType;
+            _cboDefaultType.SelectionChangeCommitted += (s, e) => BeginInvoke(new Action(ApplyDefaultType));
+            _cboDefaultType.Leave += (s, e) => ApplyDefaultType();
+            _cboDefaultType.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode != Keys.Enter) return;
+                e.SuppressKeyPress = true;
+                ApplyDefaultType();
+            };
+            typeBar.Controls.Add(_cboDefaultType);
+            typeBar.Controls.Add(new Label
+            {
+                Text = "(chu tren ban ve nhu \"INOX\", \"SUS304\", \"THEP\" luon thang; INOX 1.2MM va THEP 1.2MM ghep RIENG)",
+                AutoSize = true,
+                ForeColor = Color.DimGray,
+                Margin = new Padding(8, 6, 0, 0)
+            });
 
             _grid = new DataGridView
             {
@@ -112,7 +172,8 @@ namespace AUTOCAD_COMMANDS.Nesting
             AddText("Kich thuoc (mm)", 120, true);
             AddText("Lo", 40, true);
             AddText("SL", 55, false);
-            AddText("Vat lieu", 80, false);
+            AddText("Loai VL", 90, false);
+            AddText("Day", 70, false);
             AddText("Trang thai", 120, true);
             _grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Xac nhan", Width = 65 });
             _grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Ghep", Width = 50 });
@@ -135,6 +196,26 @@ namespace AUTOCAD_COMMANDS.Nesting
                 }
             };
             _grid.CellValueChanged += Grid_CellValueChanged;
+            _grid.EditingControlShowing += (s, e) =>
+            {
+                // Goi y loai vat lieu khi go o cot Loai VL; cot khac thi tat goi y.
+                TextBox box = e.Control as TextBox;
+                if (box == null) return;
+                if (_grid.CurrentCell != null && _grid.CurrentCell.ColumnIndex == ColType)
+                {
+                    AutoCompleteStringCollection list = new AutoCompleteStringCollection();
+                    list.AddRange(KnownTypes);
+                    box.AutoCompleteCustomSource = list;
+                    box.AutoCompleteSource = AutoCompleteSource.CustomSource;
+                    box.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
+                    box.CharacterCasing = CharacterCasing.Upper;
+                }
+                else
+                {
+                    box.AutoCompleteMode = AutoCompleteMode.None;
+                    box.CharacterCasing = CharacterCasing.Normal;
+                }
+            };
 
             Panel bottom = new Panel { Dock = DockStyle.Bottom, Height = 190, Padding = new Padding(8) };
 
@@ -176,6 +257,9 @@ namespace AUTOCAD_COMMANDS.Nesting
                 // soan thao chu chua vao ban ghi. Khong chot thi lan ghep chay bang so CU.
                 _grid.EndEdit();
 
+                // O loai mac dinh vua go ma chua roi o (Enter / bam ra ngoai) cung phai ap dung.
+                ApplyDefaultType();
+
                 if (!ValidateAll()) return;
                 DialogResult = DialogResult.OK;
                 Close();
@@ -200,6 +284,7 @@ namespace AUTOCAD_COMMANDS.Nesting
 
             Controls.Add(_grid);
             Controls.Add(bottom);
+            Controls.Add(typeBar);
             Controls.Add(intro);
 
             AcceptButton = null;
@@ -252,7 +337,8 @@ namespace AUTOCAD_COMMANDS.Nesting
                     string.Format(ci, "{0:0.#} x {1:0.#}", r.Width, r.Height),
                     r.Holes.Count.ToString(ci),
                     r.Quantity.ToString(ci),
-                    r.Material,
+                    MaterialName.TypeOf(r.Material),
+                    MaterialName.ThicknessOf(r.Material),
                     StatusText(r.Status),
                     r.Confirmed,
                     r.Include,
@@ -265,7 +351,8 @@ namespace AUTOCAD_COMMANDS.Nesting
                     row.Cells[ColInclude].ReadOnly = true;
                     row.Cells[ColConfirm].ReadOnly = true;
                     row.Cells[ColQty].ReadOnly = true;
-                    row.Cells[ColMaterial].ReadOnly = true;
+                    row.Cells[ColType].ReadOnly = true;
+                    row.Cells[ColThick].ReadOnly = true;
                 }
 
                 if (r.Status != PartStatus.Ambiguous) row.Cells[ColConfirm].ReadOnly = true;
@@ -302,18 +389,76 @@ namespace AUTOCAD_COMMANDS.Nesting
             row.DefaultCellStyle.BackColor = c;
         }
 
-        private string NormalizeMaterialInput(string value)
+        /// <summary>
+        /// Doc o DO DAY: "1.5", "1,5", "1.5mm" -> "1.5MM". Go ca loai ("INOX 1.5") thi tra them
+        /// loai qua <paramref name="type"/>. Null = khong doc duoc do day.
+        /// </summary>
+        private string NormalizeThicknessInput(string value, out string type)
         {
+            type = null;
             if (string.IsNullOrWhiteSpace(value)) return null;
             string v = value.Trim();
             if (v.IndexOf("MM", StringComparison.OrdinalIgnoreCase) < 0) v += "MM";
-            List<MetadataFact> facts = _parser.Parse(v);
-            foreach (MetadataFact f in facts)
+            string thickness = null;
+            foreach (MetadataFact f in _parser.Parse(v))
             {
-                if (f.Kind == MetadataKind.Material) return f.Value;
+                if (f.Kind == MetadataKind.Material && thickness == null) thickness = f.Value;
+                if (f.Kind == MetadataKind.MaterialType && type == null) type = f.Value;
             }
 
-            return null;
+            return thickness;
+        }
+
+        /// <summary>
+        /// Doc o LOAI: ten quen thuoc ("inox", "sus304", "thép") -> ten chuan; ten khac thi giu
+        /// nguyen (viet hoa). Rong = khong phan loai. Null = khong hop le.
+        /// </summary>
+        private string NormalizeTypeInput(string value)
+        {
+            string v = (value ?? string.Empty).Trim();
+            if (v.Length == 0 || v == NoTypeItem) return string.Empty;
+            string known = _parser.ParseType(v);
+            if (known != null) return known;
+
+            v = System.Text.RegularExpressions.Regex.Replace(v.ToUpperInvariant(), @"\s+", " ");
+            if (v.Length > 24) return null;
+            foreach (char c in v)
+            {
+                if (!char.IsLetterOrDigit(c) && c != ' ' && c != '-') return null;
+            }
+
+            // Khong de loai trong giong mot do day ("1.2MM") - se bi tach nham.
+            return MaterialName.IsThickness(v) || char.IsDigit(v[0]) ? null : v;
+        }
+
+        /// <summary>Doi loai mac dinh: chi tiet KHONG ghi loai va chua bi sua tay doi theo.</summary>
+        private void ApplyDefaultType()
+        {
+            string type = NormalizeTypeInput(_cboDefaultType.Text);
+            if (type == null)
+            {
+                MessageBox.Show(this, "Loai vat lieu khong hop le: \"" + _cboDefaultType.Text + "\".", "GHOPHOI",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _cboDefaultType.Text = _defaultType.Length == 0 ? NoTypeItem : _defaultType;
+                return;
+            }
+
+            _cboDefaultType.Text = type.Length == 0 ? NoTypeItem : type;
+            if (string.Equals(type, _defaultType, StringComparison.Ordinal)) return;
+
+            string old = _defaultType;
+            _defaultType = type;
+            foreach (DataGridViewRow row in _grid.Rows)
+            {
+                RecognizedPart r = (RecognizedPart)row.Tag;
+                if (r.MaterialTypeFromText || _typeEdited.Contains(r)) continue;
+                if (!string.Equals(MaterialName.TypeOf(r.Material), old, StringComparison.Ordinal)) continue;
+
+                r.Material = MaterialName.WithType(r.Material, type);
+                SetCellSilently(row, ColType, MaterialName.TypeOf(r.Material));
+            }
+
+            UpdateState();
         }
 
         private void Grid_CellEndEdit(object sender, DataGridViewCellEventArgs e)
@@ -366,22 +511,44 @@ namespace AUTOCAD_COMMANDS.Nesting
 
                 SetCellSilently(row, ColQty, q.ToString(CultureInfo.InvariantCulture));
             }
-            else if (column == ColMaterial)
+            else if (column == ColThick)
             {
-                string m = NormalizeMaterialInput(value);
-                if (m == null)
+                string typed;
+                string t = NormalizeThicknessInput(value, out typed);
+                if (t == null)
                 {
-                    SetCellSilently(row, ColMaterial, r.Material);
-                    row.ErrorText = "Vat lieu phai co dang 1.2MM - da tra ve gia tri cu";
+                    SetCellSilently(row, ColThick, MaterialName.ThicknessOf(r.Material));
+                    row.ErrorText = "Do day phai la so mm (vd. 1.2 hoac 1.2MM) - da tra ve gia tri cu";
                     return;
                 }
 
-                SetCellSilently(row, ColMaterial, m);
-                if (!string.Equals(m, r.Material, StringComparison.OrdinalIgnoreCase))
+                string type = typed ?? MaterialName.TypeOf(r.Material);
+                if (typed != null) _typeEdited.Add(r);
+                SetMaterial(row, r, MaterialName.Compose(type, t));
+            }
+            else if (column == ColType)
+            {
+                string type = NormalizeTypeInput(value);
+                if (type == null)
                 {
-                    r.Material = m;
-                    MarkEdited(row, r, "Vat lieu sua tay = " + m);
+                    SetCellSilently(row, ColType, MaterialName.TypeOf(r.Material));
+                    row.ErrorText = "Loai vat lieu chi gom chu / so (vd. THEP, INOX 304) - da tra ve gia tri cu";
+                    return;
                 }
+
+                _typeEdited.Add(r);
+                SetMaterial(row, r, MaterialName.WithType(r.Material, type));
+            }
+        }
+
+        private void SetMaterial(DataGridViewRow row, RecognizedPart r, string material)
+        {
+            SetCellSilently(row, ColType, MaterialName.TypeOf(material));
+            SetCellSilently(row, ColThick, MaterialName.ThicknessOf(material));
+            if (!string.Equals(material, r.Material, StringComparison.OrdinalIgnoreCase))
+            {
+                r.Material = material;
+                MarkEdited(row, r, "Vat lieu sua tay = " + material);
             }
         }
 
@@ -420,7 +587,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             DataGridViewRow row = _grid.Rows[e.RowIndex];
             RecognizedPart r = (RecognizedPart)row.Tag;
 
-            if (e.ColumnIndex == ColQty || e.ColumnIndex == ColMaterial || e.ColumnIndex == ColOrder)
+            if (e.ColumnIndex == ColQty || e.ColumnIndex == ColType || e.ColumnIndex == ColThick || e.ColumnIndex == ColOrder)
             {
                 ApplyValueEdit(row, e.ColumnIndex);
             }
@@ -495,9 +662,9 @@ namespace AUTOCAD_COMMANDS.Nesting
             {
                 if (!r.Include) continue;
                 if (!r.IsNestable || (r.Status == PartStatus.Ambiguous && !r.Confirmed) ||
-                    r.Quantity < 1 || string.IsNullOrWhiteSpace(r.Material))
+                    r.Quantity < 1 || MaterialName.ThicknessOf(r.Material).Length == 0)
                 {
-                    MessageBox.Show(this, "Ban ghi " + r.Name + " chua hop le (loi / mo ho / thieu SL hoac vat lieu).",
+                    MessageBox.Show(this, "Ban ghi " + r.Name + " chua hop le (loi / mo ho / thieu SL hoac do day).",
                         "GHOPHOI", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return false;
                 }

@@ -55,10 +55,11 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
             NestingSettings s = request.Settings;
             List<string> rot = new List<string>();
             foreach (double r in s.AllowedRotations) rot.Add(r.ToString("0.###", ci));
-            sb.AppendLine(string.Format(ci, "SETTINGS gap={0:0.###} margin={1:0.###} mirror={2} rotations={3} inhole={4} seed={5} budget={6:0.###} extra={7} search={8}",
+            sb.AppendLine(string.Format(ci, "SETTINGS gap={0:0.###} margin={1:0.###} mirror={2} rotations={3} inhole={4} seed={5} budget={6:0.###} extra={7} search={8}{9}",
                 s.GapMm, s.EdgeMarginMm, s.AllowMirror ? 1 : 0, string.Join(",", rot.ToArray()),
                 s.AllowPartInsideHole ? 1 : 0, s.Seed, s.TimeBudgetSeconds, s.ExtraSeededOrderings,
-                s.SearchEffort == SearchEffort.Balanced ? "balanced" : "fast"));
+                s.SearchEffort == SearchEffort.Balanced ? "balanced" : "fast",
+                s.Algorithm == NestingAlgorithm.Nfp ? " algorithm=nfp" : string.Empty));
 
             if (request.DefaultSheet != null) sb.AppendLine(SheetLine(request.DefaultSheet, null));
             foreach (KeyValuePair<string, SheetSpec> kv in request.SheetByMaterial)
@@ -126,6 +127,14 @@ namespace AUTOCAD_COMMANDS.Nesting.Core
                                 if (string.Equals(search, "balanced", StringComparison.OrdinalIgnoreCase)) s.SearchEffort = SearchEffort.Balanced;
                                 else if (string.Equals(search, "fast", StringComparison.OrdinalIgnoreCase)) s.SearchEffort = SearchEffort.Fast;
                                 else throw new FormatException("search= chi nhan fast|balanced, gap '" + search + "' o dong " + lineNo);
+                            }
+
+                            string algorithm;
+                            if (kv.TryGetValue("algorithm", out algorithm))
+                            {
+                                if (string.Equals(algorithm, "nfp", StringComparison.OrdinalIgnoreCase)) s.Algorithm = NestingAlgorithm.Nfp;
+                                else if (string.Equals(algorithm, "points", StringComparison.OrdinalIgnoreCase)) s.Algorithm = NestingAlgorithm.CandidatePoints;
+                                else throw new FormatException("algorithm= chi nhan points|nfp, gap '" + algorithm + "' o dong " + lineNo);
                             }
 
                             string rot;

@@ -103,11 +103,18 @@ namespace AUTOCAD_COMMANDS.Nesting
                     else if (string.Equals(val, SearchEffort.Fast.ToString(), StringComparison.OrdinalIgnoreCase)) s.SearchEffort = SearchEffort.Fast;
                     break;
                 case "Seed": if (int.TryParse(val, NumberStyles.Integer, ci, out n)) s.Seed = n; break;
+                case "Algorithm":
+                    // Nhu RotationMode: chi nhan dung ten, so la ("7") bi bo qua.
+                    GhoPhoiAlgorithmMode alg;
+                    if (Enum.TryParse(val, out alg) && Enum.IsDefined(typeof(GhoPhoiAlgorithmMode), alg) &&
+                        !char.IsDigit(val.Length > 0 ? val[0] : '0')) s.Algorithm = alg;
+                    break;
                 case "ExtraSeededOrderings": if (int.TryParse(val, NumberStyles.Integer, ci, out n) && n >= 0) s.ExtraSeededOrderings = n; break;
                 case "ArcToleranceMm": if (TryD(val, out d) && d > 0) s.ArcToleranceMm = d; break;
                 case "JoinToleranceMm": if (TryD(val, out d) && d > 0) s.JoinToleranceMm = d; break;
                 case "MaxTextDistanceMm": if (TryD(val, out d) && d > 0) s.MaxTextDistanceMm = d; break;
                 case "DefaultMaterial": if (val.Length > 0) s.DefaultMaterial = val; break;
+                case "DefaultMaterialType": s.DefaultMaterialType = val.ToUpperInvariant(); break;
                 case "DefaultQuantity": if (int.TryParse(val, NumberStyles.Integer, ci, out n) && n >= 1) s.DefaultQuantity = n; break;
                 case "OutputToCurrentDrawing": if (bool.TryParse(val, out b)) s.OutputToCurrentDrawing = b; break;
                 case "MarkingLayers": s.MarkingLayers = SplitList(val); break;
@@ -151,11 +158,13 @@ namespace AUTOCAD_COMMANDS.Nesting
                     "DeterministicSearch\t" + s.DeterministicSearch,
                     "SearchEffort\t" + s.SearchEffort,
                     "Seed\t" + s.Seed.ToString(ci),
+                    "Algorithm\t" + s.Algorithm,
                     "ExtraSeededOrderings\t" + s.ExtraSeededOrderings.ToString(ci),
                     "ArcToleranceMm\t" + s.ArcToleranceMm.ToString("R", ci),
                     "JoinToleranceMm\t" + s.JoinToleranceMm.ToString("R", ci),
                     "MaxTextDistanceMm\t" + s.MaxTextDistanceMm.ToString("R", ci),
                     "DefaultMaterial\t" + s.DefaultMaterial,
+                    "DefaultMaterialType\t" + (s.DefaultMaterialType ?? string.Empty),
                     "DefaultQuantity\t" + s.DefaultQuantity.ToString(ci),
                     "OutputToCurrentDrawing\t" + s.OutputToCurrentDrawing,
                     "MarkingLayers\t" + string.Join(";", s.MarkingLayers.ToArray()),

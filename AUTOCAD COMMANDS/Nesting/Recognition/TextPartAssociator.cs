@@ -52,6 +52,10 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             foreach (RecognizedPart p in parts) assigned[p] = new List<Assigned>();
 
             Dictionary<RecognizedPart, string> nameCandidates = new Dictionary<RecognizedPart, string>();
+
+            // Ten lay tu phan CON LAI cua chu thong tin ("SL: 1 / 0.75MM / CHAN DOI XUNG" ->
+            // "CHAN DOI XUNG"). Chu cat trong chi tiet (ma chi tiet) van uu tien hon.
+            Dictionary<RecognizedPart, string> remainderNames = new Dictionary<RecognizedPart, string>();
             List<PendingText> pending = new List<PendingText>();
 
             foreach (TextItem text in texts)
@@ -104,6 +108,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                     }
 
                     inside.TextSources.Add(text.SourceIndex);
+                    AddRemainderName(remainderNames, inside, reading);
                     continue;
                 }
 
@@ -154,6 +159,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 }
 
                 best.TextSources.Add(text.SourceIndex);
+                AddRemainderName(remainderNames, best, reading);
             }
 
             ResolvePending(pending, assigned);
@@ -161,9 +167,14 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             foreach (RecognizedPart p in parts)
             {
                 string name;
-                if (nameCandidates.TryGetValue(p, out name)) p.Name = p.Name + " " + name;
+                if (nameCandidates.TryGetValue(p, out name) || remainderNames.TryGetValue(p, out name)) p.Name = p.Name + " " + name;
                 ApplyFacts(p, assigned[p]);
             }
+        }
+
+        private static void AddRemainderName(Dictionary<RecognizedPart, string> names, RecognizedPart part, MetadataReading reading)
+        {
+            if (!string.IsNullOrEmpty(reading.Remainder) && !names.ContainsKey(part)) names[part] = reading.Remainder;
         }
 
         /// <summary>Chu thong tin nam gan HAI chi tiet gan nhu nhau - cho ket luan.</summary>
@@ -257,6 +268,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             MetadataRules rules = _settings.Metadata;
             List<string> quantities = new List<string>();
             List<string> materials = new List<string>();
+            List<string> types = new List<string>();
             bool badQuantity = false, badMaterial = false;
             foreach (Assigned a in facts)
             {
@@ -272,9 +284,13 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                     continue;
                 }
 
-                List<string> target = a.Fact.Kind == MetadataKind.Quantity ? quantities : materials;
+                List<string> target = a.Fact.Kind == MetadataKind.Quantity ? quantities
+                    : a.Fact.Kind == MetadataKind.MaterialType ? types : materials;
                 if (!target.Contains(a.Fact.Value)) target.Add(a.Fact.Value);
             }
+
+            // "INOX" va "INOX 304" tren cung chi tiet: cai ghi MAC cu the hon, khong phai mau thuan.
+            types.RemoveAll(t => types.Exists(o => o.StartsWith(t + " ", StringComparison.Ordinal)));
 
             if (quantities.Count == 1)
             {
@@ -299,19 +315,20 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 }
             }
 
+            string thickness;
             if (materials.Count == 1)
             {
-                part.Material = materials[0];
+                thickness = materials[0];
                 part.MaterialFromText = true;
             }
             else if (materials.Count > 1)
             {
-                part.Material = rules.DefaultMaterial;
+                thickness = rules.DefaultMaterial;
                 part.Escalate(PartStatus.Ambiguous, "Nhieu vat lieu khac nhau: " + string.Join(", ", materials.ToArray()));
             }
             else
             {
-                part.Material = rules.DefaultMaterial;
+                thickness = rules.DefaultMaterial;
                 if (badMaterial)
                 {
                     part.Escalate(PartStatus.Ambiguous, "Chua co vat lieu hop le -> TAM dat " + rules.DefaultMaterial + ", phai sua");
@@ -321,6 +338,25 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                     part.Escalate(PartStatus.Warning, "Khong tim thay vat lieu -> mac dinh " + rules.DefaultMaterial);
                 }
             }
+
+            // Loai vat lieu: chu tren ban ve thang; khong ghi thi lay loai mac dinh (co the rong).
+            string type = rules.DefaultMaterialType ?? string.Empty;
+            if (types.Count == 1)
+            {
+                type = types[0];
+                part.MaterialTypeFromText = true;
+            }
+            else if (types.Count > 1)
+            {
+                part.Escalate(PartStatus.Ambiguous, "Nhieu loai vat lieu khac nhau: " + string.Join(", ", types.ToArray()));
+            }
+
+            // DefaultMaterial cu co the da gom ca loai ("INOX 1.2MM") - khi do chi lay do day cua no.
+            string defaultType, bareThickness;
+            MaterialName.Split(thickness, out defaultType, out bareThickness);
+            if (bareThickness.Length == 0) bareThickness = thickness;
+            if (types.Count == 0 && string.IsNullOrEmpty(rules.DefaultMaterialType)) type = defaultType;
+            part.Material = MaterialName.Compose(type, bareThickness);
         }
 
         /// <summary>

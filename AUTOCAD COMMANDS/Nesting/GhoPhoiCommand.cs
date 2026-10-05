@@ -132,6 +132,16 @@ namespace AUTOCAD_COMMANDS.Nesting
                     "{0} chi tiet la block cua lan ghep truoc - da lay lai SL / vat lieu / don tu block.", reused));
             }
 
+            // Phoi giong het phoi khac ma KHONG co chu SL / vat lieu: ban sao (ket qua ghep cu
+            // bi quet cung, copy nhap) hoac chiec doi xung dung chung chu. Bat nguoi dung xem.
+            int twins = PartRecognizer.FlagUntextedTwins(recognition.Parts);
+            if (twins > 0)
+            {
+                recognition.GlobalWarnings.Add(string.Format(CultureInfo.InvariantCulture,
+                    "{0} chi tiet GIONG HET chi tiet khac nhung KHONG co chu SL / vat lieu - co the la BAN SAO (vd. ket qua ghep cu nam trong vung quet). Xem cot Ghi chu, bo tick Ghep neu thua.",
+                    twins));
+            }
+
             if (recognition.Parts.Count == 0)
             {
                 ed.WriteMessage("\nGHOPHOI: Khong nhan dang duoc chi tiet nao (can duong bao kin).");
@@ -164,10 +174,11 @@ namespace AUTOCAD_COMMANDS.Nesting
             }
 
             using (NestingReviewForm review = new NestingReviewForm(
-                recognition, r => ZoomTo(ed, db, read, r), settings.AutoZoomInReview))
+                recognition, r => ZoomTo(ed, db, read, r), settings.AutoZoomInReview, settings.DefaultMaterialType))
             {
                 WF.DialogResult answer = Application.ShowModalDialog(review);
                 settings.AutoZoomInReview = review.AutoZoom;
+                settings.DefaultMaterialType = review.DefaultMaterialType;
                 ClearHighlight(db);
 
                 try
@@ -192,12 +203,17 @@ namespace AUTOCAD_COMMANDS.Nesting
             List<PartGroup> groups = PartRecognizer.ToPartGroups(recognition.Parts, settings.ArcToleranceMm);
 
             // ---- 4. settings ----
-            SortedDictionary<string, int> materials = new SortedDictionary<string, int>(StringComparer.Ordinal);
+            // Sap theo LOAI roi DO DAY tang dan: INOX 1.2 / INOX 2 / THEP 1.2 / THEP 10...
+            SortedDictionary<string, int> materials = new SortedDictionary<string, int>(
+                Comparer<string>.Create(MaterialName.Compare));
+            Dictionary<string, int> partCounts = new Dictionary<string, int>(StringComparer.Ordinal);
             foreach (PartGroup g in groups)
             {
                 int n;
                 materials.TryGetValue(g.Material, out n);
                 materials[g.Material] = n + g.Quantity;
+                partCounts.TryGetValue(g.Material, out n);
+                partCounts[g.Material] = n + 1;
             }
 
             string catalogError;
@@ -222,7 +238,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                 }
             }
 
-            using (NestingSettingsForm form = new NestingSettingsForm(settings, catalog, materials, biggest))
+            using (NestingSettingsForm form = new NestingSettingsForm(settings, catalog, materials, biggest, partCounts))
             {
                 if (Application.ShowModalDialog(form) != WF.DialogResult.OK)
                 {
@@ -253,36 +269,78 @@ namespace AUTOCAD_COMMANDS.Nesting
             if (settings.SaveFixture) SaveFixture(ed, request, db);
 
             // ---- 5. nest (worker thread, core only) + validate ----
-            NestingResult result;
-            using (NestingProgressForm progress = new NestingProgressForm(new SimpleNestingEngine(), request))
-            {
-                Application.ShowModalDialog(progress);
-                if (progress.Error != null) throw progress.Error;
-                result = progress.Result;
-            }
-
+            bool compare = settings.Algorithm == GhoPhoiAlgorithmMode.Compare;
+            NestingResult result = RunNest(request, compare ? "lan 1/2 - diem ung vien" : null);
             if (result == null)
             {
                 ed.WriteMessage("\nGHOPHOI: Khong co ket qua.");
                 return;
             }
 
-            string report = GhoPhoiPipeline.BuildReport(request, result);
-            foreach (string line in report.Split('\n')) ed.WriteMessage("\n" + line.TrimEnd('\r'));
-
-            bool valid = result.Validation != null && result.Validation.IsValid;
-            bool hasPlacements = result.Statistics.PlacedQuantity > 0;
-            string blockReason = !valid ? "VALIDATOR KHONG DAT - khong tao ban ve san xuat."
-                : (!hasPlacements ? "Khong co chi tiet nao duoc xep." : string.Empty);
+            // SO SANH: chay lai DUNG yeu cau do bang NFP (tru khi nguoi dung da bam Dung o lan 1).
+            NestingRequest nfpRequest = null;
+            NestingResult nfpResult = null;
+            if (compare && !result.Cancelled)
+            {
+                nfpRequest = NestingResultComparer.WithAlgorithm(request, NestingAlgorithm.Nfp);
+                nfpResult = RunNest(nfpRequest, "lan 2/2 - NFP da giac that");
+            }
 
             string createText = settings.OutputToCurrentDrawing ? "VE VAO BAN VE NAY" : "TAO BAN VE MOI";
-            using (NestingResultForm resultForm = new NestingResultForm(report, valid && hasPlacements, blockReason, createText))
+            if (nfpResult == null)
             {
-                if (Application.ShowModalDialog(resultForm) != WF.DialogResult.OK)
+                string report = GhoPhoiPipeline.BuildReport(request, result);
+                foreach (string line in report.Split('\n')) ed.WriteMessage("\n" + line.TrimEnd('\r'));
+
+                string blockReason;
+                bool canCreate = CanCreate(result, out blockReason);
+                using (NestingResultForm resultForm = new NestingResultForm(report, canCreate, blockReason, createText))
                 {
-                    ed.WriteMessage("\nGHOPHOI: Khong tao ban ve.");
-                    return;
+                    if (Application.ShowModalDialog(resultForm) != WF.DialogResult.OK)
+                    {
+                        ed.WriteMessage("\nGHOPHOI: Khong tao ban ve.");
+                        return;
+                    }
                 }
+            }
+            else
+            {
+                string comparison = GhoPhoiPipeline.BuildComparison(result, nfpResult);
+                foreach (string line in comparison.Split('\n')) ed.WriteMessage("\n" + line.TrimEnd('\r'));
+
+                string report = comparison + "\n" +
+                                "############ CACH 1: DIEM UNG VIEN ############\n" + GhoPhoiPipeline.BuildReport(request, result) + "\n" +
+                                "############ CACH 2: NFP DA GIAC THAT ############\n" + GhoPhoiPipeline.BuildReport(nfpRequest, nfpResult);
+
+                string r1, r2;
+                bool c1 = CanCreate(result, out r1), c2 = CanCreate(nfpResult, out r2);
+                int better = NestingResultComparer.Compare(nfpResult, result) < 0 ? 1 : 0;
+                string[] names =
+                {
+                    string.Format(CultureInfo.InvariantCulture, "Diem ung vien ({0} to, {1:0} mm)", result.Statistics.SheetCount, NestingResultComparer.TotalUsedLengthMm(result)),
+                    string.Format(CultureInfo.InvariantCulture, "NFP ({0} to, {1:0} mm)", nfpResult.Statistics.SheetCount, NestingResultComparer.TotalUsedLengthMm(nfpResult))
+                };
+                names[better] += "  <- TOT HON";
+
+                int chosen;
+                using (NestingResultForm resultForm = new NestingResultForm(report, names, new[] { c1, c2 }, new[] { r1, r2 }, better, createText))
+                {
+                    if (Application.ShowModalDialog(resultForm) != WF.DialogResult.OK)
+                    {
+                        ed.WriteMessage("\nGHOPHOI: Khong tao ban ve.");
+                        return;
+                    }
+
+                    chosen = resultForm.SelectedChoice;
+                }
+
+                if (chosen == 1)
+                {
+                    request = nfpRequest;
+                    result = nfpResult;
+                }
+
+                ed.WriteMessage("\nGHOPHOI: Ve ket qua cua " + (chosen == 1 ? "NFP da giac that." : "diem ung vien."));
             }
 
             // ---- 6. output ----
@@ -327,6 +385,26 @@ namespace AUTOCAD_COMMANDS.Nesting
             foreach (string w in written.Warnings) ed.WriteMessage("\n  (!) " + w);
 
             if (settings.OpenOutputDrawing) OpenWhenIdle(written.Path);
+        }
+
+        /// <summary>Chay ghep tren luong phu voi bang tien trinh. Loi trong luc ghep duoc nem lai.</summary>
+        private static NestingResult RunNest(NestingRequest request, string what)
+        {
+            using (NestingProgressForm progress = new NestingProgressForm(new SimpleNestingEngine(), request, what))
+            {
+                Application.ShowModalDialog(progress);
+                if (progress.Error != null) throw progress.Error;
+                return progress.Result;
+            }
+        }
+
+        private static bool CanCreate(NestingResult result, out string blockReason)
+        {
+            bool valid = result.Validation != null && result.Validation.IsValid;
+            bool hasPlacements = result.Statistics.PlacedQuantity > 0;
+            blockReason = !valid ? "VALIDATOR KHONG DAT - khong tao ban ve san xuat."
+                : (!hasPlacements ? "Khong co chi tiet nao duoc xep." : string.Empty);
+            return valid && hasPlacements;
         }
 
         /// <summary>

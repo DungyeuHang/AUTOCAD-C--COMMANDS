@@ -8,7 +8,12 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
     public enum MetadataKind
     {
         Quantity,
-        Material
+
+        /// <summary>Do day ("1.2MM").</summary>
+        Material,
+
+        /// <summary>Loai vat lieu ("INOX", "INOX 304", "THEP", "MA KEM"...).</summary>
+        MaterialType
     }
 
     public sealed class MetadataFact
@@ -71,6 +76,13 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
 
         public List<MetadataIssue> Issues { get; private set; }
 
+        /// <summary>
+        /// Phan chu CON LAI sau khi bo SL / do day / loai vat lieu (vd. MText 3 dong
+        /// "SL: 1" / "0.75MM" / "CHAN DOI XUNG" -> "CHAN DOI XUNG"). Dung lam TEN chi tiet de
+        /// nhan ra tren bang kiem tra va tren nhan. Rong khi khong con gi dang ke.
+        /// </summary>
+        public string Remainder { get; set; } = string.Empty;
+
         /// <summary>Chu nay la THONG TIN (dung hoac sai) - khong bao gio la chu cat.</summary>
         public bool IsMetadata
         {
@@ -125,6 +137,31 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
 
         public string DefaultMaterial { get; set; } = "1.2MM";
 
+        /// <summary>
+        /// Loai vat lieu khi ban ve KHONG ghi loai (vd. "THEP"). Rong = chi co do day nhu cach
+        /// cu ("1.2MM"). Chu ghi loai tren ban ve ("INOX", "SUS304"...) luon thang.
+        /// </summary>
+        public string DefaultMaterialType { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Cach doc LOAI vat lieu: "TEN CHUAN=regex". Regex chay tren chu da BO DAU, viet hoa,
+        /// va phai dung RIENG (khong dinh chu cai hai ben). Nhom ten "g" (neu co) la MAC
+        /// ("304") va duoc noi vao ten chuan: "SUS304" -> "INOX 304".
+        ///
+        /// Khong co "AL" / "GI" / "DONG" dung mot minh: qua de trung voi ma chi tiet / chu
+        /// thuong ("DONG GOI").
+        /// </summary>
+        public List<string> MaterialTypePatterns { get; set; } = new List<string>
+        {
+            @"INOX=(?:INOX|SUS)\s*-?\s*(?<g>201|304L?|316L?|430)?",
+            @"INOX=SS\s*-?\s*(?<g>201|304L?|316L?|430)",
+            @"THEP=THEP(?:\s+(?:DEN|CAN\s+NGUOI|CAN\s+NONG))?|SPCC|SPHC|SS\s*-?\s*400|CT\s*3|Q\s*235",
+            @"MA KEM=(?:TON\s+)?MA\s+KEM|TON\s+KEM|SGCC|SECC",
+            @"NHOM=NHOM|ALU(?:MINIUM|MINUM)?|AL\s*-?\s*\d{4}|A\s*5052|A\s*6061",
+            @"DONG=DONG\s+(?:DO|THAU|VANG)",
+            @"TON=TON"
+        };
+
         public int DefaultQuantity { get; set; } = 1;
     }
 
@@ -138,15 +175,31 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
         private static readonly Regex AnyMmNumber = new Regex(
             @"(?<![\p{N}.,])(?<v>\d+(?:[.,]\d+)?)\s*MM(?![A-Z])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+        /// <summary>Chu "don vi" / chu dem - khong phai ten chi tiet ("SL: 2 CAI", "T1.2MM").</summary>
+        private static readonly HashSet<string> UnitWords = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "CAI", "CHIEC", "TAM", "BO", "PCS", "PC", "CON", "THANH", "MIENG", "SL", "X", "T", "DAY", "VL", "VAT", "LIEU"
+        };
+
         private readonly MetadataRules _rules;
         private readonly Regex _keyword;
         private readonly List<Regex> _material = new List<Regex>();
+        private readonly List<KeyValuePair<string, Regex>> _types = new List<KeyValuePair<string, Regex>>();
 
         public MetadataParser(MetadataRules rules)
         {
             _rules = rules ?? new MetadataRules();
             _keyword = new Regex(_rules.QuantityKeywordPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             foreach (string p in _rules.MaterialPatterns) _material.Add(new Regex(p, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+            foreach (string p in _rules.MaterialTypePatterns ?? new List<string>())
+            {
+                int eq = p == null ? -1 : p.IndexOf('=');
+                if (eq <= 0) continue;
+                _types.Add(new KeyValuePair<string, Regex>(
+                    p.Substring(0, eq).Trim().ToUpperInvariant(),
+                    new Regex(@"(?<![\p{L}\p{N}])(?:" + p.Substring(eq + 1) + @")(?![\p{L}])",
+                        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)));
+            }
         }
 
         public MetadataRules Rules { get { return _rules; } }
@@ -186,8 +239,101 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             // Doc SL truoc va XOA phan da doc, de "SL 12" khong bao gio bi doc thanh vat lieu.
             char[] rest = text.ToCharArray();
             ClassifyQuantities(text, rest, reading);
-            ClassifyMaterials(new string(rest), reading);
+            ClassifyMaterials(new string(rest), rest, reading);
+            ClassifyTypes(rest, reading);
+            reading.Remainder = Remainder(rest);
             return reading;
+        }
+
+        /// <summary>
+        /// Loai vat lieu ("INOX", "SUS 304", "THEP", "MA KEM"...). Doc tren chu da BO DAU (go
+        /// "THÉP" hay "THEP" deu duoc), chi tren phan con lai sau khi da xoa SL / do day, va
+        /// xoa luon phan da doc.
+        /// </summary>
+        private void ClassifyTypes(char[] rest, MetadataReading reading)
+        {
+            if (_types.Count == 0) return;
+            string plain = StripDiacritics(new string(rest)).ToUpperInvariant();
+            bool[] taken = new bool[plain.Length];
+
+            foreach (KeyValuePair<string, Regex> t in _types)
+            {
+                foreach (Match m in t.Value.Matches(plain))
+                {
+                    if (m.Length == 0) continue;
+                    bool overlap = false;
+                    for (int c = m.Index; c < m.Index + m.Length && !overlap; c++) overlap = taken[c];
+                    if (overlap) continue;
+
+                    Group g = m.Groups["g"];
+                    string value = g.Success && g.Length > 0 ? t.Key + " " + g.Value : t.Key;
+                    if (!reading.Facts.Exists(f => f.Kind == MetadataKind.MaterialType && f.Value == value))
+                    {
+                        reading.Facts.Add(new MetadataFact(MetadataKind.MaterialType, value, 0));
+                    }
+
+                    for (int c = m.Index; c < m.Index + m.Length; c++)
+                    {
+                        taken[c] = true;
+                        rest[c] = ' ';
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Ten loai vat lieu chuan tu chu nguoi dung go ("inox", "sus304", "thép") - null neu
+        /// khong nhan ra. Dung cho o sua tay o bang kiem tra.
+        /// </summary>
+        public string ParseType(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            MetadataReading r = new MetadataReading();
+            ClassifyTypes(text.ToCharArray(), r);
+            MetadataFact f = r.Facts.Find(x => x.Kind == MetadataKind.MaterialType);
+            return f != null ? f.Value : null;
+        }
+
+        /// <summary>
+        /// Bo dau tieng Viet, GIU NGUYEN DO DAI chuoi (moi ky tu -> mot ky tu) de vi tri khop
+        /// tren chuoi bo dau dung y vi tri tren chuoi goc.
+        /// </summary>
+        internal static string StripDiacritics(string s)
+        {
+            char[] r = new char[s.Length];
+            for (int i = 0; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (c == '\u0110') { r[i] = 'D'; continue; }
+                if (c == '\u0111') { r[i] = 'd'; continue; }
+                string d = c.ToString().Normalize(System.Text.NormalizationForm.FormD);
+                r[i] = d.Length > 0 ? d[0] : c;
+            }
+
+            return new string(r);
+        }
+
+        /// <summary>Phan chu con lai co nghia (it nhat 3 chu cai, bo chu don vi / dau cau).</summary>
+        private static string Remainder(char[] rest)
+        {
+            List<string> words = new List<string>();
+            int letters = 0;
+            char[] separators = { ' ', '\t', '\r', '\n', ',', ';', '/', '|', ':', '=', '(', ')', '[', ']' };
+            foreach (string raw in new string(rest).Split(separators, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string w = raw.Trim('-', '.', '+', '*', '_', '"', '\'');
+                if (w.Length == 0) continue;
+                if (UnitWords.Contains(StripDiacritics(w).ToUpperInvariant())) continue;
+                words.Add(w);
+                foreach (char c in w)
+                {
+                    if (char.IsLetter(c)) letters++;
+                }
+            }
+
+            if (letters < 3) return string.Empty;
+            string joined = string.Join(" ", words.ToArray());
+            return joined.Length > 40 ? joined.Substring(0, 40).Trim() : joined;
         }
 
         private void ClassifyQuantities(string text, char[] rest, MetadataReading reading)
@@ -254,7 +400,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             }
         }
 
-        private void ClassifyMaterials(string remaining, MetadataReading reading)
+        private void ClassifyMaterials(string remaining, char[] rest, MetadataReading reading)
         {
             bool[] covered = new bool[remaining.Length];
             foreach (Regex rx in _material)
@@ -264,6 +410,7 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                     Group g = m.Groups["v"];
                     for (int c = m.Index; c < m.Index + m.Length; c++) covered[c] = true;
                     Classify(remaining, g.Index, g.Value, m.Value.Trim(), true, reading);
+                    Blank(rest, m.Index, m.Length, remaining);
                 }
             }
 
@@ -273,7 +420,21 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             {
                 if (covered[m.Groups["v"].Index]) continue;
                 Classify(remaining, m.Groups["v"].Index, m.Groups["v"].Value, m.Value.Trim(), false, reading);
+                Blank(rest, m.Index, m.Length, remaining);
             }
+        }
+
+        /// <summary>Xoa doan da doc (kem dau tru / tien to R, D, O dinh lien truoc) khoi phan con lai.</summary>
+        private void Blank(char[] rest, int start, int length, string remaining)
+        {
+            if (start > 0 && (remaining[start - 1] == '-' ||
+                              _rules.DimensionPrefixes.IndexOf(char.ToUpperInvariant(remaining[start - 1])) >= 0))
+            {
+                start--;
+                length++;
+            }
+
+            for (int c = start; c < start + length && c < rest.Length; c++) rest[c] = ' ';
         }
 
         private void Classify(string remaining, int start, string value, string token, bool materialShape, MetadataReading reading)

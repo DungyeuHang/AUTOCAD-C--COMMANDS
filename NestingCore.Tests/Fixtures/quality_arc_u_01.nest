@@ -8,4 +8,4 @@ END
 PART id=U qty=4 material=1.2MM tol=0 name=CHUU
 OUTER 0.000,0.000 320.000,0.000 320.000,300.000 230.000,300.000 230.000,90.000 90.000,90.000 90.000,300.000 0.000,300.000
 END
-EXPECT placed=8 unplaced=0 sheets<=1 usedlength<=682 mingap>=5 minedge>=5
+EXPECT placed=8 unplaced=0 sheets<=1 usedlength<=654 mingap>=5 minedge>=5

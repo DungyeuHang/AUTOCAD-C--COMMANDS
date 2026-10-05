@@ -29,6 +29,10 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             report.Lines.Add("---- FIXTURES ----");
             RunFixtures(report, fixtureFolder);
 
+            report.Lines.Add(string.Empty);
+            report.Lines.Add("---- NFP DA GIAC THAT ----");
+            NfpSelfTests.Run(report, fixtureFolder);
+
             NestingTestHarness.Summary(report);
             return report;
         }

@@ -110,7 +110,7 @@ namespace AUTOCAD_COMMANDS.Nesting
 
                 if (!part.MaterialFromText && preset.Material.Length > 0)
                 {
-                    part.Material = preset.Material;
+                    part.Material = KeepTypeIfMissing(preset.Material, part.Material);
                     part.MaterialFromText = true;
                     part.Notes.RemoveAll(n => n.StartsWith("Khong tim thay vat lieu", StringComparison.Ordinal));
                 }
@@ -134,6 +134,19 @@ namespace AUTOCAD_COMMANDS.Nesting
             }
 
             return applied;
+        }
+
+        /// <summary>
+        /// Vat lieu luu tu phien ban CU chi co do day ("1.2MM"): giu LOAI dang co cua chi tiet
+        /// ("THEP" / "INOX" doc tu chu), khong de no tut ve vat lieu khong loai va tach thanh
+        /// mot vat lieu rieng.
+        /// </summary>
+        internal static string KeepTypeIfMissing(string saved, string current)
+        {
+            if (string.IsNullOrWhiteSpace(saved)) return current;
+            if (MaterialName.TypeOf(saved).Length > 0) return saved;
+            string type = MaterialName.TypeOf(current);
+            return type.Length > 0 ? MaterialName.Compose(type, saved) : saved;
         }
 
         /// <summary>
@@ -173,7 +186,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                 if (!saved.TryGetValue(original.Key, out e)) continue;
 
                 if (e.Quantity.HasValue) p.Quantity = e.Quantity.Value;
-                if (e.Material != null) p.Material = e.Material;
+                if (e.Material != null) p.Material = KeepTypeIfMissing(e.Material, p.Material);
                 if (e.Order != null) p.Order = e.Order;
                 if (e.Include.HasValue) p.Include = e.Include.Value && p.IsNestable;
                 if (e.Confirmed.HasValue) p.Confirmed = e.Confirmed.Value;
@@ -256,6 +269,69 @@ namespace AUTOCAD_COMMANDS.Nesting
             return outputs;
         }
 
+        /// <summary>
+        /// Bang DOI CHIEU hai thuat toan (che do so sanh): tung vat lieu va ca lenh - so to, chieu
+        /// dai da dung, ty le su dung, thoi gian - va cai nao tot hon theo
+        /// <see cref="NestingResultComparer"/>.
+        /// </summary>
+        internal static string BuildComparison(NestingResult points, NestingResult nfp)
+        {
+            CultureInfo ci = CultureInfo.InvariantCulture;
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("==================================================");
+            sb.AppendLine(" SO SANH THUAT TOAN XEP");
+            sb.AppendLine("==================================================");
+            sb.AppendLine(string.Format(ci, " {0,-26} {1,18} {2,18}", string.Empty, "DIEM UNG VIEN", "NFP DA GIAC THAT"));
+            Row(sb, "Validator", Valid(points) ? "DAT" : "KHONG DAT", Valid(nfp) ? "DAT" : "KHONG DAT");
+            Row(sb, "Da xep / chua xep",
+                points.Statistics.PlacedQuantity.ToString(ci) + " / " + points.Statistics.UnplacedQuantity.ToString(ci),
+                nfp.Statistics.PlacedQuantity.ToString(ci) + " / " + nfp.Statistics.UnplacedQuantity.ToString(ci));
+            Row(sb, "So to", points.Statistics.SheetCount.ToString(ci), nfp.Statistics.SheetCount.ToString(ci));
+            double lp = NestingResultComparer.TotalUsedLengthMm(points), ln = NestingResultComparer.TotalUsedLengthMm(nfp);
+            Row(sb, "Tong dai da dung (mm)", lp.ToString("0", ci), ln.ToString("0", ci));
+            Row(sb, "Thoi gian (s)", points.Statistics.ElapsedSeconds.ToString("0.0", ci), nfp.Statistics.ElapsedSeconds.ToString("0.0", ci));
+
+            foreach (MaterialStatistics m in points.Statistics.Materials)
+            {
+                MaterialStatistics o = nfp.Statistics.Materials.Find(x => x.Material == m.Material);
+                if (o == null) continue;
+                Row(sb, " " + m.Material + ": to / dai",
+                    string.Format(ci, "{0} / {1:0}", m.SheetCount, m.UsedLengthMm),
+                    string.Format(ci, "{0} / {1:0}", o.SheetCount, o.UsedLengthMm));
+                Row(sb, " " + m.Material + ": su dung", (m.Utilization * 100).ToString("0.0", ci) + "%", (o.Utilization * 100).ToString("0.0", ci) + "%");
+            }
+
+            int c = NestingResultComparer.Compare(points, nfp);
+            sb.AppendLine();
+            if (c == 0)
+            {
+                sb.AppendLine(" KET LUAN: HAI CACH NGANG NHAU (chenh duoi 1 mm) - mac dinh chon diem ung vien.");
+            }
+            else
+            {
+                bool sameCount = points.Statistics.SheetCount == nfp.Statistics.SheetCount &&
+                                 points.Statistics.UnplacedQuantity == nfp.Statistics.UnplacedQuantity;
+                double diff = Math.Abs(lp - ln);
+                sb.AppendLine(string.Format(ci, " KET LUAN: {0} TOT HON{1}",
+                    c < 0 ? "DIEM UNG VIEN" : "NFP DA GIAC THAT",
+                    sameCount ? string.Format(ci, " - ngan hon {0:0} mm ({1:0.0}%)", diff, 100.0 * diff / Math.Max(1.0, Math.Max(lp, ln))) : string.Empty));
+            }
+
+            sb.AppendLine(" Chon cach muon ve o phia duoi. Chi tiet tung cach nam ngay sau day.");
+            sb.AppendLine("==================================================");
+            return sb.ToString();
+        }
+
+        private static bool Valid(NestingResult r)
+        {
+            return r.Validation != null && r.Validation.IsValid;
+        }
+
+        private static void Row(StringBuilder sb, string label, string a, string b)
+        {
+            sb.AppendLine(string.Format(CultureInfo.InvariantCulture, " {0,-26} {1,18} {2,18}", label, a, b));
+        }
+
         internal static string BuildReport(NestingRequest request, NestingResult result)
         {
             CultureInfo ci = CultureInfo.InvariantCulture;
@@ -276,6 +352,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                 request.Settings.GapMm, request.Settings.EdgeMarginMm, request.Settings.AllowMirror ? "CO" : "KHONG"));
             sb.AppendLine(" Chi tiet trong lo kin: " + (request.Settings.AllowPartInsideHole ? "CHO PHEP" : "KHONG (hoc lom ho van duoc phep)"));
             sb.AppendLine(" Muc tim kiem      : " + (request.Settings.SearchEffort == SearchEffort.Balanced ? "Can bang" : "Nhanh"));
+            sb.AppendLine(" Thuat toan xep    : " + (request.Settings.Algorithm == NestingAlgorithm.Nfp ? "NFP da giac that (+ diem ung vien)" : "Diem ung vien"));
             sb.AppendLine(string.Format(ci, " Thoi gian         : {0:0.0} s{1}", st.ElapsedSeconds, result.Cancelled ? "   (NGUOI DUNG DA DUNG SOM)" : string.Empty));
 
             foreach (MaterialStatistics m in st.Materials)

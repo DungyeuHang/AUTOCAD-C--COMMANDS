@@ -9,4 +9,4 @@ END
 PART id=B qty=3 material=1.2MM tol=0 name=TAMVUONG
 OUTER 0.000,0.000 160.000,0.000 160.000,160.000 0.000,160.000
 END
-EXPECT placed=6 unplaced=0 sheets<=1 usedlength<=713 mingap>=5 minedge>=5
+EXPECT placed=6 unplaced=0 sheets<=1 usedlength<=636 mingap>=5 minedge>=5

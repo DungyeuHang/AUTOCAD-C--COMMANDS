@@ -11,4 +11,4 @@ END
 PART id=G2 qty=2 material=1.2MM tol=0 name=G2
 OUTER 0,0 256,0 256,52.872 120.713,52.872 120.713,146 0,146
 END
-EXPECT placed=5 unplaced=0 sheets=1 usedlength<=503
+EXPECT placed=5 unplaced=0 sheets=1 usedlength<=461
