@@ -47,6 +47,8 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
+            SmartStretchSettingsStore.SaveLength(length);
+
             int directionSign = 1; // Mặc định theo trường hợp tăng hết
 
             object previousOsMode = null;
@@ -142,13 +144,20 @@ namespace AUTOCAD_COMMANDS
 
                 if (sourceResult.Status == PromptStatus.None || string.IsNullOrWhiteSpace(sourceResult.StringResult))
                 {
-                    return IsValidLength(length);
+                    if (IsValidLength(length))
+                    {
+                        SmartStretchSettingsStore.SaveLength(length);
+                        return true;
+                    }
+
+                    return false;
                 }
 
                 string input = sourceResult.StringResult.Trim();
 
-                // If user typed a number directly, treat it as new length
-                if (double.TryParse(input, NumberStyles.Float, CultureInfo.InvariantCulture, out double numericLength))
+                // If user typed a number directly, treat it as new length (hỗ trợ cả dấu chấm và dấu phẩy)
+                string normalizedInput = input.Replace(',', '.');
+                if (double.TryParse(normalizedInput, NumberStyles.Float, CultureInfo.InvariantCulture, out double numericLength))
                 {
                     if (IsValidLength(numericLength))
                     {

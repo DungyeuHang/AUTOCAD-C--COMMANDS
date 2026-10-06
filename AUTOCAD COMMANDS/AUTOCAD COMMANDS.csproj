@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -76,6 +76,6 @@
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
     <PostBuildEvent>if exist "$(SolutionDir)AUTOCAD_COMMANDS.bundle\Contents\Win64\" copy /y "$(TargetPath)" "$(SolutionDir)AUTOCAD_COMMANDS.bundle\Contents\Win64\"
-if exist "C:\ProgramData\Autodesk\ApplicationPlugins\AUTOCAD_COMMANDS.bundle\Contents\Win64\" copy /y "$(TargetPath)" "C:\ProgramData\Autodesk\ApplicationPlugins\AUTOCAD_COMMANDS.bundle\Contents\Win64\"</PostBuildEvent>
+if exist "C:\ProgramData\Autodesk\ApplicationPlugins\AUTOCAD_COMMANDS.bundle\Contents\Win64\" (copy /y "$(TargetPath)" "C:\ProgramData\Autodesk\ApplicationPlugins\AUTOCAD_COMMANDS.bundle\Contents\Win64\" || echo [WARN] Could not copy to ProgramData because file is in use by AutoCAD)</PostBuildEvent>
   </PropertyGroup>
 </Project>

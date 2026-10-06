@@ -1,4 +1,4 @@
-﻿using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.GraphicsInterface;
@@ -26,52 +26,79 @@ using Imaging = System.Windows.Media.Imaging;
 namespace AUTOCAD_COMMANDS
 {
 
-    // Lưu giá trị L gần nhất của SS để Enter lần sau dùng lại nhanh.
+    // Quản lý lưu/đọc giá trị L gần nhất dùng chung cho SS, SSD, SSD2, SX, SY.
+    // Dùng chung key "smartstretch.length" trong WorkspaceUiStateStore (%APPDATA%\DUNGX\AUTOCAD_COMMANDS)
+    // để đồng bộ thống nhất giữa SS, SX, SY và không phụ thuộc quyền ghi file tại thư mục bundle/DLL.
     internal static class SmartStretchSettingsStore
     {
-        private static readonly string LengthFilePath =
-            Path.Combine(
-                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty,
-                "dungx_smart_stretch_length.txt");
+        public const string SettingKey = "smartstretch.length";
+        public const double DefaultLength = 500.0;
+        private const double ComparisonTolerance = 1e-6;
 
         public static double LoadLength()
         {
+            // 1. Đọc từ WorkspaceUiStateStore dùng chung
+            if (WorkspaceUiStateStore.TryGetDouble(SettingKey, out double value) &&
+                Math.Abs(value) > ComparisonTolerance)
+            {
+                return value;
+            }
+
+            // 2. Migration fallback từ file txt cũ nếu có
             try
             {
-                if (!File.Exists(LengthFilePath))
+                string assemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty;
+                string legacyPath = Path.Combine(assemblyDir, "dungx_smart_stretch_length.txt");
+                if (File.Exists(legacyPath))
                 {
-                    return 100.0;
-                }
-
-                string text = (File.ReadAllText(LengthFilePath, Encoding.UTF8) ?? string.Empty).Trim();
-                if (double.TryParse(
-                    text,
-                    NumberStyles.Float | NumberStyles.AllowThousands,
-                    CultureInfo.InvariantCulture,
-                    out double value) &&
-                    value > 0.0)
-                {
-                    return value;
+                    string text = (File.ReadAllText(legacyPath, Encoding.UTF8) ?? string.Empty).Trim();
+                    if (double.TryParse(
+                        text,
+                        NumberStyles.Float | NumberStyles.AllowThousands,
+                        CultureInfo.InvariantCulture,
+                        out double legacyValue) &&
+                        Math.Abs(legacyValue) > ComparisonTolerance)
+                    {
+                        SaveLength(legacyValue);
+                        return legacyValue;
+                    }
                 }
             }
             catch
             {
             }
 
-            return 100.0;
+            return DefaultLength;
         }
 
         public static void SaveLength(double value)
         {
-            if (value <= 0.0)
+            if (Math.Abs(value) <= ComparisonTolerance)
             {
                 return;
             }
 
-            File.WriteAllText(
-                LengthFilePath,
-                value.ToString("0.###", CultureInfo.InvariantCulture),
-                Encoding.UTF8);
+            // Lưu vào WorkspaceUiStateStore dùng chung cho cả SS, SX, SY
+            WorkspaceUiStateStore.SaveValue(
+                SettingKey,
+                value.ToString(CultureInfo.InvariantCulture));
+
+            // Cố gắng ghi ra file legacy nếu có thể (không gây crash nếu không có quyền ghi)
+            try
+            {
+                string assemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty;
+                if (!string.IsNullOrEmpty(assemblyDir))
+                {
+                    string legacyPath = Path.Combine(assemblyDir, "dungx_smart_stretch_length.txt");
+                    File.WriteAllText(
+                        legacyPath,
+                        value.ToString("0.###", CultureInfo.InvariantCulture),
+                        Encoding.UTF8);
+                }
+            }
+            catch
+            {
+            }
         }
     }
 }

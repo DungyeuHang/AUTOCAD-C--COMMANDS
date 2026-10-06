@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿using Autodesk.AutoCAD.ApplicationServices;
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.GraphicsInterface;
@@ -52,9 +52,7 @@ namespace AUTOCAD_COMMANDS
                 return;
             }
 
-            double length = WorkspaceUiStateStore.TryGetDouble("smartstretch.length", out double savedLength)
-                ? savedLength
-                : 500.0; // Giá trị mặc định nếu chưa có cấu hình
+            double length = SmartStretchSettingsStore.LoadLength();
 
             // Cho phép nhập số trực tiếp để set L mới, hoặc L/C/Enter như cũ
             if (!TryPromptSmartStretchLengthSource(ed, "SS", ref length))
@@ -91,18 +89,25 @@ namespace AUTOCAD_COMMANDS
                 if (sourceResult.Status == PromptStatus.None ||
                     string.IsNullOrWhiteSpace(sourceResult.StringResult))
                 {
-                    return Math.Abs(length) > ComparisonTolerance;
+                    if (Math.Abs(length) > ComparisonTolerance)
+                    {
+                        SmartStretchSettingsStore.SaveLength(length);
+                        return true;
+                    }
+
+                    return false;
                 }
 
                 string input = sourceResult.StringResult.Trim();
 
-                // If user typed a number directly, treat it as new length
-                if (double.TryParse(input, NumberStyles.Float, CultureInfo.InvariantCulture, out double numericLength))
+                // If user typed a number directly, treat it as new length (hỗ trợ cả dấu chấm và dấu phẩy)
+                string normalizedInput = input.Replace(',', '.');
+                if (double.TryParse(normalizedInput, NumberStyles.Float, CultureInfo.InvariantCulture, out double numericLength))
                 {
                     if (Math.Abs(numericLength) > ComparisonTolerance)
                     {
                         length = numericLength;
-                        WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                        SmartStretchSettingsStore.SaveLength(length);
                         ed.WriteMessage($"\n{commandLabel}: cập nhật L = {FormatLength(length)}.");
                         return true;
                     }
@@ -116,7 +121,7 @@ namespace AUTOCAD_COMMANDS
                     if (TryPromptStretchLength(ed, length, out double manualLength))
                     {
                         length = manualLength;
-                        WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                        SmartStretchSettingsStore.SaveLength(length);
                         ed.WriteMessage($"\n{commandLabel}: cập nhật L = {FormatLength(length)}.");
                         return true;
                     }
@@ -130,7 +135,7 @@ namespace AUTOCAD_COMMANDS
                     if (Math.Abs(halfLength) > ComparisonTolerance)
                     {
                         length = halfLength;
-                        WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                        SmartStretchSettingsStore.SaveLength(length);
                         ed.WriteMessage($"\n{commandLabel}: cập nhật L = L/2 = {FormatLength(length)}.");
                         return true;
                     }
@@ -147,7 +152,7 @@ namespace AUTOCAD_COMMANDS
                         Math.Abs(calculatorLength) > ComparisonTolerance)
                     {
                         length = calculatorLength;
-                        WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                        SmartStretchSettingsStore.SaveLength(length);
                         ed.WriteMessage($"\n{commandLabel}: lấy L = {FormatLength(length)} từ ô nhập calculator.");
                         return true;
                     }
@@ -166,7 +171,7 @@ namespace AUTOCAD_COMMANDS
                     {
                         double halfCalcLength = calculatorLength / 2.0;
                         length = halfCalcLength;
-                        WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                        SmartStretchSettingsStore.SaveLength(length);
                         ed.WriteMessage($"\n{commandLabel}: lấy L = Calc/2 = {FormatLength(length)} từ ô nhập calculator.");
                         return true;
                     }
@@ -259,7 +264,7 @@ namespace AUTOCAD_COMMANDS
                 previousOsMode = Application.GetSystemVariable("OSMODE");
                 Application.SetSystemVariable("OSMODE", 0);
 
-                WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                SmartStretchSettingsStore.SaveLength(length);
 
                 while (true)
                 {
@@ -420,7 +425,7 @@ namespace AUTOCAD_COMMANDS
                         if (TryPromptStretchLength(ed, length, out double updatedLength))
                         {
                             length = updatedLength;
-                            WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                            SmartStretchSettingsStore.SaveLength(length);
                             ed.WriteMessage($"\n{commandLabel}: cập nhật L = {FormatLength(length)}.");
                         }
                     }
@@ -430,7 +435,7 @@ namespace AUTOCAD_COMMANDS
                         if (Math.Abs(halfLength) > ComparisonTolerance)
                         {
                             length = halfLength;
-                            WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                            SmartStretchSettingsStore.SaveLength(length);
                             ed.WriteMessage($"\n{commandLabel}: cập nhật L = L/2 = {FormatLength(length)}.");
                         }
                         else
@@ -515,7 +520,7 @@ namespace AUTOCAD_COMMANDS
                 Math.Abs(displayValue) > ComparisonTolerance)
             {
                 length = displayValue;
-                WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                SmartStretchSettingsStore.SaveLength(length);
                 ed.WriteMessage($"\n{commandLabel}: đã lấy L = {FormatLength(length)} từ ô nhập liệu của calculator.");
                 return true;
             }
@@ -538,7 +543,7 @@ namespace AUTOCAD_COMMANDS
             {
                 double halfCalcLength = displayValue / 2.0;
                 length = halfCalcLength;
-                WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                SmartStretchSettingsStore.SaveLength(length);
                 ed.WriteMessage($"\n{commandLabel}: đã lấy L = Calc/2 = {FormatLength(length)} từ ô nhập liệu của calculator.");
                 return true;
             }
@@ -596,7 +601,7 @@ namespace AUTOCAD_COMMANDS
                             if (TryPromptStretchLength(ed, length, out double updatedLength))
                             {
                                 length = updatedLength;
-                                WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                                SmartStretchSettingsStore.SaveLength(length);
                                 ed.WriteMessage(
                                     $"\n{commandLabel}: cập nhật L hiện tại = {FormatLength(length)}.");
                             }
@@ -607,7 +612,7 @@ namespace AUTOCAD_COMMANDS
                             if (Math.Abs(halfLength) > ComparisonTolerance)
                             {
                                 length = halfLength;
-                                WorkspaceUiStateStore.SaveValue("smartstretch.length", length.ToString(CultureInfo.InvariantCulture));
+                                SmartStretchSettingsStore.SaveLength(length);
                                 ed.WriteMessage(
                                     $"\n{commandLabel}: cập nhật L hiện tại = L/2 = {FormatLength(length)}.");
                             }
