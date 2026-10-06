@@ -87,6 +87,12 @@ namespace AUTOCAD_COMMANDS.Nesting
         /// </summary>
         public string DefaultMaterialType { get; set; } = "THEP";
 
+        /// <summary>
+        /// Quy doi ten loai vat lieu cua xuong nay, dang "CHU=LOAI" (vd. "TON=THEP"). Sua o bang
+        /// KIEM TRA (nut "Quy doi loai..."). Xem MetadataRules.MaterialTypeAliases.
+        /// </summary>
+        public List<string> MaterialTypeAliases { get; set; } = new List<string>();
+
         public int DefaultQuantity { get; set; } = 1;
 
         /// <summary>Layers whose geometry is carried with a part but never used as contour (bend lines...).</summary>
@@ -169,6 +175,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             GhoPhoiSettings c = (GhoPhoiSettings)MemberwiseClone();
             c.MarkingLayers = new List<string>(MarkingLayers);
             c.EngravingLayers = new List<string>(EngravingLayers);
+            c.MaterialTypeAliases = new List<string>(MaterialTypeAliases ?? new List<string>());
             c.MaterialSheets = new Dictionary<string, string>(MaterialSheets, StringComparer.OrdinalIgnoreCase);
             return c;
         }
@@ -216,6 +223,7 @@ namespace AUTOCAD_COMMANDS.Nesting
             };
             r.Metadata.DefaultMaterial = DefaultMaterial;
             r.Metadata.DefaultMaterialType = DefaultMaterialType ?? string.Empty;
+            r.Metadata.MaterialTypeAliases = new List<string>(MaterialTypeAliases ?? new List<string>());
             r.Metadata.DefaultQuantity = DefaultQuantity;
             return r;
         }

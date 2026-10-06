@@ -27,11 +27,14 @@ namespace AUTOCAD_COMMANDS.Nesting
         private const string NoTypeItem = "(khong phan loai)";
 
         /// <summary>Loai vat lieu goi y san (go tay loai khac van duoc).</summary>
-        internal static readonly string[] KnownTypes = { "THEP", "INOX", "INOX 201", "INOX 304", "INOX 316", "INOX 430", "MA KEM", "NHOM", "TON", "DONG" };
+        internal static readonly string[] KnownTypes = { "THEP", "INOX", "INOX 201", "INOX 304", "INOX 316", "INOX 430", "MA KEM", "TON LANH", "TON", "NHOM", "DONG" };
 
         private readonly List<RecognizedPart> _records;
         private readonly Action<RecognizedPart> _zoom;
-        private readonly MetadataParser _parser = new MetadataParser(new MetadataRules());
+        private MetadataParser _parser = new MetadataParser(new MetadataRules());
+
+        /// <summary>Quy doi ten loai cua xuong ("TON=THEP"...). Xem <see cref="MetadataRules.MaterialTypeAliases"/>.</summary>
+        private List<string> _aliases = new List<string>();
 
         /// <summary>Chi tiet nguoi dung DA sua loai bang tay - doi loai mac dinh khong dung vao.</summary>
         private readonly HashSet<RecognizedPart> _typeEdited = new HashSet<RecognizedPart>();
@@ -54,12 +57,19 @@ namespace AUTOCAD_COMMANDS.Nesting
         {
         }
 
-        /// <param name="defaultType">Loai vat lieu dang dung cho chi tiet ban ve khong ghi loai.</param>
         public NestingReviewForm(RecognitionResult recognition, Action<RecognizedPart> zoom, bool autoZoom, string defaultType)
+            : this(recognition, zoom, autoZoom, defaultType, null)
+        {
+        }
+
+        /// <param name="defaultType">Loai vat lieu dang dung cho chi tiet ban ve khong ghi loai.</param>
+        /// <param name="aliases">Quy doi ten loai dang dung ("TON=THEP"...).</param>
+        public NestingReviewForm(RecognitionResult recognition, Action<RecognizedPart> zoom, bool autoZoom, string defaultType, IList<string> aliases)
         {
             _records = recognition.Parts;
             _zoom = zoom;
             _defaultType = (defaultType ?? string.Empty).Trim().ToUpperInvariant();
+            SetAliases(aliases);
             BuildUi(recognition.GlobalWarnings, autoZoom);
             LoadRows();
             UpdateState();
@@ -67,6 +77,54 @@ namespace AUTOCAD_COMMANDS.Nesting
         }
 
         public bool AutoZoom { get { return _chkAutoZoom.Checked; } }
+
+        /// <summary>Quy doi ten loai sau khi nguoi dung sua (luu lai cho lan sau).</summary>
+        public List<string> MaterialTypeAliases { get { return new List<string>(_aliases); } }
+
+        private void SetAliases(IEnumerable<string> aliases)
+        {
+            _aliases = new List<string>();
+            foreach (KeyValuePair<string, string> a in MetadataParser.ParseAliases(aliases)) _aliases.Add(a.Key + "=" + a.Value);
+            _parser = new MetadataParser(new MetadataRules { MaterialTypeAliases = new List<string>(_aliases) });
+        }
+
+        /// <summary>
+        /// Mo bang quy doi; OK thi DOI NGAY loai cua moi dong dang co ten can quy doi (vd. moi
+        /// dong "TON" thanh "THEP"). Chu MOI them vao bang (vd. "TOLE") co tac dung tu lan quet sau.
+        /// </summary>
+        private void EditAliases()
+        {
+            using (MaterialAliasForm form = new MaterialAliasForm(_aliases))
+            {
+                if (form.ShowDialog(this) != DialogResult.OK) return;
+                SetAliases(form.Aliases);
+            }
+
+            int changed = 0;
+            foreach (DataGridViewRow row in _grid.Rows)
+            {
+                RecognizedPart r = (RecognizedPart)row.Tag;
+                string type = MaterialName.TypeOf(r.Material);
+                string mapped = _parser.MapType(type);
+                if (string.Equals(type, mapped, StringComparison.Ordinal)) continue;
+                SetMaterial(row, r, MaterialName.WithType(r.Material, mapped));
+                changed++;
+            }
+
+            string def = _parser.MapType(_defaultType);
+            if (!string.Equals(def, _defaultType, StringComparison.Ordinal))
+            {
+                _defaultType = def;
+                _cboDefaultType.Text = def.Length == 0 ? NoTypeItem : def;
+            }
+
+            UpdateState();
+            if (changed > 0)
+            {
+                MessageBox.Show(this, "Da doi loai vat lieu cho " + changed.ToString(CultureInfo.InvariantCulture) + " dong theo bang quy doi.",
+                    "GHOPHOI", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
 
         /// <summary>Loai vat lieu mac dinh nguoi dung chon o bang nay (rong = khong phan loai).</summary>
         public string DefaultMaterialType { get { return _defaultType; } }
@@ -122,6 +180,9 @@ namespace AUTOCAD_COMMANDS.Nesting
                 ApplyDefaultType();
             };
             typeBar.Controls.Add(_cboDefaultType);
+            Button aliasButton = new Button { Text = "Quy doi loai...", AutoSize = true, Margin = new Padding(8, 2, 0, 0) };
+            aliasButton.Click += (s, e) => EditAliases();
+            typeBar.Controls.Add(aliasButton);
             typeBar.Controls.Add(new Label
             {
                 Text = "(chu tren ban ve nhu \"INOX\", \"SUS304\", \"THEP\" luon thang; INOX 1.2MM va THEP 1.2MM ghep RIENG)",
@@ -671,6 +732,83 @@ namespace AUTOCAD_COMMANDS.Nesting
             }
 
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Bang QUY DOI ten loai vat lieu cua xuong: moi dong "chu tren ban ve" -> "loai vat lieu".
+    /// Vd. xuong goi thep tam la "TON": dong TON -> THEP thi moi chi tiet ghi "TON 1.2MM" duoc
+    /// ghep chung voi THEP 1.2MM.
+    /// </summary>
+    internal sealed class MaterialAliasForm : Form
+    {
+        private readonly DataGridView _grid;
+
+        public MaterialAliasForm(IEnumerable<string> aliases)
+        {
+            Text = "GHOPHOI - QUY DOI LOAI VAT LIEU";
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.Sizable;
+            MinimizeBox = false;
+            MaximizeBox = false;
+            ShowInTaskbar = false;
+            Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+            ClientSize = new Size(560, 380);
+
+            Label intro = new Label
+            {
+                Dock = DockStyle.Top,
+                Height = 76,
+                Padding = new Padding(8, 8, 8, 0),
+                Text = "Xuong ban goi vat lieu khac ten chuong trinh? Them dong o day.\r\n" +
+                       "Vd.  TON -> THEP  (ghi \"TON 1.2MM\" la thep 1.2),  TOLE -> THEP,  TON LANH -> MA KEM.\r\n" +
+                       "Khong phan biet dau / hoa thuong. Loai co san: THEP, INOX, INOX 304, MA KEM, TON LANH, TON, NHOM, DONG.\r\n" +
+                       "Xoa dong: chon dong roi bam Delete."
+            };
+
+            _grid = new DataGridView
+            {
+                Dock = DockStyle.Fill,
+                AllowUserToAddRows = true,
+                AllowUserToDeleteRows = true,
+                RowHeadersVisible = true,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                BackgroundColor = SystemColors.Window
+            };
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Chu tren ban ve (vd. TON)" });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Doi thanh loai (vd. THEP)" });
+            foreach (KeyValuePair<string, string> a in MetadataParser.ParseAliases(aliases)) _grid.Rows.Add(a.Key, a.Value);
+
+            FlowLayoutPanel buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 42, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(6) };
+            Button ok = new Button { Text = "OK", Width = 90, Height = 28, DialogResult = DialogResult.OK };
+            Button cancel = new Button { Text = "Huy", Width = 90, Height = 28, DialogResult = DialogResult.Cancel };
+            ok.Click += (s, e) => _grid.EndEdit();
+            buttons.Controls.Add(ok);
+            buttons.Controls.Add(cancel);
+
+            Controls.Add(_grid);
+            Controls.Add(buttons);
+            Controls.Add(intro);
+            CancelButton = cancel;
+        }
+
+        /// <summary>Cac dong hop le dang "CHU=LOAI".</summary>
+        public List<string> Aliases
+        {
+            get
+            {
+                List<string> raw = new List<string>();
+                foreach (DataGridViewRow row in _grid.Rows)
+                {
+                    if (row.IsNewRow) continue;
+                    raw.Add(Convert.ToString(row.Cells[0].Value, CultureInfo.InvariantCulture) + "=" +
+                            Convert.ToString(row.Cells[1].Value, CultureInfo.InvariantCulture));
+                }
+
+                List<string> clean = new List<string>();
+                foreach (KeyValuePair<string, string> a in MetadataParser.ParseAliases(raw)) clean.Add(a.Key + "=" + a.Value);
+                return clean;
+            }
         }
     }
 }

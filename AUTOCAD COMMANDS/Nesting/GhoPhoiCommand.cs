@@ -174,11 +174,12 @@ namespace AUTOCAD_COMMANDS.Nesting
             }
 
             using (NestingReviewForm review = new NestingReviewForm(
-                recognition, r => ZoomTo(ed, db, read, r), settings.AutoZoomInReview, settings.DefaultMaterialType))
+                recognition, r => ZoomTo(ed, db, read, r), settings.AutoZoomInReview, settings.DefaultMaterialType, settings.MaterialTypeAliases))
             {
                 WF.DialogResult answer = Application.ShowModalDialog(review);
                 settings.AutoZoomInReview = review.AutoZoom;
                 settings.DefaultMaterialType = review.DefaultMaterialType;
+                settings.MaterialTypeAliases = review.MaterialTypeAliases;
                 ClearHighlight(db);
 
                 try

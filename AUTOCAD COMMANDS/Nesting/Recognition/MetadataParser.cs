@@ -149,18 +149,30 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
         /// ("304") va duoc noi vao ten chuan: "SUS304" -> "INOX 304".
         ///
         /// Khong co "AL" / "GI" / "DONG" dung mot minh: qua de trung voi ma chi tiet / chu
-        /// thuong ("DONG GOI").
+        /// thuong ("DONG GOI"). Thu tu quan trong: mau truoc "an" chu truoc ("THEP KHONG GI" la
+        /// INOX, "TON DEN" la THEP, "TON LANH" khac "TON KEM" - roi moi den "TON" tron).
         /// </summary>
         public List<string> MaterialTypePatterns { get; set; } = new List<string>
         {
-            @"INOX=(?:INOX|SUS)\s*-?\s*(?<g>201|304L?|316L?|430)?",
+            @"INOX=(?:INOX|SUS)\s*-?\s*(?<g>201|304L?|316L?|430)?|THEP\s+KHONG\s+GI|KHONG\s+GI|STAINLESS(?:\s+STEEL)?",
             @"INOX=SS\s*-?\s*(?<g>201|304L?|316L?|430)",
-            @"THEP=THEP(?:\s+(?:DEN|CAN\s+NGUOI|CAN\s+NONG))?|SPCC|SPHC|SS\s*-?\s*400|CT\s*3|Q\s*235",
-            @"MA KEM=(?:TON\s+)?MA\s+KEM|TON\s+KEM|SGCC|SECC",
+            @"THEP=THEP(?:\s+(?:DEN|TAM|CAN\s+NGUOI|CAN\s+NONG))?|TON\s+DEN|SPCC|SPHC|SS\s*-?\s*400|CT\s*3|Q\s*235",
+            @"MA KEM=(?:TON\s+)?MA\s+KEM|TON\s+KEM|SGCC|SECC|GALV(?:ANI[SZ]ED)?",
+            @"TON LANH=TON\s+LANH|GALVALUME",
             @"NHOM=NHOM|ALU(?:MINIUM|MINUM)?|AL\s*-?\s*\d{4}|A\s*5052|A\s*6061",
             @"DONG=DONG\s+(?:DO|THAU|VANG)",
-            @"TON=TON"
+            @"TON=TON|TOLE"
         };
+
+        /// <summary>
+        /// QUY DOI loai vat lieu cua RIENG xuong nay, dang "CHU=LOAI" (vd. "TON=THEP",
+        /// "TOLE=THEP", "TON LANH=MA KEM"). Hai tac dung:
+        ///   - CHU (cum tu, khong phan biet dau / hoa thuong) xuat hien tren ban ve -> doc la LOAI,
+        ///     uu tien hon moi mau co san;
+        ///   - loai DA NHAN RA trung CHU (vd. "TON") -> doi ten thanh LOAI.
+        /// Rong = khong quy doi.
+        /// </summary>
+        public List<string> MaterialTypeAliases { get; set; } = new List<string>();
 
         public int DefaultQuantity { get; set; } = 1;
     }
@@ -185,21 +197,102 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
         private readonly Regex _keyword;
         private readonly List<Regex> _material = new List<Regex>();
         private readonly List<KeyValuePair<string, Regex>> _types = new List<KeyValuePair<string, Regex>>();
+        private readonly Dictionary<string, string> _aliasOf = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        // ---- Cach ghi DO DAY quen thuoc o xuong, doi ve dang "...MM" truoc khi doc ----
+
+        /// <summary>"1 LY 2" (doc mieng: mot ly hai) -> 1.2MM.</summary>
+        private static readonly Regex LySpoken = new Regex(
+            @"(?<![\p{L}\p{N}.,])(\d{1,2})\s*(?:LY|LI)\s*(\d)(?![\d.,])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        /// <summary>"1.2 LY", "1,5ly", "2 LI" -> MM.</summary>
+        private static readonly Regex LyUnit = new Regex(
+            @"(?<![\p{L}\p{N}.,])(\d{1,2}(?:[.,]\d{1,3})?)\s*(?:LY|LI)(?![\p{L}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        /// <summary>"T=1.2", "T: 1.5", "t = 2", "δ1.2", "δ=1.2" -> MM.</summary>
+        private static readonly Regex ThicknessSymbol = new Regex(
+            @"(?<![\p{L}\p{N}])(?:[Tt]\s*[=:]|[δΔ]\s*[=:]?)\s*(\d{1,2}(?:[.,]\d{1,3})?)(?![\d.,])(?!\s*MM)", RegexOptions.CultureInvariant);
+
+        /// <summary>"1.2T", "2T" -> MM.</summary>
+        private static readonly Regex ThicknessSuffixT = new Regex(
+            @"(?<![\p{L}\p{N}.,])(\d{1,2}(?:[.,]\d{1,3})?)\s*T(?![\p{L}\p{N}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        /// <summary>"DAY 1.2", "dày: 1.5" (khong don vi) -> MM.</summary>
+        private static readonly Regex ThicknessWord = new Regex(
+            @"(?<![\p{L}])(D[AÀÁ]Y\s*[:=]?\s*)(\d{1,2}(?:[.,]\d{1,3})?)(?![\d.,])(?!\s*MM)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        /// <summary>So TRAN ngay sau ten loai ("TON 1.2", "INOX: 2") - doc la do day.</summary>
+        private static readonly Regex BareNumber = new Regex(
+            @"\G\s*[:=]?\s*(?<v>[1-9]\d?(?:[.,]\d{1,3})?|0[.,]\d{1,3})(?![\d.,])(?!\s*[A-Z%])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        /// <summary>Doi cac cach ghi do day o xuong ve dang "...MM" ma bo doc da hieu.</summary>
+        internal static string NormalizeThicknessWriting(string text)
+        {
+            string t = LySpoken.Replace(text, "$1.$2MM");
+            t = LyUnit.Replace(t, "$1MM");
+            t = ThicknessSymbol.Replace(t, "$1MM");
+            t = ThicknessWord.Replace(t, "$1$2MM");
+            t = ThicknessSuffixT.Replace(t, "$1MM");
+            return t;
+        }
 
         public MetadataParser(MetadataRules rules)
         {
             _rules = rules ?? new MetadataRules();
             _keyword = new Regex(_rules.QuantityKeywordPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             foreach (string p in _rules.MaterialPatterns) _material.Add(new Regex(p, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+            // Quy doi cua nguoi dung chay TRUOC moi mau co san.
+            foreach (KeyValuePair<string, string> alias in ParseAliases(_rules.MaterialTypeAliases))
+            {
+                _aliasOf[alias.Key] = alias.Value;
+                string words = string.Join(@"\s+", Array.ConvertAll(alias.Key.Split(' '), Regex.Escape));
+                _types.Add(new KeyValuePair<string, Regex>(alias.Value, TypeRegex(words)));
+            }
+
             foreach (string p in _rules.MaterialTypePatterns ?? new List<string>())
             {
                 int eq = p == null ? -1 : p.IndexOf('=');
                 if (eq <= 0) continue;
-                _types.Add(new KeyValuePair<string, Regex>(
-                    p.Substring(0, eq).Trim().ToUpperInvariant(),
-                    new Regex(@"(?<![\p{L}\p{N}])(?:" + p.Substring(eq + 1) + @")(?![\p{L}])",
-                        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)));
+                _types.Add(new KeyValuePair<string, Regex>(p.Substring(0, eq).Trim().ToUpperInvariant(), TypeRegex(p.Substring(eq + 1))));
             }
+        }
+
+        /// <summary>
+        /// Mau loai vat lieu dung RIENG: khong dinh chu / so phia truoc, khong dinh chu phia sau,
+        /// va khong phai MA CHI TIET ("TON-01": gach noi roi so ngay sau).
+        /// </summary>
+        private static Regex TypeRegex(string body)
+        {
+            return new Regex(@"(?<![\p{L}\p{N}])(?:" + body + @")(?![\p{L}])(?!-\d)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+
+        /// <summary>"CHU=LOAI" -> cap (CHU, LOAI) da bo dau, viet hoa, gon khoang trang. Bo dong sai.</summary>
+        public static List<KeyValuePair<string, string>> ParseAliases(IEnumerable<string> aliases)
+        {
+            List<KeyValuePair<string, string>> list = new List<KeyValuePair<string, string>>();
+            if (aliases == null) return list;
+            foreach (string a in aliases)
+            {
+                int eq = a == null ? -1 : a.IndexOf('=');
+                if (eq <= 0) continue;
+                string from = CleanWords(a.Substring(0, eq)), to = CleanWords(a.Substring(eq + 1));
+                if (from.Length == 0 || to.Length == 0 || from == to) continue;
+                list.Add(new KeyValuePair<string, string>(from, to));
+            }
+
+            return list;
+        }
+
+        private static string CleanWords(string s)
+        {
+            return Regex.Replace(StripDiacritics(s ?? string.Empty).ToUpperInvariant(), @"[^A-Z0-9]+", " ").Trim();
+        }
+
+        /// <summary>Loai da nhan ra -> loai sau quy doi cua nguoi dung (khong co thi giu nguyen).</summary>
+        public string MapType(string type)
+        {
+            string mapped;
+            return type != null && _aliasOf.TryGetValue(type, out mapped) ? mapped : type;
         }
 
         public MetadataRules Rules { get { return _rules; } }
@@ -236,6 +329,9 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             MetadataReading reading = new MetadataReading();
             if (string.IsNullOrWhiteSpace(text)) return reading;
 
+            // "1.2 LY", "T=1.2", "1 LY 2"... -> "1.2MM" truoc, roi doc nhu cu.
+            text = NormalizeThicknessWriting(text);
+
             // Doc SL truoc va XOA phan da doc, de "SL 12" khong bao gio bi doc thanh vat lieu.
             char[] rest = text.ToCharArray();
             ClassifyQuantities(text, rest, reading);
@@ -256,23 +352,55 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             string plain = StripDiacritics(new string(rest)).ToUpperInvariant();
             bool[] taken = new bool[plain.Length];
 
-            foreach (KeyValuePair<string, Regex> t in _types)
+            // Gom MOI cho khop cua moi mau, roi lay theo DO DAI giam dan (bang nhau thi mau dung
+            // truoc thang - quy doi cua nguoi dung dung dau): "TON KEM" luon thang "TON", "THEP
+            // KHONG GI" luon thang "THEP", du "TON" / "THEP" co trong bang quy doi.
+            List<int[]> hits = new List<int[]>();          // {index, length, pattern}
+            for (int k = 0; k < _types.Count; k++)
             {
-                foreach (Match m in t.Value.Matches(plain))
+                foreach (Match m in _types[k].Value.Matches(plain))
                 {
-                    if (m.Length == 0) continue;
-                    bool overlap = false;
-                    for (int c = m.Index; c < m.Index + m.Length && !overlap; c++) overlap = taken[c];
-                    if (overlap) continue;
+                    if (m.Length > 0) hits.Add(new[] { m.Index, m.Length, k });
+                }
+            }
 
-                    Group g = m.Groups["g"];
-                    string value = g.Success && g.Length > 0 ? t.Key + " " + g.Value : t.Key;
-                    if (!reading.Facts.Exists(f => f.Kind == MetadataKind.MaterialType && f.Value == value))
-                    {
-                        reading.Facts.Add(new MetadataFact(MetadataKind.MaterialType, value, 0));
-                    }
+            hits.Sort((x, y) => x[1] != y[1] ? y[1].CompareTo(x[1]) : (x[2] != y[2] ? x[2].CompareTo(y[2]) : x[0].CompareTo(y[0])));
 
-                    for (int c = m.Index; c < m.Index + m.Length; c++)
+            List<int[]> chosen = new List<int[]>();
+            foreach (int[] h in hits)
+            {
+                bool overlap = false;
+                for (int c = h[0]; c < h[0] + h[1] && !overlap; c++) overlap = taken[c];
+                if (overlap) continue;
+                for (int c = h[0]; c < h[0] + h[1]; c++) taken[c] = true;
+                chosen.Add(h);
+            }
+
+            chosen.Sort((x, y) => x[0].CompareTo(y[0]));
+            foreach (int[] h in chosen)
+            {
+                KeyValuePair<string, Regex> t = _types[h[2]];
+                Match m = t.Value.Match(plain, h[0]);
+                Group g = m.Success && m.Index == h[0] ? m.Groups["g"] : null;
+                string value = MapType(g != null && g.Success && g.Length > 0 ? t.Key + " " + g.Value : t.Key);
+                if (!reading.Facts.Exists(f => f.Kind == MetadataKind.MaterialType && f.Value == value))
+                {
+                    reading.Facts.Add(new MetadataFact(MetadataKind.MaterialType, value, 0));
+                }
+
+                for (int c = h[0]; c < h[0] + h[1]; c++) rest[c] = ' ';
+
+                // "TON 1.2", "INOX: 2" - so tran ngay sau ten loai la DO DAY (chi khi chu nay
+                // chua co do day nao, va so nam trong khoang do day hop le).
+                if (reading.Facts.Exists(f => f.Kind == MetadataKind.Material)) continue;
+                Match num = BareNumber.Match(plain, h[0] + h[1]);
+                double th;
+                if (num.Success &&
+                    double.TryParse(num.Groups["v"].Value.Replace(',', '.'), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out th) &&
+                    th >= _rules.MinThicknessMm && th <= _rules.MaxThicknessMm)
+                {
+                    reading.Facts.Add(new MetadataFact(MetadataKind.Material, NormalizeMaterial(th), 0));
+                    for (int c = num.Index; c < num.Index + num.Length; c++)
                     {
                         taken[c] = true;
                         rest[c] = ' ';

@@ -54,6 +54,13 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             public string InvalidReason;
             public string Note;
             public RecognizedPart Part;
+
+            /// <summary>
+            /// Vong tu cat khong tim duoc duong bao ngoai cung -> da thay bang BAO LOI. Lam vong
+            /// ngoai thi an toan (bao loi chua het moi net); lam LO thi khong (lo to hon that) -
+            /// khi do lo bi coi la DAC.
+            /// </summary>
+            public bool Hulled;
         }
 
         public List<RecognizedPart> Build(IList<CurveChain> chains)
@@ -239,8 +246,17 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 if (loop.Depth % 2 == 0) continue;
                 RecognizedPart owner = loops[loop.Parent].Part;
                 loop.Part = owner;
-                owner.Holes.Add(loop.Data);
                 owner.GeometrySources.AddRange(loop.Data.Sources);
+
+                // Lo tu cat da thay bang bao loi thi lon hon lo that - coi la DAC (chi mat cho
+                // dat chi tiet vao lo, khong bao gio de chi tiet len vat lieu).
+                if (loop.Hulled)
+                {
+                    loop.Note = "Lo TU CAT (loi hinh hoc) - DA TU SUA: coi lo do la DAC, khong xep gi vao; xuat van giu nguyen net ve";
+                    continue;
+                }
+
+                owner.Holes.Add(loop.Data);
             }
 
             MergeTouchingLoops(loops, parts);
@@ -311,6 +327,20 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 }
                 else
                 {
+                    // Khong bo chi tiet: ghep theo BAO LOI (chua tron moi net, khe cat van dung).
+                    IntPoint[] hull = OuterBoundary.ConvexHull(new IList<IntPoint>[] { ring });
+                    if (hull != null && hull.Length >= 3)
+                    {
+                        ring = hull;
+                        data = new RecognizedLoop(ToPts(hull), sources, approximated);
+                        loops.Add(new Loop
+                        {
+                            Data = data, Ring = ring, Hulled = true,
+                            Note = "Duong bao TU CAT (loi hinh hoc) - DA TU SUA: ghep theo bao loi (ton vat lieu hon mot chut); xuat van giu nguyen net ve"
+                        });
+                        return;
+                    }
+
                     invalid = "Duong bao tu cat (self-intersecting)";
                 }
             }

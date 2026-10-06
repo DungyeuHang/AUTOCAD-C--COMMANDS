@@ -119,6 +119,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                 case "OutputToCurrentDrawing": if (bool.TryParse(val, out b)) s.OutputToCurrentDrawing = b; break;
                 case "MarkingLayers": s.MarkingLayers = SplitList(val); break;
                 case "EngravingLayers": s.EngravingLayers = SplitList(val); break;
+                case "MaterialTypeAliases": s.MaterialTypeAliases = SplitList(val); break;
                 case "DefaultSheetName": s.DefaultSheetName = val; break;
                 case "MaterialSheets":
                     s.MaterialSheets.Clear();
@@ -169,6 +170,7 @@ namespace AUTOCAD_COMMANDS.Nesting
                     "OutputToCurrentDrawing\t" + s.OutputToCurrentDrawing,
                     "MarkingLayers\t" + string.Join(";", s.MarkingLayers.ToArray()),
                     "EngravingLayers\t" + string.Join(";", s.EngravingLayers.ToArray()),
+                    "MaterialTypeAliases\t" + string.Join(";", (s.MaterialTypeAliases ?? new List<string>()).ToArray()),
                     "DefaultSheetName\t" + s.DefaultSheetName,
                     "MaterialSheets\t" + string.Join(";", pairs.ToArray()),
                     "KeepPartBlocks\t" + s.OutputAsBlocks,

@@ -38,6 +38,25 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                     builder.DroppedOpenGroups));
             }
 
+            // KHONG BO chi tiet loi hinh hoc: tu sua de van ghep duoc (xem RepairOpenRecords /
+            // MergeSharedSources). Hinh dung de ghep luon BAO TRON moi net that, nen khe cat
+            // giua cac net that van dung; net ve xuat ra van y nguyen ban ve.
+            int repaired = RepairOpenRecords(records, chains);
+            int mergedBlocks = MergeSharedSources(records);
+            if (repaired > 0)
+            {
+                result.GlobalWarnings.Add(string.Format(CultureInfo.InvariantCulture,
+                    "{0} chi tiet co duong bao HO / suy bien - DA TU SUA de van ghep (xem cot Ghi chu). Net ve tren ban ve van giu nguyen - kiem tra truoc khi cat.",
+                    repaired));
+            }
+
+            if (mergedBlocks > 0)
+            {
+                result.GlobalWarnings.Add(string.Format(CultureInfo.InvariantCulture,
+                    "{0} doi tuong (vd. block) chua hinh cua nhieu chi tiet - moi cai GHEP NHU 1 PHOI. Muon ghep rieng thi EXPLODE block truoc.",
+                    mergedBlocks));
+            }
+
             // Reading order: top row first, then left to right (rows = 1/2 of the median height).
             List<RecognizedPart> valid = records.FindAll(r => r.Outer != null);
             double rowBand = MedianHeight(valid) * 0.5;
@@ -63,34 +82,6 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
                 r.Name = "LOI" + (++bad).ToString(CultureInfo.InvariantCulture);
             }
 
-            // One source entity (typically a block) feeding several records cannot be output
-            // per part without duplicating geometry -> report instead of guessing.
-            Dictionary<int, List<RecognizedPart>> bySource = new Dictionary<int, List<RecognizedPart>>();
-            foreach (RecognizedPart r in records)
-            {
-                foreach (int s in r.GeometrySources)
-                {
-                    List<RecognizedPart> owners;
-                    if (!bySource.TryGetValue(s, out owners))
-                    {
-                        owners = new List<RecognizedPart>();
-                        bySource[s] = owners;
-                    }
-
-                    if (!owners.Contains(r)) owners.Add(r);
-                }
-            }
-
-            foreach (List<RecognizedPart> owners in bySource.Values)
-            {
-                if (owners.Count < 2) continue;
-                foreach (RecognizedPart r in owners)
-                {
-                    r.Escalate(PartStatus.InvalidGeometry,
-                        "Mot doi tuong (vd. block) chua hinh cua nhieu chi tiet - hay EXPLODE/tach block truoc");
-                }
-            }
-
             new TextPartAssociator(_settings).Associate(records, texts ?? new List<TextItem>(), result.GlobalWarnings);
 
             foreach (RecognizedPart r in records)
@@ -105,6 +96,269 @@ namespace AUTOCAD_COMMANDS.Nesting.Recognition
             records.Sort((a, b) => a.Index.CompareTo(b.Index));
             result.Parts.AddRange(records);
             return result;
+        }
+
+        /// <summary>
+        /// Ban ghi KHONG co duong bao kin (duong bao HO, dien tich ~0): dung hinh de ghep tu
+        /// chinh cac net cua no, theo thu tu uu tien:
+        ///   1. noi khe ho giua HAI dau ho (neu dung hai dau) roi lay duong bao ngoai cung,
+        ///   2. bao loi cua moi net,
+        ///   3. hinh chu nhat bao (net thang hang / trung nhau), day toi thieu 1 mm.
+        /// Ca ba deu BAO TRON moi net that -> khe cat giua net that va chi tiet khac van dung.
+        /// Net khe ho chi dung de ghep, KHONG ve ra: ban ve xuat van y nguyen (van ho).
+        /// </summary>
+        private int RepairOpenRecords(List<RecognizedPart> records, IList<CurveChain> chains)
+        {
+            Dictionary<int, List<CurveChain>> bySource = new Dictionary<int, List<CurveChain>>();
+            foreach (CurveChain c in chains)
+            {
+                List<CurveChain> list;
+                if (!bySource.TryGetValue(c.SourceIndex, out list))
+                {
+                    list = new List<CurveChain>();
+                    bySource[c.SourceIndex] = list;
+                }
+
+                list.Add(c);
+            }
+
+            long tol = Math.Max(1, NestUnits.ToUnits(Math.Max(_settings.JoinTolerance, 0.001)));
+            int repaired = 0;
+            foreach (RecognizedPart r in records)
+            {
+                if (r.Outer != null || r.Status != PartStatus.InvalidGeometry) continue;
+
+                List<IList<IntPoint>> paths = new List<IList<IntPoint>>();
+                List<bool> closed = new List<bool>();
+                bool approximated = false;
+                foreach (int src in r.GeometrySources)
+                {
+                    List<CurveChain> list;
+                    if (!bySource.TryGetValue(src, out list)) continue;
+                    foreach (CurveChain c in list)
+                    {
+                        List<IntPoint> pts = new List<IntPoint>(c.Points.Count);
+                        foreach (Pt q in c.Points) pts.Add(IntPoint.FromMm(q.X, q.Y));
+                        paths.Add(pts);
+                        closed.Add(c.Closed);
+                        approximated |= c.Approximated;
+                    }
+                }
+
+                if (paths.Count == 0) continue;
+
+                string how = "duong bao ngoai cung (da noi khe ho)";
+                List<IntPoint> ends = FreeEnds(paths, closed, tol);
+                if (ends.Count == 2)
+                {
+                    paths.Add(new List<IntPoint> { ends[0], ends[1] });
+                    closed.Add(false);
+                }
+
+                IntPoint[] outline = OuterBoundary.Of(paths, closed);
+                if (outline == null || Math.Abs(GeometryMath.SignedArea(outline)) / 1e6 < _settings.MinLoopArea)
+                {
+                    outline = OuterBoundary.ConvexHull(paths);
+                    how = "bao loi";
+                }
+
+                if (outline == null || outline.Length < 3 || Math.Abs(GeometryMath.SignedArea(outline)) / 1e6 < _settings.MinLoopArea)
+                {
+                    outline = BoundingRectangle(paths, NestUnits.ToUnits(1.0));
+                    how = "hinh chu nhat bao (net thang hang / trung nhau)";
+                }
+
+                List<Pt> ring = new List<Pt>(outline.Length);
+                foreach (IntPoint q in outline) ring.Add(new Pt(NestUnits.ToMm(q.X), NestUnits.ToMm(q.Y)));
+                r.Outer = new RecognizedLoop(ring, new List<int>(r.GeometrySources), approximated);
+                r.MinX = r.Outer.MinX;
+                r.MinY = r.Outer.MinY;
+                r.MaxX = r.Outer.MaxX;
+                r.MaxY = r.Outer.MaxY;
+                r.Status = PartStatus.Warning;
+                r.Include = true;
+                r.Notes.Add("DA TU SUA loi hinh hoc: ghep theo " + how + ". Net ve xuat ra van y nguyen - kiem tra truoc khi cat");
+                repaired++;
+            }
+
+            return repaired;
+        }
+
+        /// <summary>Dau mut cua cac net HO khong trung dau mut nao khac (sai so <paramref name="tol"/>).</summary>
+        private static List<IntPoint> FreeEnds(List<IList<IntPoint>> paths, List<bool> closed, long tol)
+        {
+            List<IntPoint> ends = new List<IntPoint>();
+            for (int i = 0; i < paths.Count; i++)
+            {
+                if (closed[i] || paths[i].Count < 2) continue;
+                ends.Add(paths[i][0]);
+                ends.Add(paths[i][paths[i].Count - 1]);
+            }
+
+            List<IntPoint> free = new List<IntPoint>();
+            for (int i = 0; i < ends.Count; i++)
+            {
+                int same = 0;
+                for (int j = 0; j < ends.Count; j++)
+                {
+                    if (i != j && Math.Abs(ends[i].X - ends[j].X) <= tol && Math.Abs(ends[i].Y - ends[j].Y) <= tol) same++;
+                }
+
+                if (same == 0) free.Add(ends[i]);
+            }
+
+            return free;
+        }
+
+        private static IntPoint[] BoundingRectangle(List<IList<IntPoint>> paths, long minThickness)
+        {
+            long minX = long.MaxValue, minY = long.MaxValue, maxX = long.MinValue, maxY = long.MinValue;
+            foreach (IList<IntPoint> p in paths)
+            {
+                foreach (IntPoint q in p)
+                {
+                    minX = Math.Min(minX, q.X);
+                    minY = Math.Min(minY, q.Y);
+                    maxX = Math.Max(maxX, q.X);
+                    maxY = Math.Max(maxY, q.Y);
+                }
+            }
+
+            if (maxX - minX < minThickness)
+            {
+                long c = (minX + maxX) / 2;
+                minX = c - minThickness / 2;
+                maxX = minX + minThickness;
+            }
+
+            if (maxY - minY < minThickness)
+            {
+                long c = (minY + maxY) / 2;
+                minY = c - minThickness / 2;
+                maxY = minY + minThickness;
+            }
+
+            return new[] { new IntPoint(minX, minY), new IntPoint(maxX, minY), new IntPoint(maxX, maxY), new IntPoint(minX, maxY) };
+        }
+
+        /// <summary>
+        /// Mot doi tuong (thuong la BLOCK) chua hinh cua NHIEU ban ghi: khong tach rieng duoc khi
+        /// xuat (sao chep block cho tung chi tiet se nhan doi hinh). Truoc day ca nhom bi khoa
+        /// "loi hinh hoc" va bi bo. Gio GOP thanh MOT phoi: hinh ghep = duong bao ngoai cung cua
+        /// ca nhom (khong duoc thi bao loi), lo coi la dac. Tra ve so nhom da gop.
+        /// </summary>
+        private static int MergeSharedSources(List<RecognizedPart> records)
+        {
+            int n = records.Count;
+            int[] root = new int[n];
+            for (int i = 0; i < n; i++) root[i] = i;
+            Func<int, int> find = null;
+            find = x => root[x] == x ? x : (root[x] = find(root[x]));
+
+            Dictionary<int, int> firstOwner = new Dictionary<int, int>();
+            for (int i = 0; i < n; i++)
+            {
+                foreach (int src in records[i].GeometrySources)
+                {
+                    int other;
+                    if (firstOwner.TryGetValue(src, out other))
+                    {
+                        int a = find(other), b = find(i);
+                        if (a != b) root[b] = a;
+                    }
+                    else
+                    {
+                        firstOwner[src] = i;
+                    }
+                }
+            }
+
+            Dictionary<int, List<RecognizedPart>> groups = new Dictionary<int, List<RecognizedPart>>();
+            for (int i = 0; i < n; i++)
+            {
+                List<RecognizedPart> g;
+                if (!groups.TryGetValue(find(i), out g))
+                {
+                    g = new List<RecognizedPart>();
+                    groups[find(i)] = g;
+                }
+
+                g.Add(records[i]);
+            }
+
+            int merged = 0;
+            foreach (List<RecognizedPart> group in groups.Values)
+            {
+                if (group.Count < 2) continue;
+
+                List<IList<IntPoint>> paths = new List<IList<IntPoint>>();
+                List<bool> closed = new List<bool>();
+                bool approximated = false;
+                RecognizedPart main = null;
+                foreach (RecognizedPart r in group)
+                {
+                    if (r.Outer == null) continue;
+                    List<IntPoint> pts = new List<IntPoint>(r.Outer.Points.Count);
+                    foreach (Pt q in r.Outer.Points) pts.Add(IntPoint.FromMm(q.X, q.Y));
+                    paths.Add(pts);
+                    closed.Add(true);
+                    approximated |= r.Outer.Approximated;
+                    if (main == null || r.Outer.Area > main.Outer.Area) main = r;
+                }
+
+                if (main == null) continue;
+
+                IntPoint[] outline = OuterBoundary.Of(paths, closed) ?? OuterBoundary.ConvexHull(paths);
+                if (outline == null || outline.Length < 3) continue;
+
+                List<int> sources = new List<int>();
+                foreach (RecognizedPart r in group)
+                {
+                    foreach (int s in r.GeometrySources)
+                    {
+                        if (!sources.Contains(s)) sources.Add(s);
+                    }
+                }
+
+                List<Pt> ring = new List<Pt>(outline.Length);
+                foreach (IntPoint q in outline) ring.Add(new Pt(NestUnits.ToMm(q.X), NestUnits.ToMm(q.Y)));
+                main.Outer = new RecognizedLoop(ring, sources, approximated);
+                main.Holes.Clear();
+                main.MinX = main.Outer.MinX;
+                main.MinY = main.Outer.MinY;
+                main.MaxX = main.Outer.MaxX;
+                main.MaxY = main.Outer.MaxY;
+
+                foreach (RecognizedPart r in group)
+                {
+                    if (r == main) continue;
+                    foreach (int s in r.GeometrySources)
+                    {
+                        if (!main.GeometrySources.Contains(s)) main.GeometrySources.Add(s);
+                    }
+
+                    foreach (int s in r.MarkingSources)
+                    {
+                        if (!main.MarkingSources.Contains(s)) main.MarkingSources.Add(s);
+                    }
+
+                    foreach (string note in r.Notes)
+                    {
+                        if (!main.Notes.Contains(note)) main.Notes.Add(note);
+                    }
+
+                    records.Remove(r);
+                }
+
+                main.Status = PartStatus.Warning;
+                main.Include = true;
+                main.Notes.Add(string.Format(CultureInfo.InvariantCulture,
+                    "Mot doi tuong (vd. block) chua hinh {0} chi tiet - DA GOP thanh 1 PHOI (ghep ca khoi, lo coi la dac). Muon ghep rieng thi EXPLODE block",
+                    group.Count));
+                merged++;
+            }
+
+            return merged;
         }
 
         /// <summary>

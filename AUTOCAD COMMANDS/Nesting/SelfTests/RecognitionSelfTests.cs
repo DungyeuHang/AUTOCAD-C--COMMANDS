@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
+using AUTOCAD_COMMANDS.Nesting.Core;
 using AUTOCAD_COMMANDS.Nesting.Recognition;
 using static AUTOCAD_COMMANDS.Nesting.SelfTests.NestingTestHarness;
 
@@ -17,9 +18,9 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "R03. Khong qua de dai (150MM, ASL 3, SL 0)", R03_NotTooPermissive);
             NestingTestHarness.Run(report, "R04. Duong bao tu 4 LINE roi -> 1 chi tiet", R04_LinesFormOnePart);
             NestingTestHarness.Run(report, "R05. Lo ben trong + chi tiet nam trong lo", R05_HoleAndPartInHole);
-            NestingTestHarness.Run(report, "R06. Duong bao ho -> INVALID GEOMETRY", R06_OpenContourInvalid);
+            NestingTestHarness.Run(report, "R06. Duong bao ho -> VAN LA 1 PHOI (tu noi khe ho, van ghep)", R06_OpenContourInvalid);
             NestingTestHarness.Run(report, "R07. Duong chan ben trong -> marking, khong loi", R07_BendLineInsideIsMarking);
-            NestingTestHarness.Run(report, "R08. Duong bao tu cat -> INVALID GEOMETRY", R08_SelfIntersectionInvalid);
+            NestingTestHarness.Run(report, "R08. Duong bao tu cat -> VAN GHEP (bao loi)", R08_SelfIntersectionInvalid);
             NestingTestHarness.Run(report, "R09. Text trong chi tiet duoc gan", R09_TextInside);
             NestingTestHarness.Run(report, "R10. Text NGOAI chi tiet -> gan chi tiet gan nhat", R10_TextOutsideNearest);
             NestingTestHarness.Run(report, "R11. Text o giua 2 chi tiet -> AMBIGUOUS", R11_TextAmbiguous);
@@ -27,10 +28,10 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "R13. Hai SL khac nhau cho 1 chi tiet -> AMBIGUOUS", R13_ConflictingQuantities);
             NestingTestHarness.Run(report, "R14. Text qua xa -> canh bao chung", R14_TextTooFar);
             NestingTestHarness.Run(report, "R15. Hinh re nhanh -> GOP theo duong bao ngoai cung", R15_BranchingInvalid);
-            NestingTestHarness.Run(report, "R16. Duong trung nhau (dien tich 0) -> INVALID", R16_ZeroArea);
+            NestingTestHarness.Run(report, "R16. Duong trung nhau (dien tich 0) -> VAN GHEP (chu nhat bao)", R16_ZeroArea);
             NestingTestHarness.Run(report, "R17. Ban ghi mo ho chua xac nhan bi chan", R17_UnconfirmedAmbiguousBlocked);
             NestingTestHarness.Run(report, "R17b. Chu giua hai chi tiet: ben da co SL thi gan cho ben chua co", R17b_BetweenTwoPartsResolved);
-            NestingTestHarness.Run(report, "R18. 1 block chua 2 chi tiet -> INVALID (khong nhan doi)", R18_SharedSourceInvalid);
+            NestingTestHarness.Run(report, "R18. 1 block chua 2 chi tiet -> GOP thanh 1 phoi (khong nhan doi)", R18_SharedSourceInvalid);
             NestingTestHarness.Run(report, "R19. Hinh tren layer danh dau gan vao chi tiet chua no", R19_AttachMarking);
             NestingTestHarness.Run(report, "R20. SL trong + vat lieu ngoai (2 vi tri khac nhau)", R20_SlInsideMaterialOutside);
             NestingTestHarness.Run(report, "R21. Vat lieu ngoai, SL ngoai o 2 phia", R21_BothOutsideDifferentSides);
@@ -63,6 +64,8 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             NestingTestHarness.Run(report, "R47. Loai vat lieu: INOX / SUS304 / THEP / MA KEM; INOX va THEP cung do day KHONG tron", R47_MaterialTypes);
             NestingTestHarness.Run(report, "R48. Ten vat lieu: tach / ghep / danh muc kho ghi do day, loai hoac ca hai", R48_MaterialNameMatching);
             NestingTestHarness.Run(report, "R49. Phoi GIONG HET phoi khac ma khong co chu -> MO HO (ban sao / doi xung)", R49_UntextedTwinFlagged);
+            NestingTestHarness.Run(report, "R50. Cach ghi o xuong: TON DEN / TON LANH / THEP KHONG GI / 1.2 LY / 1 LY 2 / T=1.2 / TON 1.2", R50_WorkshopWritings);
+            NestingTestHarness.Run(report, "R51. Bang QUY DOI loai cua xuong (TON=THEP, TOLE=THEP)", R51_TypeAliases);
         }
 
         private static void R46_MultiLineMTextNameAndMaterial()
@@ -156,6 +159,71 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             List<string> sorted = new List<string> { "THEP 10MM", "INOX 2MM", "THEP 2MM", "INOX 1.2MM" };
             sorted.Sort(Core.MaterialName.Compare);
             Equal("INOX 1.2MM|INOX 2MM|THEP 2MM|THEP 10MM", string.Join("|", sorted.ToArray()), "sap theo loai roi do day (so)");
+        }
+
+        private static void R50_WorkshopWritings()
+        {
+            MetadataParser p = new MetadataParser(new MetadataRules());
+            string[,] cases =
+            {
+                // chu tren ban ve          loai           do day
+                { "TÔN 1.2MM",              "TON",         "1.2MM" },
+                { "TÔN ĐEN 1.5MM",          "THEP",        "1.5MM" },
+                { "TÔN LẠNH 0.8MM",         "TON LANH",    "0.8MM" },
+                { "TÔN MẠ KẼM 1MM",         "MA KEM",      "1MM" },
+                { "THÉP KHÔNG GỈ 1.2MM",    "INOX",        "1.2MM" },
+                { "THÉP TẤM 3MM",           "THEP",        "3MM" },
+                { "INOX 1.2 LY",            "INOX",        "1.2MM" },
+                { "TÔN 1 LY 2",             "TON",         "1.2MM" },
+                { "1,5 ly",                 "",            "1.5MM" },
+                { "TÔN 1.2",                "TON",         "1.2MM" },
+                { "SUS304 1.2",             "INOX 304",    "1.2MM" },
+                { "INOX T=1.2",             "INOX",        "1.2MM" },
+                { "1.2T",                   "",            "1.2MM" },
+                { "δ1.2",                   "",            "1.2MM" },
+                { "dày 1.2",                "",            "1.2MM" },
+                { "GALV 1.2MM",             "MA KEM",      "1.2MM" },
+                { "TOLE 1.2MM",             "TON",         "1.2MM" },
+                { "SL: 3 INOX 2",           "INOX",        "2MM" },
+                { "INOX 304",               "INOX 304",    "" },
+                { "TON-01",                 "",            "" }
+            };
+
+            for (int i = 0; i < cases.GetLength(0); i++)
+            {
+                List<MetadataFact> f = p.Parse(cases[i, 0]);
+                MetadataFact type = f.Find(x => x.Kind == MetadataKind.MaterialType);
+                MetadataFact thick = f.Find(x => x.Kind == MetadataKind.Material);
+                Equal(cases[i, 1], type == null ? string.Empty : type.Value, "'" + cases[i, 0] + "' loai");
+                Equal(cases[i, 2], thick == null ? string.Empty : thick.Value, "'" + cases[i, 0] + "' do day");
+            }
+
+            // Khong duoc doc nham: kich thuoc, SL, ma chi tiet.
+            Equal(0, p.Parse("R12.5").Count, "R12.5 khong phai do day");
+            Equal(0, p.Parse("150MM").Count, "150MM la kich thuoc");
+            Equal(1, p.Parse("SL: 2 cai").Count, "chi co SL");
+            Equal(3, p.Parse("SL: 2 T=1.2 INOX").Count, "SL + do day + loai");
+        }
+
+        private static void R51_TypeAliases()
+        {
+            MetadataRules rules = new MetadataRules { MaterialTypeAliases = new List<string> { "tôn=thép", "TOLE = THEP", "sai dong", "=X" } };
+            MetadataParser p = new MetadataParser(rules);
+            Equal("THEP", p.ParseType("TÔN"), "TON quy doi thanh THEP");
+            Equal("THEP", p.ParseType("tole"), "chu moi TOLE -> THEP");
+            Equal("MA KEM", p.ParseType("TON KEM"), "TON KEM van la MA KEM: cum dai hon luon thang");
+            Equal("THEP", p.MapType("TON"), "doi ten loai da nhan ra");
+            Equal("INOX", p.MapType("INOX"), "loai khong quy doi giu nguyen");
+            Equal(2, MetadataParser.ParseAliases(rules.MaterialTypeAliases).Count, "bo dong sai");
+
+            // Nhan dang: TON 1.2MM va THEP 1.2MM thanh CUNG vat lieu.
+            RecognitionSettings rs = new RecognitionSettings();
+            rs.Metadata.DefaultMaterialType = "THEP";
+            rs.Metadata.MaterialTypeAliases = new List<string> { "TON=THEP" };
+            RecognitionResult r = new PartRecognizer(rs).Recognize(
+                new List<CurveChain> { Box(0, 0, 200, 100), Box(600, 0, 200, 100) },
+                new[] { Text("SL: 1\nTÔN 1.2MM", 100, 50), Text("SL: 1\n1.2MM", 700, 50) });
+            Equal(At(r, 0).Material, At(r, 600).Material, "TON quy doi = THEP mac dinh -> ghep chung");
         }
 
         private static void R49_UntextedTwinFlagged()
@@ -259,8 +327,13 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
                 new CurveChain(900, new List<Pt> { new Pt(300, 0), new Pt(400, 0), new Pt(400, 100), new Pt(300, 100) }, true)
             };
             RecognitionResult r = Recognize(c);
-            Equal(2, r.Parts.Count, "two records");
-            foreach (RecognizedPart p in r.Parts) Equal(PartStatus.InvalidGeometry, p.Status, "shared source flagged");
+
+            // Khong tach duoc khi xuat (sao chep block hai lan = nhan doi hinh) -> GOP thanh 1 phoi.
+            Equal(1, r.Parts.Count, "gop thanh mot phoi");
+            True(r.Parts[0].IsNestable && r.Parts[0].Include, "van duoc ghep");
+            True(r.Parts[0].NotesText.Contains("DA GOP"), "noi ro: " + r.Parts[0].NotesText);
+            AssertCoversChains(r.Parts[0], c);
+            AssertNestsValid(r);
         }
 
         private static void R19_AttachMarking()
@@ -408,8 +481,8 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             };
 
             RecognitionResult a = Recognize(almost);
-            Equal(1, a.Parts.Count, "duong bao dinh ve kin ma ho khe thi PHAI giu lai de sua");
-            Equal(PartStatus.InvalidGeometry, a.Parts[0].Status, "va bao la hinh hoc loi");
+            Equal(1, a.Parts.Count, "duong bao dinh ve kin ma ho khe thi PHAI giu lai");
+            True(a.Parts[0].IsNestable && a.Parts[0].NotesText.Contains("HO"), "giu lai, van ghep, va bao la duong bao ho");
 
             // (b) mot net thang thua -> BO, nhung co dem
             RecognitionResult b = Recognize(new List<CurveChain> { Chain(false, 0, 0, 200, 80) });
@@ -668,9 +741,41 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             };
             RecognitionResult r = Recognize(c);
             Equal(1, r.Parts.Count, "one record");
-            Equal(PartStatus.InvalidGeometry, r.Parts[0].Status, "open contour is invalid");
-            True(!r.Parts[0].Include, "excluded by default");
-            True(r.Parts[0].NotesText.Contains("HO"), "reason mentions open contour: " + r.Parts[0].NotesText);
+            RecognizedPart p = r.Parts[0];
+
+            // KHONG bo: duong bao ho van la MOT phoi, tu noi khe ho de ghep.
+            True(p.IsNestable && p.Include, "duong bao ho van duoc ghep");
+            Equal(PartStatus.Warning, p.Status, "chi la canh bao");
+            True(p.NotesText.Contains("HO"), "van noi ro la duong bao ho: " + p.NotesText);
+            True(p.NotesText.Contains("DA TU SUA"), "noi ro da tu sua");
+            Close(100.0 * 50.0, p.Outer.Area, 1.0, "noi khe ho -> dung hinh chu nhat 100 x 50");
+            AssertCoversChains(p, c);
+            AssertNestsValid(r);
+        }
+
+        /// <summary>Hinh dung de ghep phai CHUA moi diem cua moi net that (an toan khe cat).</summary>
+        private static void AssertCoversChains(RecognizedPart p, IEnumerable<CurveChain> chains)
+        {
+            List<IntPoint> ring = new List<IntPoint>();
+            foreach (Pt q in p.Outer.Points) ring.Add(IntPoint.FromMm(q.X, q.Y));
+            foreach (CurveChain ch in chains)
+            {
+                foreach (Pt q in ch.Points)
+                {
+                    True(GeometryMath.PointInRing(IntPoint.FromMm(q.X, q.Y), ring) >= 0, "net that nam trong hinh ghep: " + q);
+                }
+            }
+        }
+
+        /// <summary>Ban ghi da sua phai di qua ghep that + validator.</summary>
+        private static void AssertNestsValid(RecognitionResult r)
+        {
+            foreach (RecognizedPart p in r.Parts) p.Confirmed = true;
+            NestingRequest req = new NestingRequest { DefaultSheet = new SheetSpec("K", 2000, 1000), Settings = new NestingSettings() };
+            req.Groups.AddRange(PartRecognizer.ToPartGroups(r.Parts, 0.05));
+            NestingResult res = new SimpleNestingEngine().Nest(req, System.Threading.CancellationToken.None, null);
+            True(res.Validation.IsValid, "validator");
+            Equal(0, res.Statistics.UnplacedQuantity, "xep het");
         }
 
         private static void R07_BendLineInsideIsMarking()
@@ -691,7 +796,12 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
         {
             List<CurveChain> c = new List<CurveChain> { Chain(true, 0, 0, 100, 100, 100, 0, 0, 100) };
             RecognitionResult r = Recognize(c);
-            Equal(PartStatus.InvalidGeometry, r.Parts[0].Status, "bow-tie is invalid");
+            Equal(1, r.Parts.Count, "mot phoi");
+            True(r.Parts[0].IsNestable && r.Parts[0].Include, "tu cat van duoc ghep");
+            Equal(PartStatus.Warning, r.Parts[0].Status, "chi la canh bao");
+            True(r.Parts[0].NotesText.Contains("DA TU SUA"), "noi ro da tu sua: " + r.Parts[0].NotesText);
+            AssertCoversChains(r.Parts[0], c);
+            AssertNestsValid(r);
         }
 
         private static void R09_TextInside()
@@ -1200,7 +1310,10 @@ namespace AUTOCAD_COMMANDS.Nesting.SelfTests
             List<CurveChain> c = new List<CurveChain> { Chain(false, 0, 0, 100, 0), Chain(false, 100, 0, 0, 0) };
             RecognitionResult r = Recognize(c);
             Equal(1, r.Parts.Count, "one record");
-            Equal(PartStatus.InvalidGeometry, r.Parts[0].Status, "zero area invalid");
+            True(r.Parts[0].IsNestable, "dien tich 0 van thanh phoi (hinh chu nhat bao, day 1 mm)");
+            Equal(PartStatus.Warning, r.Parts[0].Status, "chi la canh bao");
+            AssertCoversChains(r.Parts[0], c);
+            AssertNestsValid(r);
         }
 
         private static void R17b_BetweenTwoPartsResolved()
