@@ -39,6 +39,8 @@ namespace AUTOCAD_COMMANDS
         private readonly WF.TextBox _originalBundlesBox;
         private readonly WF.TextBox _newBundlesBox;
         private readonly WF.ComboBox _outputFormatBox;
+        private readonly WF.Panel _scrollHost;
+        private readonly WF.CheckBox _ignoreCaseBox;
 
         public SllChangeSlBoForm(IEnumerable<string> recentFormats, SllChangeSlBoCommands.SllChangeSlBoSession lastSession)
         {
@@ -54,7 +56,7 @@ namespace AUTOCAD_COMMANDS
             Text = "SLL_CHANGE_SL_BO - Đổi số lượng SL";
             StartPosition = WF.FormStartPosition.CenterParent;
             MinimumSize = new Size(480, 560);
-            Size = new Size(520, 640);
+            Size = new Size(520, 720);
             FormBorderStyle = WF.FormBorderStyle.SizableToolWindow;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -76,6 +78,7 @@ namespace AUTOCAD_COMMANDS
                 AutoSizeMode = WF.AutoSizeMode.GrowAndShrink
             };
             content.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
+            _scrollHost = scrollHost;
             scrollHost.Controls.Add(content);
 
             int row = 0;
@@ -126,11 +129,12 @@ namespace AUTOCAD_COMMANDS
             _inputFormatsLayout = new WF.TableLayoutPanel
             {
                 Dock = WF.DockStyle.Fill,
-                ColumnCount = 2,
+                ColumnCount = 3,
                 AutoSize = true,
                 AutoSizeMode = WF.AutoSizeMode.GrowAndShrink,
                 Margin = new WF.Padding(0, 8, 0, 4)
             };
+            _inputFormatsLayout.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
             _inputFormatsLayout.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.Percent, 100f));
             _inputFormatsLayout.ColumnStyles.Add(new WF.ColumnStyle(WF.SizeType.AutoSize));
             AddContentRow(content, ref row, _inputFormatsLayout);
@@ -150,6 +154,19 @@ namespace AUTOCAD_COMMANDS
             _outputFormatBox = CreateFormatComboBox(lastSession?.OutputPattern ?? _defaultFormat);
             _outputFormatBox.Margin = new WF.Padding(0, 8, 0, 4);
             AddContentRow(content, ref row, _outputFormatBox);
+
+            AddContentRow(content, ref row, CreateSectionHeader("TÙY CHỌN"));
+            AddContentRow(content, ref row, CreateSeparator());
+
+            _ignoreCaseBox = new WF.CheckBox
+            {
+                Text = "Không phân biệt chữ hoa / chữ thường (vd \"SL\" khớp cả \"sl\", \"Sl\")",
+                AutoSize = true,
+                MaximumSize = new Size(440, 0),
+                Checked = lastSession?.IgnoreCase ?? false,
+                Margin = new WF.Padding(0, 8, 0, 4)
+            };
+            AddContentRow(content, ref row, _ignoreCaseBox);
 
             Controls.Add(scrollHost);
 
@@ -201,7 +218,12 @@ namespace AUTOCAD_COMMANDS
             CancelButton = cancelButton;
 
             RebuildInputFormatRows();
+
+            // Tránh việc ComboBox tự bôi xanh toàn bộ chữ khi mở bảng.
+            Shown += (_, __) => ClearComboSelections();
         }
+
+        public bool IgnoreCase { get; private set; }
 
         public int OriginalBundles { get; private set; }
 
@@ -246,8 +268,8 @@ namespace AUTOCAD_COMMANDS
             {
                 Dock = WF.DockStyle.Fill,
                 DropDownStyle = WF.ComboBoxStyle.DropDown,
-                AutoCompleteMode = WF.AutoCompleteMode.SuggestAppend,
-                AutoCompleteSource = WF.AutoCompleteSource.ListItems
+                // Không dùng auto-complete: nó tự bôi xanh chữ gợi ý. Vẫn chọn được từ danh sách xổ xuống.
+                AutoCompleteMode = WF.AutoCompleteMode.None
             };
 
             foreach (string format in _recentFormats)
@@ -286,34 +308,86 @@ namespace AUTOCAD_COMMANDS
 
             for (int i = 0; i < _inputFormatValues.Count; i++)
             {
-                int rowIndex = i;
-                _inputFormatsLayout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
-
-                WF.ComboBox combo = CreateFormatComboBox(_inputFormatValues[rowIndex]);
-                combo.Margin = new WF.Padding(0, 0, 6, 4);
-                combo.TextChanged += (_, __) => _inputFormatValues[rowIndex] = combo.Text;
-                _inputFormatsLayout.Controls.Add(combo, 0, rowIndex);
-
-                WF.Button removeButton = new WF.Button
-                {
-                    Text = "−",
-                    Width = 32,
-                    Height = 23,
-                    Margin = new WF.Padding(0, 0, 0, 4),
-                    Enabled = _inputFormatValues.Count > 1
-                };
-                removeButton.Click += (_, __) => RemoveInputFormatRow(rowIndex);
-                _inputFormatsLayout.Controls.Add(removeButton, 1, rowIndex);
+                AppendInputFormatControls(i);
             }
 
             _inputFormatsLayout.ResumeLayout(true);
+            ClearComboSelections();
         }
 
+        private WF.ComboBox AppendInputFormatControls(int rowIndex)
+        {
+            _inputFormatsLayout.RowCount = Math.Max(_inputFormatsLayout.RowCount, rowIndex + 1);
+            _inputFormatsLayout.RowStyles.Add(new WF.RowStyle(WF.SizeType.AutoSize));
+
+            WF.Label numberLabel = new WF.Label
+            {
+                Text = (rowIndex + 1).ToString(CultureInfo.InvariantCulture) + ".",
+                AutoSize = true,
+                Anchor = WF.AnchorStyles.Left,
+                ForeColor = SystemColors.GrayText,
+                Margin = new WF.Padding(0, 0, 6, 4)
+            };
+            _inputFormatsLayout.Controls.Add(numberLabel, 0, rowIndex);
+
+            WF.ComboBox combo = CreateFormatComboBox(_inputFormatValues[rowIndex]);
+            combo.Margin = new WF.Padding(0, 0, 6, 4);
+            combo.TextChanged += (_, __) => _inputFormatValues[rowIndex] = combo.Text;
+            _inputFormatsLayout.Controls.Add(combo, 1, rowIndex);
+
+            WF.Button removeButton = new WF.Button
+            {
+                Text = "−",
+                Width = 32,
+                Height = 23,
+                Margin = new WF.Padding(0, 0, 0, 4),
+                Enabled = _inputFormatValues.Count > 1
+            };
+            removeButton.Click += (_, __) => RemoveInputFormatRow(rowIndex);
+            _inputFormatsLayout.Controls.Add(removeButton, 2, rowIndex);
+            return combo;
+        }
+
+        // Bỏ bôi xanh ở mọi ô cấu trúc (ComboBox tự chọn hết chữ khi gán Text / nhận focus).
+        private void ClearComboSelections()
+        {
+            foreach (WF.Control control in _inputFormatsLayout.Controls)
+            {
+                if (control is WF.ComboBox combo)
+                {
+                    combo.SelectionStart = combo.Text.Length;
+                    combo.SelectionLength = 0;
+                }
+            }
+
+            _outputFormatBox.SelectionStart = _outputFormatBox.Text.Length;
+            _outputFormatBox.SelectionLength = 0;
+        }
+
+        // Chỉ thêm 1 dòng mới ở cuối (không dựng lại các dòng cũ) rồi cuộn tới và focus vào dòng đó
+        // để người dùng thấy ngay và gõ luôn.
         private void AddInputFormatRow()
         {
             string suggestion = _recentFormats.Count > 0 ? _recentFormats[0] : _defaultFormat;
             _inputFormatValues.Add(suggestion);
-            RebuildInputFormatRows();
+
+            _inputFormatsLayout.SuspendLayout();
+            WF.ComboBox combo = AppendInputFormatControls(_inputFormatValues.Count - 1);
+            foreach (WF.Control control in _inputFormatsLayout.Controls)
+            {
+                if (control is WF.Button button)
+                {
+                    button.Enabled = true;
+                }
+            }
+
+            _inputFormatsLayout.ResumeLayout(true);
+
+            _scrollHost.ScrollControlIntoView(combo);
+            combo.Focus();
+            combo.SelectionStart = combo.Text.Length;
+            combo.SelectionLength = 0;
+            ClearComboSelections();
         }
 
         private void RemoveInputFormatRow(int index)
@@ -375,6 +449,7 @@ namespace AUTOCAD_COMMANDS
             NewBundles = newBundles;
             InputPatterns = inputPatterns;
             OutputPattern = outputPattern;
+            IgnoreCase = _ignoreCaseBox.Checked;
 
             DialogResult = WF.DialogResult.OK;
             Close();

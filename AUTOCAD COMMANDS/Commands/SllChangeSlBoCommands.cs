@@ -48,6 +48,7 @@ namespace AUTOCAD_COMMANDS
         private const string LastNewBundlesKey = "sll_change_sl_bo.last_new_bundles";
         private const string LastInputFormatsKey = "sll_change_sl_bo.last_input_formats";
         private const string LastOutputFormatKey = "sll_change_sl_bo.last_output_format";
+        private const string LastIgnoreCaseKey = "sll_change_sl_bo.last_ignore_case";
 
         // Flow:
         // 1. Hiện bảng nhập: số bộ gốc, số bộ mới, N cấu trúc SL đầu vào và 1 cấu trúc SL đầu ra
@@ -77,6 +78,7 @@ namespace AUTOCAD_COMMANDS
             int newBundles;
             List<string> inputPatterns;
             string outputPattern;
+            bool ignoreCase;
 
             using (SllChangeSlBoForm form = new SllChangeSlBoForm(recentFormats, lastSession))
             {
@@ -89,6 +91,7 @@ namespace AUTOCAD_COMMANDS
                 newBundles = form.NewBundles;
                 inputPatterns = form.InputPatterns;
                 outputPattern = form.OutputPattern;
+                ignoreCase = form.IgnoreCase;
             }
 
             foreach (string inputPattern in inputPatterns)
@@ -97,9 +100,9 @@ namespace AUTOCAD_COMMANDS
             }
 
             RememberFormat(recentFormats, outputPattern);
-            SaveLastSession(originalBundles, newBundles, inputPatterns, outputPattern);
+            SaveLastSession(originalBundles, newBundles, inputPatterns, outputPattern, ignoreCase);
 
-            List<Regex> inputPatternRegexes = BuildInputPatternRegexes(inputPatterns);
+            List<Regex> inputPatternRegexes = BuildInputPatternRegexes(inputPatterns, ignoreCase);
 
             PromptSelectionOptions selectionOptions = new PromptSelectionOptions
             {
@@ -199,12 +202,12 @@ namespace AUTOCAD_COMMANDS
         // được thử theo thứ tự cụ thể nhất trước, cấu trúc ĐẦU TIÊN khớp được dùng (xem
         // TryComputeNewText) - cấu trúc dài/cụ thể hơn thắng cấu trúc ngắn/chung chung hơn;
         // bằng độ dài thì giữ nguyên thứ tự người dùng đã nhập (LINQ OrderBy ổn định - stable sort).
-        private static List<Regex> BuildInputPatternRegexes(IEnumerable<string> patterns)
+        private static List<Regex> BuildInputPatternRegexes(IEnumerable<string> patterns, bool ignoreCase)
         {
             return patterns
                 .Distinct(StringComparer.Ordinal)
                 .OrderByDescending(pattern => pattern.Length)
-                .Select(BuildPatternRegex)
+                .Select(pattern => BuildPatternRegex(pattern, ignoreCase))
                 .ToList();
         }
 
@@ -285,14 +288,20 @@ namespace AUTOCAD_COMMANDS
 
         // Cấu trúc đã được validate (đúng 1 placeholder {X}) trước khi tới đây.
         // Phần chữ trước/sau {X} được escape làm literal, {X} trở thành nhóm số nguyên.
-        private static Regex BuildPatternRegex(string pattern)
+        private static Regex BuildPatternRegex(string pattern, bool ignoreCase)
         {
             int placeholderIndex = pattern.IndexOf(PlaceholderToken, StringComparison.Ordinal);
             string before = pattern.Substring(0, placeholderIndex);
             string after = pattern.Substring(placeholderIndex + PlaceholderToken.Length);
 
             string regexPattern = Regex.Escape(before) + "(?<value>\\d+)" + Regex.Escape(after);
-            return new Regex(regexPattern, RegexOptions.Compiled);
+            RegexOptions options = RegexOptions.Compiled;
+            if (ignoreCase)
+            {
+                options |= RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+            }
+
+            return new Regex(regexPattern, options);
         }
 
         private static string ApplyPattern(string pattern, long value)
@@ -404,6 +413,7 @@ namespace AUTOCAD_COMMANDS
 
             return new SllChangeSlBoSession
             {
+                IgnoreCase = WorkspaceUiStateStore.GetValue(LastIgnoreCaseKey) == "1",
                 OriginalBundles = originalBundles,
                 NewBundles = newBundles,
                 InputPatterns = inputPatterns,
@@ -415,8 +425,10 @@ namespace AUTOCAD_COMMANDS
             int originalBundles,
             int newBundles,
             List<string> inputPatterns,
-            string outputPattern)
+            string outputPattern,
+            bool ignoreCase)
         {
+            WorkspaceUiStateStore.SaveValue(LastIgnoreCaseKey, ignoreCase ? "1" : "0");
             WorkspaceUiStateStore.SaveValue(LastOriginalBundlesKey, WorkspaceUiStateStore.ToInvariant(originalBundles));
             WorkspaceUiStateStore.SaveValue(LastNewBundlesKey, WorkspaceUiStateStore.ToInvariant(newBundles));
             WorkspaceUiStateStore.SaveValue(
@@ -428,6 +440,8 @@ namespace AUTOCAD_COMMANDS
         // Gộp toàn bộ giá trị bảng nhập ở lần chạy gần nhất để truyền vào SllChangeSlBoForm.
         internal sealed class SllChangeSlBoSession
         {
+            public bool IgnoreCase { get; set; }
+
             public int OriginalBundles { get; set; }
 
             public int NewBundles { get; set; }
