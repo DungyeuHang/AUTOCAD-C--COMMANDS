@@ -72,7 +72,9 @@ namespace AUTOCAD_COMMANDS
                 "DX_FOIL_SETTINGS",
                 "DX_FOIL_CALIB",
                 "DX_FOIL_TEST",
-                "GHOPHOI_TEST"
+                "GHOPHOI_TEST",
+                "GHOPHOI_BATCH",
+                "GHOPHOI_CADTEST"
             };
 
         private static readonly HashSet<string> KnownCommands =

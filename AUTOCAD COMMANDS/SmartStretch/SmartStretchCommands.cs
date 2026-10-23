@@ -63,7 +63,7 @@ namespace AUTOCAD_COMMANDS
             RunSmartStretchLoopWithLength(ed, db, length, "SS");
         }
 
-        private static bool TryPromptSmartStretchLengthSource(
+        internal static bool TryPromptSmartStretchLengthSource(
             Editor ed,
             string commandLabel,
             ref double length)
@@ -382,7 +382,7 @@ namespace AUTOCAD_COMMANDS
             return SmartStretchLoopResult.Completed;
         }
 
-        private static bool TryPromptSmartStretchStartPoint(
+        internal static bool TryPromptSmartStretchStartPoint(
             Editor ed,
             ref double length,
             bool allowInteractiveLengthOverride,
@@ -471,7 +471,7 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
-        private static bool TryPromptStretchLength(Editor ed, double defaultLength, out double length)
+        internal static bool TryPromptStretchLength(Editor ed, double defaultLength, out double length)
         {
             PromptDoubleOptions lengthOptions =
                 new PromptDoubleOptions(
@@ -502,12 +502,12 @@ namespace AUTOCAD_COMMANDS
             return true;
         }
 
-        private static string FormatLength(double value)
+        internal static string FormatLength(double value)
         {
             return value.ToString("0.###", CultureInfo.InvariantCulture);
         }
 
-        private static bool TryUseCalculatorLength(
+        internal static bool TryUseCalculatorLength(
             Editor ed,
             ref double length,
             string commandLabel)
@@ -530,7 +530,7 @@ namespace AUTOCAD_COMMANDS
             return false;
         }
 
-        private static bool TryUseHalfCalculatorLength(
+        internal static bool TryUseHalfCalculatorLength(
             Editor ed,
             ref double length,
             string commandLabel)
@@ -553,7 +553,7 @@ namespace AUTOCAD_COMMANDS
             return false;
         }
 
-        private static SmartStretchSelectionInput GetSmartStretchSelectionInput(
+        internal static SmartStretchSelectionInput GetSmartStretchSelectionInput(
             Editor ed,
             ref double length,
             string commandLabel,
@@ -564,7 +564,7 @@ namespace AUTOCAD_COMMANDS
             // Space/Enter ở ngay window đầu tiên sẽ thoát hẳn command loop.
             stopRequested = false;
             ed.WriteMessage(
-                "\nWindow: quet nhieu vung neu can. Giu Shift khi quet de loai bot doi tuong dang bi overlap. Nhan Space/Enter o goc dau khi chua quet window nao de thoat, hoac sau khi da quet it nhat 1 window de sang buoc stretch.");
+                "\nWindow: quet nhieu vung neu can (trai->phai = Window, chi chon doi tuong nam tron trong vung; phai->trai = Crossing, chon ca doi tuong giao vung). Giu Shift khi quet de loai bot doi tuong dang bi overlap. Nhan Space/Enter o goc dau khi chua quet window nao de thoat, hoac sau khi da quet it nhat 1 window de sang buoc stretch.");
 
             List<SmartStretchWindowSelection> windows = new List<SmartStretchWindowSelection>();
             HashSet<ObjectId> selectedIds = new HashSet<ObjectId>();
@@ -660,19 +660,23 @@ namespace AUTOCAD_COMMANDS
 
                     bool removeSelection = IsShiftPressed();
 
-                    PromptCornerOptions secondCornerOptions =
-                        new PromptCornerOptions(
-                            "\nChọn góc đối diện crossing window: ",
-                            firstCornerResult.Value);
-                    PromptPointResult secondCornerResult = ed.GetCorner(secondCornerOptions);
-                    if (secondCornerResult.Status == PromptStatus.Cancel)
+                    // Jig vẽ hình chữ nhật minh họa giống AutoCAD gốc trong lúc kéo chuột:
+                    // trái->phải = Window (xanh dương, viền liền), phải->trái = Crossing
+                    // (xanh lá, viền đứt). Xem SmartSelectionRubberBandJig.
+                    SmartSelectionRubberBandJig rubberBandJig =
+                        new SmartSelectionRubberBandJig(firstCornerResult.Value);
+                    PromptResult secondCornerDragResult = ed.Drag(rubberBandJig);
+                    Point3d secondCornerPoint = rubberBandJig.SecondCorner;
+                    bool isWindowSelection = rubberBandJig.IsWindowSelection;
+
+                    if (secondCornerDragResult.Status == PromptStatus.Cancel)
                     {
                         ClearSmartStretchSelection(selectedIds.ToArray());
                         stopRequested = true;
                         return null;
                     }
 
-                    if (secondCornerResult.Status != PromptStatus.OK)
+                    if (secondCornerDragResult.Status != PromptStatus.OK)
                     {
                         ClearSmartStretchSelection(selectedIds.ToArray());
                         return null;
@@ -680,9 +684,12 @@ namespace AUTOCAD_COMMANDS
 
                     removeSelection = removeSelection || IsShiftPressed();
 
-                    PromptSelectionResult crossingResult = ed.SelectCrossingWindow(
-                        firstCornerResult.Value,
-                        secondCornerResult.Value);
+                    // Giống hành vi chuẩn của AutoCAD: quét trái->phải = Window
+                    // (chỉ chọn đối tượng nằm trọn trong vùng), quét phải->trái = Crossing
+                    // (chọn luôn đối tượng chỉ giao với vùng).
+                    PromptSelectionResult crossingResult = isWindowSelection
+                        ? ed.SelectWindow(firstCornerResult.Value, secondCornerPoint)
+                        : ed.SelectCrossingWindow(firstCornerResult.Value, secondCornerPoint);
                     if (crossingResult.Status != PromptStatus.OK || crossingResult.Value == null)
                     {
                         ed.WriteMessage("\nWindow này chưa bắt được đối tượng nào.");
@@ -696,7 +703,7 @@ namespace AUTOCAD_COMMANDS
                     SmartStretchWindowSelection windowSelection =
                         new SmartStretchWindowSelection(
                             firstCornerResult.Value,
-                            secondCornerResult.Value,
+                            secondCornerPoint,
                             mode);
 
                     if (mode == SmartStretchSelectionMode.Remove)
@@ -777,7 +784,7 @@ namespace AUTOCAD_COMMANDS
             Retry
         }
 
-        private static void ExecuteNativeStretch(
+        internal static void ExecuteNativeStretch(
             Editor ed,
             SmartStretchSelectionInput selectionInput,
             Point3d basePoint,
@@ -829,7 +836,7 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
-        private static Extents3d GetStretchOperationBounds(
+        internal static Extents3d GetStretchOperationBounds(
             SmartStretchSelectionInput selectionInput,
             Point3d basePoint,
             Point3d secondPoint)
@@ -862,7 +869,7 @@ namespace AUTOCAD_COMMANDS
                 new Point3d(maxX + paddingX, maxY + paddingY, maxZ));
         }
 
-        private static void ZoomToStretchBounds(Editor ed, Extents3d bounds)
+        internal static void ZoomToStretchBounds(Editor ed, Extents3d bounds)
         {
             Point3d minPoint = bounds.MinPoint;
             Point3d maxPoint = bounds.MaxPoint;
@@ -889,7 +896,7 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
-        private static void ShowSmartStretchSelection(Editor ed, ObjectId[] objectIds)
+        internal static void ShowSmartStretchSelection(Editor ed, ObjectId[] objectIds)
         {
             if (ed == null || objectIds == null || objectIds.Length == 0)
             {
@@ -971,7 +978,7 @@ namespace AUTOCAD_COMMANDS
                 .ToList();
         }
 
-        private static void ClearSmartStretchSelection(ObjectId[] objectIds)
+        internal static void ClearSmartStretchSelection(ObjectId[] objectIds)
         {
             if (objectIds == null || objectIds.Length == 0)
             {
@@ -1014,7 +1021,7 @@ namespace AUTOCAD_COMMANDS
             return (WF.Control.ModifierKeys & WF.Keys.Shift) == WF.Keys.Shift;
         }
 
-        private static SmartStretchDirection ResolveDirection(Point3d startUcs, Point3d nextUcs)
+        internal static SmartStretchDirection ResolveDirection(Point3d startUcs, Point3d nextUcs)
         {
             double dx = nextUcs.X - startUcs.X;
             double dy = nextUcs.Y - startUcs.Y;
@@ -1036,7 +1043,7 @@ namespace AUTOCAD_COMMANDS
                 : SmartStretchDirection.NegativeY;
         }
 
-        private static SmartStretchDirection FlipDirection(SmartStretchDirection direction)
+        internal static SmartStretchDirection FlipDirection(SmartStretchDirection direction)
         {
             switch (direction)
             {
@@ -1053,7 +1060,7 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
-        private static Vector3d GetDisplacementVector(
+        internal static Vector3d GetDisplacementVector(
             SmartStretchDirection direction,
             double length,
             Matrix3d ucs)
@@ -1364,7 +1371,7 @@ namespace AUTOCAD_COMMANDS
             }
         }
 
-        private static string GetDirectionLabel(SmartStretchDirection direction)
+        internal static string GetDirectionLabel(SmartStretchDirection direction)
         {
             switch (direction)
             {
