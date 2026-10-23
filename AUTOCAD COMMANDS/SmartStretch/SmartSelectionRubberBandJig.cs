@@ -33,11 +33,12 @@ namespace AUTOCAD_COMMANDS
 
         protected override SamplerStatus Sampler(JigPrompts prompts)
         {
+            // Cố ý KHÔNG set BasePoint/UseBasePoint: nếu dùng rubber-band từ base point,
+            // AutoCAD sẽ áp ORTHOMODE (F8) vào điểm thu được và biến vùng quét thành 1 đường
+            // thẳng khi bật Ortho. Lấy điểm tự do để vùng quét không phụ thuộc F8.
             JigPromptPointOptions pointOptions =
                 new JigPromptPointOptions(
                     "\nChọn góc đối diện (trái→phải = Window xanh dương, phải→trái = Crossing xanh lá): ");
-            pointOptions.BasePoint = _firstCorner;
-            pointOptions.UseBasePoint = true;
 
             PromptPointResult pointResult = prompts.AcquirePoint(pointOptions);
             if (pointResult.Status == PromptStatus.Cancel)
