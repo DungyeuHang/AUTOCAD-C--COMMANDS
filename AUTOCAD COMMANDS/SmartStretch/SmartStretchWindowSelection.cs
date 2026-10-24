@@ -31,11 +31,13 @@ namespace AUTOCAD_COMMANDS
         public SmartStretchWindowSelection(
             Point3d firstPoint,
             Point3d secondPoint,
-            SmartStretchSelectionMode mode)
+            SmartStretchSelectionMode mode,
+            bool isWindowSelection)
         {
             FirstPoint = firstPoint;
             SecondPoint = secondPoint;
             Mode = mode;
+            IsWindowSelection = isWindowSelection;
         }
 
         public Point3d FirstPoint { get; }
@@ -43,5 +45,12 @@ namespace AUTOCAD_COMMANDS
         public Point3d SecondPoint { get; }
 
         public SmartStretchSelectionMode Mode { get; }
+
+        // true = quét trái->phải (Window, chỉ đối tượng nằm trọn trong vùng).
+        // false = quét phải->trái (Crossing, cả đối tượng chỉ giao với vùng).
+        // Khi replay lại cho native STRETCH/COPY phải dùng đúng keyword _W/_C
+        // tương ứng, nếu không vùng thực thi sẽ bắt thêm đối tượng không được
+        // bôi sáng ở bước xem trước.
+        public bool IsWindowSelection { get; }
     }
 }

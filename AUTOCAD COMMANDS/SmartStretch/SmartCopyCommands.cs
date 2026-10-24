@@ -202,7 +202,10 @@ namespace AUTOCAD_COMMANDS
                         currentMode = window.Mode;
                     }
 
-                    args.Add("_C");
+                    // Phải replay đúng kiểu Window/Crossing đã quét lúc bôi sáng,
+                    // nếu không AutoCAD sẽ luôn dùng Crossing và copy thêm đối tượng
+                    // chỉ giao với vùng (không được bôi sáng ở bước xem trước).
+                    args.Add(window.IsWindowSelection ? "_W" : "_C");
                     args.Add(window.FirstPoint);
                     args.Add(window.SecondPoint);
                 }

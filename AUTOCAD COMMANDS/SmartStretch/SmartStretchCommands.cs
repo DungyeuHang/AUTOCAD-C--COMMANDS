@@ -704,7 +704,8 @@ namespace AUTOCAD_COMMANDS
                         new SmartStretchWindowSelection(
                             firstCornerResult.Value,
                             secondCornerPoint,
-                            mode);
+                            mode,
+                            isWindowSelection);
 
                     if (mode == SmartStretchSelectionMode.Remove)
                     {
@@ -815,7 +816,10 @@ namespace AUTOCAD_COMMANDS
                         currentMode = window.Mode;
                     }
 
-                    args.Add("_C");
+                    // Phải replay đúng kiểu Window/Crossing đã quét lúc bôi sáng,
+                    // nếu không AutoCAD sẽ luôn dùng Crossing và bắt thêm đối tượng
+                    // chỉ giao với vùng (không được bôi sáng ở bước xem trước).
+                    args.Add(window.IsWindowSelection ? "_W" : "_C");
                     args.Add(window.FirstPoint);
                     args.Add(window.SecondPoint);
                 }
