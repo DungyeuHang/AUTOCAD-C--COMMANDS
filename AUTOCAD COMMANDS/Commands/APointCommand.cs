@@ -5,31 +5,45 @@ using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.Runtime;
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
- 
+
 namespace AUTOCAD_COMMANDS
 {
     // ======================================================
-    // APOINT - MAKE POINTS BY POLYLINE
-    // Mục đích: viết lại lệnh Lisp APOINT bằng C# cho nhanh và ổn định hơn.
+    // APOINT (alias APOINT2) - MAKE POINTS BY POLYLINE
+    // Gộp APOINT + APOINT2 làm 1: dùng chung logic "tham chiếu tuyến tính" -
+    // mỗi trục x/y được tham chiếu tới điểm trùng toạ độ gần nhất tìm được phía
+    // trước (theo chỉ số nhỏ nhất "First" hoặc lớn nhất "Last"); nếu không có
+    // điểm nào trùng thì tự rơi về logic cũ: bám điểm liền trước + offset.
+    // Vì vậy APOINT2 (cũ) vốn là tập hợp lớn hơn của APOINT (cũ), nay chỉ còn
+    // 1 lệnh duy nhất, giữ cả 2 tên lệnh để không phá vỡ thói quen gõ lệnh.
+    // Ví dụ: p5 có y = p4.y, x = p2.x = p3.x  =>  p5 = APoint(p2.x, p4.y)
     // Cách dùng:
     // - Chọn lightweight Polyline.
-    // - Nhập prefix điểm, ví dụ bl_fr.
+    // - Trong bảng tuỳ chọn: nhập prefix, cỡ chữ, chế độ dò First/Last,
+    //   bật/tắt gộp điểm trùng toạ độ liên tiếp, bật/tắt đảo chiều pline,
+    //   xem trước kết quả rồi mới "Tạo điểm".
     // - Lệnh tạo circle + text cho từng vertex.
     // - Lệnh tạo 1 MText tổng hợp gồm toàn bộ APoint(...) và smart_pl(...).
-    // Lưu ý: text tổng hợp tự đặt tại x = p1.x, y = p1.y - 2.
     // ======================================================
     public class APointCommand
     {
         private const string PhantomLayerName = "_mss.phantom";
         private const double MarkerRadius = 0.3;
-        private const double TextHeight = 0.1;
+        private const double DefaultTextHeight = 0.1;
         private const double PointLabelWidth = 10.0;
         private const double SummaryTextWidth = 120.0;
         private const double NumericTolerance = 1e-6;
 
+        // Nhớ lựa chọn của lần chạy trước trong cùng phiên AutoCAD.
+        private static string lastPrefix = string.Empty;
+        private static APointGeometryHelper.MatchMode lastMatchMode = APointGeometryHelper.MatchMode.First;
+        private static bool lastMergeDuplicates;
+        private static bool lastReverseDirection;
+        private static double lastTextHeight = DefaultTextHeight;
+
         [CommandMethod("APOINT")]
+        [CommandMethod("APOINT2")]
         public void MakePointsByPolyline()
         {
             Document doc = Application.DocumentManager.MdiActiveDocument;
@@ -61,23 +75,107 @@ namespace AUTOCAD_COMMANDS
                     return;
                 }
 
-                PromptStringOptions prefixOptions =
-                    new PromptStringOptions("\nNhập tiền tố điểm (vd: bl_fr): ")
-                    {
-                        AllowSpaces = false
-                    };
-                PromptResult prefixResult = ed.GetString(prefixOptions);
-                if (prefixResult.Status != PromptStatus.OK)
+                string prefix = lastPrefix;
+                APointGeometryHelper.MatchMode matchMode = lastMatchMode;
+                bool mergeDuplicates = lastMergeDuplicates;
+                bool reverseDirection = lastReverseDirection;
+                double textHeight = lastTextHeight;
+
+                while (true)
                 {
-                    return;
+                    using (Transaction trRead = db.TransactionManager.StartTransaction())
+                    {
+                        Autodesk.AutoCAD.DatabaseServices.Polyline polyline =
+                            trRead.GetObject(entityResult.ObjectId, OpenMode.ForRead)
+                                as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                        if (polyline == null)
+                        {
+                            ed.WriteMessage("\nAPOINT: không đọc được polyline.");
+                            trRead.Commit();
+                            return;
+                        }
+
+                        if (polyline.NumberOfVertices == 0)
+                        {
+                            ed.WriteMessage("\nAPOINT: polyline không có vertex.");
+                            trRead.Commit();
+                            return;
+                        }
+
+                        List<Point3d> originalPoints = APointGeometryHelper.GetPolylineVertices(polyline);
+                        double[] originalBulges = APointGeometryHelper.GetSegmentBulges(polyline);
+                        bool closed = polyline.Closed;
+
+                        string plineInfo = $"Đã chọn: Polyline ({originalPoints.Count} đỉnh gốc)";
+
+                        Func<string, bool, APointGeometryHelper.MatchMode, bool, string> previewBuilder =
+                            (p, merge, mode, reverse) =>
+                        {
+                            List<Point3d> workPoints;
+                            double[] workBulges;
+                            APointGeometryHelper.ApplyReverse(
+                                originalPoints, originalBulges, reverse, out workPoints, out workBulges);
+
+                            APointGeometryHelper.ReducedPoints reduced =
+                                APointGeometryHelper.ReduceConsecutiveDuplicates(workPoints, merge, NumericTolerance);
+
+                            List<string> lines = APointGeometryHelper.BuildSmartDefinitionLines(
+                                reduced.Points, p, mode, NumericTolerance);
+                            string shapeText = APointGeometryHelper.BuildSmartShapeText(
+                                workBulges, closed, reduced.Points, reduced.LastOriginalIndex, p, NumericTolerance);
+
+                            return string.Join("\n", lines.Concat(new[] { shapeText }));
+                        };
+
+                        using (APointOptionsForm form = new APointOptionsForm(
+                            "APOINT - Tuỳ chọn tạo điểm",
+                            true,
+                            plineInfo,
+                            prefix,
+                            mergeDuplicates,
+                            matchMode,
+                            reverseDirection,
+                            textHeight,
+                            previewBuilder))
+                        {
+                            Application.ShowModalDialog(form);
+
+                            if (form.Action == APointDialogAction.Cancel)
+                            {
+                                trRead.Commit();
+                                return;
+                            }
+
+                            if (form.Action == APointDialogAction.ReselectPline)
+                            {
+                                trRead.Commit();
+                                PromptEntityResult newSelection = ed.GetEntity(entityOptions);
+                                if (newSelection.Status != PromptStatus.OK)
+                                {
+                                    return;
+                                }
+
+                                entityResult = newSelection;
+                                continue;
+                            }
+
+                            prefix = form.Prefix;
+                            matchMode = form.MatchMode;
+                            mergeDuplicates = form.MergeDuplicates;
+                            reverseDirection = form.ReverseDirection;
+                            textHeight = form.TextHeight;
+                            trRead.Commit();
+                        }
+                    }
+
+                    break;
                 }
 
-                string prefix = (prefixResult.StringResult ?? string.Empty).Trim();
-                if (string.IsNullOrWhiteSpace(prefix))
-                {
-                    ed.WriteMessage("\nAPOINT: prefix không được rỗng.");
-                    return;
-                }
+                lastPrefix = prefix;
+                lastMatchMode = matchMode;
+                lastMergeDuplicates = mergeDuplicates;
+                lastReverseDirection = reverseDirection;
+                lastTextHeight = textHeight;
 
                 using (Transaction tr = db.TransactionManager.StartTransaction())
                 {
@@ -89,14 +187,19 @@ namespace AUTOCAD_COMMANDS
                         return;
                     }
 
-                    int vertexCount = polyline.NumberOfVertices;
-                    if (vertexCount == 0)
-                    {
-                        ed.WriteMessage("\nAPOINT: polyline không có vertex.");
-                        return;
-                    }
+                    List<Point3d> originalPoints = APointGeometryHelper.GetPolylineVertices(polyline);
+                    double[] originalBulges = APointGeometryHelper.GetSegmentBulges(polyline);
+                    bool closed = polyline.Closed;
 
-                    List<Point3d> points = GetPolylineVertices(polyline);
+                    List<Point3d> workPoints;
+                    double[] workBulges;
+                    APointGeometryHelper.ApplyReverse(
+                        originalPoints, originalBulges, reverseDirection, out workPoints, out workBulges);
+
+                    APointGeometryHelper.ReducedPoints reduced =
+                        APointGeometryHelper.ReduceConsecutiveDuplicates(workPoints, mergeDuplicates, NumericTolerance);
+                    List<Point3d> points = reduced.Points;
+
                     ObjectId layerId = CadLayerHelper.EnsureLayer(db, tr, PhantomLayerName);
                     BlockTableRecord currentSpace =
                         tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
@@ -105,8 +208,8 @@ namespace AUTOCAD_COMMANDS
                         return;
                     }
 
-                    List<string> definitionLines = new List<string>();
-                    Point3d? previousPoint = null;
+                    List<string> definitionLines = APointGeometryHelper.BuildSmartDefinitionLines(
+                        points, prefix, matchMode, NumericTolerance);
 
                     for (int i = 0; i < points.Count; i++)
                     {
@@ -120,22 +223,6 @@ namespace AUTOCAD_COMMANDS
                         currentSpace.AppendEntity(marker);
                         tr.AddNewlyCreatedDBObject(marker, true);
 
-                        string definitionLine;
-                        if (!previousPoint.HasValue)
-                        {
-                            definitionLine =
-                                $"{prefix}_p{count} = APoint({CadFormatHelper.FormatNumber(point.X, NumericTolerance)}, {CadFormatHelper.FormatNumber(point.Y, NumericTolerance)})";
-                        }
-                        else
-                        {
-                            double dx = point.X - previousPoint.Value.X;
-                            double dy = point.Y - previousPoint.Value.Y;
-                            definitionLine =
-                                $"{prefix}_p{count} = APoint({prefix}_p{count - 1}.x{CadFormatHelper.FormatOffset(dx, NumericTolerance)}, {prefix}_p{count - 1}.y{CadFormatHelper.FormatOffset(dy, NumericTolerance)})";
-                        }
-
-                        definitionLines.Add(definitionLine);
-
                         double labelYOffset = count % 2 == 1 ? 0.1 : -0.1;
                         Point3d labelPoint = new Point3d(point.X, point.Y + labelYOffset, point.Z);
                         CadMTextHelper.AddMText(
@@ -144,13 +231,12 @@ namespace AUTOCAD_COMMANDS
                             layerId,
                             labelPoint,
                             PointLabelWidth,
-                            definitionLine,
-                            TextHeight);
-
-                        previousPoint = point;
+                            definitionLines[i],
+                            textHeight);
                     }
 
-                    string smartShapeText = BuildSmartShapeText(polyline, points, prefix);
+                    string smartShapeText = APointGeometryHelper.BuildSmartShapeText(
+                        workBulges, closed, points, reduced.LastOriginalIndex, prefix, NumericTolerance);
                     string summaryText = string.Join("\n", definitionLines.Concat(new[] { smartShapeText }));
                     Point3d firstPoint = points[0];
                     Point3d summaryPoint = new Point3d(firstPoint.X, firstPoint.Y - 3.0, firstPoint.Z);
@@ -161,10 +247,11 @@ namespace AUTOCAD_COMMANDS
                         summaryPoint,
                         SummaryTextWidth,
                         summaryText,
-                        TextHeight);
+                        textHeight);
 
                     tr.Commit();
-                    ed.WriteMessage($"\nAPOINT: đã tạo {points.Count} điểm và text tổng hợp.");
+                    ed.WriteMessage(
+                        $"\nAPOINT: đã tạo {points.Count} điểm và text tổng hợp (chế độ {matchMode}).");
                 }
             }
             finally
@@ -179,66 +266,6 @@ namespace AUTOCAD_COMMANDS
                     Application.SetSystemVariable("SNAPMODE", previousSnapMode);
                 }
             }
-        }
-
-        private static List<Point3d> GetPolylineVertices(Autodesk.AutoCAD.DatabaseServices.Polyline polyline)
-        {
-            List<Point3d> points = new List<Point3d>();
-            for (int i = 0; i < polyline.NumberOfVertices; i++)
-            {
-                Point2d point2d = polyline.GetPoint2dAt(i);
-                Point3d point = new Point3d(point2d.X, point2d.Y, polyline.Elevation)
-                    .TransformBy(polyline.Ecs);
-                points.Add(point);
-            }
-
-            return points;
-        }
-
-        private static string BuildSmartShapeText(
-            Autodesk.AutoCAD.DatabaseServices.Polyline polyline,
-            IReadOnlyList<Point3d> points,
-            string prefix)
-        {
-            List<string> arcsInfoItems = new List<string>();
-            for (int i = 0; i < points.Count - 1; i++)
-            {
-                double bulge = polyline.GetBulgeAt(i);
-                if (Math.Abs(bulge) <= NumericTolerance)
-                {
-                    continue;
-                }
-
-                double chord = points[i].DistanceTo(points[i + 1]);
-                double theta = 4.0 * Math.Atan(bulge);
-                double denominator = 2.0 * Math.Sin(theta / 2.0);
-                if (Math.Abs(denominator) <= NumericTolerance)
-                {
-                    continue;
-                }
-
-                double radius = chord / denominator;
-                int startPointIndex = i + 1;
-                int endPointIndex = i + 2;
-                if (radius < 0.0)
-                {
-                    radius = Math.Abs(radius);
-                    startPointIndex = i + 2;
-                    endPointIndex = i + 1;
-                }
-
-                arcsInfoItems.Add(
-                    $"({startPointIndex},{endPointIndex}): ({FormatRadius(radius)}, True)");
-            }
-
-            string closeText = polyline.Closed ? "True" : "False";
-            string arcsInfo = string.Join(", ", arcsInfoItems);
-            return $"smart_pl(\"{prefix}_p\", 1, {points.Count}, arcs_info={{{arcsInfo}}}, close={closeText})";
-        }
-
-        private static string FormatRadius(double value)
-        {
-            return value.ToString("0.##", CultureInfo.InvariantCulture);
         }
     }
 }
