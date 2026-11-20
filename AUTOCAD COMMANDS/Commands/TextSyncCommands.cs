@@ -34,13 +34,10 @@ namespace AUTOCAD_COMMANDS
     // ======================================================
     public class TextSyncCommands
     {
-        private const double TargetTextHeight = 5.0;
-        private const double TextHeightTolerance = 1e-6;
-
         // Flow:
-        // 1. Chọn text gốc.
+        // 1. Chọn text mới (text gốc).
         // 2. Quét vùng text đích hoặc dùng PickFirst.
-        // 3. Lọc DBText/MText có height = 5 rồi thay nội dung.
+        // 3. Lọc DBText/MText là tên đơn hàng rồi thay bằng nội dung text mới.
         [CommandMethod("TT_TEXT_CHANGE_5", CommandFlags.UsePickSet)]
         public void SyncTextHeightFiveContent()
         {
@@ -129,8 +126,9 @@ namespace AUTOCAD_COMMANDS
                             continue;
                         }
 
-                        if (!TryGetTextHeight(entity, out double textHeight) ||
-                            Math.Abs(textHeight - TargetTextHeight) > TextHeightTolerance)
+                        if (!TryGetPlainText(entity, out string existingText) ||
+                            !(OrderNameRegex.IsMatch(existingText) ||
+                              string.Equals(existingText.Trim(), "DDD", StringComparison.Ordinal)))
                         {
                             continue;
                         }
@@ -166,7 +164,7 @@ namespace AUTOCAD_COMMANDS
                     tr.Commit();
 
                     ed.WriteMessage(
-                        $"\nTT_TEXT_CHANGE_5: đã đổi nội dung {replacedCount} text (lọc được {matchedCount} text có height = {TargetTextHeight.ToString("0.###", CultureInfo.InvariantCulture)}).");
+                        $"\nTT_TEXT_CHANGE_5: đã đổi nội dung {replacedCount} text (lọc được {matchedCount} text là tên đơn hàng dạng LỆNH-ĐƠN.THÁNG.TÊN).");
                 }
             }
             finally
@@ -237,23 +235,28 @@ namespace AUTOCAD_COMMANDS
             return TextSyncPayload.Invalid;
         }
 
-        private static bool TryGetTextHeight(Entity entity, out double textHeight)
+        // Tên đơn hàng: LỆNH-ĐƠN.THÁNG.TÊN[-SỐ BỘ], ví dụ 56-369.2.HOANGPHAT-8.
+        // Chỉ cần nhận ra đầu chuỗi "số-số.số." và có ít nhất 1 ký tự tên phía sau.
+        private static readonly Regex OrderNameRegex =
+            new Regex(@"^\s*\d+\s*-\s*\d+\s*\.\s*\d+\s*\.\s*\S", RegexOptions.Compiled);
+
+        private static bool TryGetPlainText(Entity entity, out string text)
         {
             // Chỉ xử lý text chọn trực tiếp.
             // Text nằm trong block không được bóc ra ở lệnh này.
             if (entity is DBText dbText)
             {
-                textHeight = dbText.Height;
+                text = dbText.TextString;
                 return true;
             }
 
             if (entity is MText mText)
             {
-                textHeight = mText.TextHeight;
+                text = mText.Text;
                 return true;
             }
 
-            textHeight = 0.0;
+            text = null;
             return false;
         }
 
